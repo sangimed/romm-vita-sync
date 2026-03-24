@@ -29,6 +29,22 @@ static void scan_log(int verbose, const char *format, ...) {
 }
 
 /*
+ * Returns a short explanation string for SFO parser status codes.
+ */
+static const char *sfo_status_str(int status) {
+  switch (status) {
+    case 0: return "ok";
+    case -1: return "invalid arguments";
+    case -2: return "file too small or read failed";
+    case -3: return "invalid SFO magic";
+    case -4: return "invalid header offsets";
+    case -5: return "invalid value bounds";
+    case -6: return "key not found";
+    default: return "unknown error";
+  }
+}
+
+/*
  * Returns 1 if path points to a directory, 0 otherwise.
  */
 static int path_is_directory(const char *path) {
@@ -61,6 +77,8 @@ static void log_param_sfo_metadata(const char *dir_path, int verbose) {
   char title[128];
   int title_status = sfo_read_title(sfo_path, title, sizeof(title));
   if (title_status < 0) {
+    scan_log(verbose, "PARAM.SFO unreadable status=%d (%s) path=%s",
+             title_status, sfo_status_str(title_status), sfo_path);
     return;
   }
 
@@ -192,7 +210,8 @@ static void try_add_vmp_file(const char *path, const SceIoStat *st, int verbose,
         memcpy(sfo_path + dir_len, "/PARAM.SFO", sizeof("/PARAM.SFO"));
         int sfo_status = sfo_read_title(sfo_path, item->game_title, sizeof(item->game_title));
         if (sfo_status < 0) {
-          scan_log(verbose, "PARAM.SFO unreadable (%d): %s", sfo_status, sfo_path);
+          scan_log(verbose, "PARAM.SFO unreadable status=%d (%s) path=%s",
+                   sfo_status, sfo_status_str(sfo_status), sfo_path);
         }
       }
     }

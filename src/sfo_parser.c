@@ -1,8 +1,8 @@
 #include "sfo_parser.h"
 
 #include <psp2/io/fcntl.h>
-#include <psp2/types.h>
 
+#include <stdint.h>
 #include <string.h>
 
 /*
@@ -10,23 +10,20 @@
  * See: https://www.psdevwiki.com/ps3/PARAM.SFO
  */
 
-typedef struct SfoHeader {
-  unsigned char magic[4]; /* "\0PSF" */
-  unsigned char version[4];
-  uint32_t key_table_offset;
-  uint32_t data_table_offset;
-  uint32_t entry_count;
-} __attribute__((packed)) SfoHeader;
+#define SFO_HEADER_SIZE 20
+#define SFO_INDEX_ENTRY_SIZE 16
+#define SFO_MAX_FILE_SIZE (64 * 1024)
 
-typedef struct SfoIndexEntry {
-  uint16_t key_offset;
-  uint16_t data_format;
-  uint32_t data_len;
-  uint32_t data_max_len;
-  uint32_t data_offset;
-} __attribute__((packed)) SfoIndexEntry;
+static uint16_t read_le16(const unsigned char *p) {
+  return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+}
 
-#define SFO_MAX_FILE_SIZE 4096
+static uint32_t read_le32(const unsigned char *p) {
+  return (uint32_t)p[0] |
+         ((uint32_t)p[1] << 8) |
+         ((uint32_t)p[2] << 16) |
+         ((uint32_t)p[3] << 24);
+}
 
 /*
  * Reads an SFO file entirely into a buffer.
@@ -68,51 +65,59 @@ int sfo_read_key(const char *sfo_path, const char *key_name, char *out_value, si
 
   unsigned char buf[SFO_MAX_FILE_SIZE];
   int file_size = read_sfo_file(sfo_path, buf, sizeof(buf));
-  if (file_size < (int)sizeof(SfoHeader)) {
+  if (file_size < SFO_HEADER_SIZE) {
     return -2;
   }
 
-  SfoHeader *header = (SfoHeader *)buf;
-
   /* Verify magic "\0PSF" */
-  if (header->magic[0] != 0x00 || header->magic[1] != 'P' ||
-      header->magic[2] != 'S' || header->magic[3] != 'F') {
+  if (buf[0] != 0x00 || buf[1] != 'P' || buf[2] != 'S' || buf[3] != 'F') {
     return -3;
   }
 
-  uint32_t entry_count = header->entry_count;
-  uint32_t key_table = header->key_table_offset;
-  uint32_t data_table = header->data_table_offset;
+  uint32_t key_table = read_le32(buf + 8);
+  uint32_t data_table = read_le32(buf + 12);
+  uint32_t entry_count = read_le32(buf + 16);
 
-  /* Sanity: index table starts right after header */
-  size_t index_start = sizeof(SfoHeader);
-  size_t index_end = index_start + entry_count * sizeof(SfoIndexEntry);
+  size_t index_start = SFO_HEADER_SIZE;
+  size_t index_end = index_start + ((size_t)entry_count * SFO_INDEX_ENTRY_SIZE);
 
   if (index_end > (size_t)file_size || key_table > (size_t)file_size ||
-      data_table > (size_t)file_size) {
+      data_table > (size_t)file_size || key_table < SFO_HEADER_SIZE ||
+      data_table < SFO_HEADER_SIZE) {
     return -4;
   }
 
-  SfoIndexEntry *entries = (SfoIndexEntry *)(buf + index_start);
-
   for (uint32_t i = 0; i < entry_count; ++i) {
-    uint32_t k_off = key_table + entries[i].key_offset;
+    size_t entry_off = index_start + ((size_t)i * SFO_INDEX_ENTRY_SIZE);
+    const unsigned char *entry = buf + entry_off;
+
+    uint16_t key_off_rel = read_le16(entry + 0);
+    uint32_t data_len = read_le32(entry + 4);
+    uint32_t data_off_rel = read_le32(entry + 12);
+
+    uint32_t k_off = key_table + key_off_rel;
     if (k_off >= (uint32_t)file_size) {
       continue;
     }
 
     const char *key = (const char *)(buf + k_off);
+    size_t key_space = (size_t)file_size - (size_t)k_off;
+    size_t key_len = strnlen(key, key_space);
+    if (key_len == key_space) {
+      continue;
+    }
 
     if (strcmp(key, key_name) == 0) {
-      uint32_t d_off = data_table + entries[i].data_offset;
-      uint32_t d_len = entries[i].data_len;
+      uint32_t d_off = data_table + data_off_rel;
 
-      if (d_off + d_len > (uint32_t)file_size) {
+      if (d_off > (uint32_t)file_size || data_len > (uint32_t)file_size ||
+          d_off + data_len > (uint32_t)file_size) {
         return -5;
       }
 
       const char *value = (const char *)(buf + d_off);
-      size_t copy_len = (d_len < out_size) ? d_len : (out_size - 1);
+      size_t value_len = strnlen(value, data_len);
+      size_t copy_len = (value_len < (out_size - 1)) ? value_len : (out_size - 1);
       memcpy(out_value, value, copy_len);
       out_value[copy_len] = '\0';
       return 0;
