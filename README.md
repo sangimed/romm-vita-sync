@@ -1,44 +1,41 @@
 # romm-vita-sync
 
-Save synchronization client for RomM on PS Vita, supporting native and emulated platforms.
+Save synchronization client for RomM on PlayStation Vita, supporting native and emulated platforms.
 
 ## Overview
 
-**romm-vita-sync** is a homebrew application for PlayStation Vita that synchronizes game save data with a RomM server.
+**romm-vita-sync** is a PlayStation Vita homebrew application designed to synchronize game save data with a RomM server.
 
-The long-term goal is to support save synchronization across:
+The long-term objective is cross-platform save synchronization across:
 
 - PS Vita native games
 - PSP (Adrenaline)
 - PS1 (POPS via Adrenaline)
 - RetroArch and other emulator environments
 
-The initial version focuses on **PS1 save synchronization** through Adrenaline virtual memory cards.
+The first milestone targets PS1 save synchronization using Adrenaline virtual memory cards.
 
----
+## Project Status
 
-## Current status
+**Stage:** early development
 
-Project stage: **early development**
+Initial milestone includes:
 
-Planned first milestone:
+- Detect PS1 save folders under `ux0:/pspemu/PSP/SAVEDATA`
+- Parse `PARAM.SFO`
+- Detect `SCEVMC0.VMP` and `SCEVMC1.VMP`
+- Display metadata (path, size, timestamp)
+- Convert `.VMP` → `.SRM`
+- Compare local vs remote saves
+- Manual synchronization workflow
+- Automatic backup before overwrite
+- Zero destructive operations without confirmation
 
-- detect PS1 virtual memory cards (VMP)
-- display metadata (path, size, timestamp)
-- compare local vs RomM saves
-- manual sync only
-- automatic backup before overwrite
-- zero destructive operations without confirmation
+No write operations will be enabled until safety mechanisms are validated.
 
-No write operations will be performed until safety mechanisms are fully implemented.
+## Why This Project Exists
 
----
-
-## Why this project exists
-
-RomM already provides save sync support for several platforms and clients (e.g. Android launchers).
-
-However, there is currently no native save sync solution for PS Vita.
+RomM already supports save synchronization for several platforms and clients (for example Android launchers). However, there is currently no native PS Vita sync client.
 
 This project aims to provide:
 
@@ -47,59 +44,166 @@ This project aims to provide:
 - conflict-safe restore workflows
 - compatibility with Adrenaline-based PS1 saves
 
----
+## Scope (Version 1)
 
-## Scope (v1)
+Version 1 focuses exclusively on PS1 saves via Adrenaline.
 
-Version 1 targets **PS1 saves via Adrenaline**.
+Features:
 
-Specifically:
+- Detect save folders in `ux0:/pspemu/PSP/SAVEDATA/<GAME_ID>`
+- Parse `PARAM.SFO`
+- Detect `.VMP` memory card files
+- Convert `.VMP` → `.SRM`
+- Convert `.SRM` → `.VMP`
+- Support manual upload/download workflows
+- Always create backups before overwrite
 
-- detect `.VMP` files
-- treat each memory card as an atomic sync unit
-- compute metadata for comparison
-- support manual upload/download workflows
-- always create backups before overwrite
+Per-save-block parsing inside memory cards is planned for a later release.
 
-Per-game PS1 save parsing inside memory cards is planned for a later version.
+## PS1 Save Architecture
 
----
+### Local PS Vita / Adrenaline Layout
 
-## Roadmap
+PS1 saves are stored inside:
 
-### v1 – PS1 support (Adrenaline)
+`ux0:/pspemu/PSP/SAVEDATA/<GAME_ID>/`
 
-- scan PS1 VMC directories
-- detect available VMP files
-- display memory card metadata
-- compare with RomM remote saves
-- manual sync workflow
-- automatic backup before overwrite
+Typical contents:
 
-### v2 – PSP saves
+- `PARAM.SFO`
+- `ICON0.PNG`
+- `CONFIG.BIN`
+- `SCEVMC0.VMP`
+- `SCEVMC1.VMP`
 
-- scan `ux0:/pspemu/PSP/SAVEDATA`
-- map saves by title ID
-- bidirectional sync
-- improved conflict detection
+File roles:
 
-### v3 – PS Vita native saves
+| File | Purpose |
+|------|---------|
+| PARAM.SFO | Sony metadata |
+| ICON0.PNG | Save icon |
+| CONFIG.BIN | POPS configuration |
+| SCEVMC0.VMP | Memory card slot 1 |
+| SCEVMC1.VMP | Memory card slot 2 |
 
-- evaluate encryption constraints
-- investigate safe extraction workflows
-- integrate native save support where possible
+Adrenaline / POPS stores PS1 saves as virtual memory card containers.
 
-### v4 – Emulator environments
+### RomM / Emulator-Side Layout
 
-- RetroArch save support
-- additional emulator integrations
-- per-core save mapping
+RomM stores PS1 saves as `.SRM` files:
 
----
+`.../saves/psx/<rom_id>/pcsx_rearmed/<game>.srm`
 
-## Safety model
+RomM does not store `.VMP` containers directly. Instead, it uses emulator-facing raw save formats.
 
-Save synchronization is designed to be **non-destructive by default**.
+### VMP vs SRM Relationship
+
+Observed sizes:
+
+- `SCEVMC0.VMP = 131200 bytes`
+- `SAVE.SRM = 131072 bytes`
+- Difference: `128 bytes`
+
+Working model:
+
+- VMP = 128-byte header + raw memory card data
+- SRM = raw memory card data
+
+Conversion strategy:
+
+| Direction | Operation |
+|-----------|-----------|
+| Vita → RomM | Remove first 128 bytes |
+| RomM → Vita | Prepend valid VMP header |
+
+This avoids block-level parsing for version 1.
+
+## Save Model
+
+### Local Save Representation
+
+```
+LocalPs1Save
+├─ game_id
+├─ title
+├─ save_dir
+├─ icon_path
+├─ config_path
+├─ vmc0_path
+├─ vmc1_path
+└─ updated_at
+```
+
+### Remote Save Representation
+
+```
+RemotePs1Save
+├─ platform = psx
+├─ emulator = pcsx_rearmed
+├─ filename
+├─ remote_path
+├─ hash
+├─ updated_at
+└─ size
+```
+
+### Canonical Internal Model
+
+```
+CanonicalPs1MemoryCard
+├─ raw_memory_card_data (131072 bytes)
+├─ metadata
+└─ origin
+```
+
+## Conversion Strategy
+
+### VMP → SRM
+
+Process:
+
+1. Read `SCEVMC0.VMP`
+2. Remove first 128 bytes
+3. Write `.SRM` payload
+
+### SRM → VMP
+
+Process:
+
+1. Read `.SRM`
+2. Prepend 128-byte VMP header
+3. Write `SCEVMC0.VMP`
+
+Rules:
+
+- reuse known-good VMP headers
+- never overwrite automatically
+- always create backups first
+
+## PS1 Sync Pipeline
+
+Upload flow:
+
+```
+PS Vita save folder
+→ PARAM.SFO parser
+→ VMP reader
+→ VMP → SRM conversion
+→ RomM upload / compare
+```
+
+Restore flow:
+
+```
+RomM SRM file
+→ SRM → VMP conversion
+→ backup existing VMP
+→ restore VMP
+```
+
+## Safety Model
+
+Synchronization is non-destructive by default.
 
 Rules:
 
@@ -107,29 +211,71 @@ Rules:
 - always create backups before restore
 - compare timestamps and hashes when possible
 - require explicit confirmation before sync operations
-- keep previous versions for rollback
+- preserve original `.VMP` files before rebuilding
 
----
-
-## Architecture (planned)
+## Architecture (Planned)
 
 Core modules:
 
-RomMClient
-SaveScanner
-SyncEngine
-BackupManager
-ConflictResolver
-UI Layer
+- RomMClient
+- SaveScanner
+- SyncEngine
+- BackupManager
+- ConflictResolver
+- UILayer
 
 Adapters:
 
-PS1VMPAdapter
-PSPAdapter (planned)
-VitaSaveAdapter (planned)
-RetroArchAdapter (planned)
+- PS1SaveFolderScanner
+- PS1VMPAdapter
+- PS1SRMAdapter
+- PSPAdapter (planned)
+- VitaSaveAdapter (planned)
+- RetroArchAdapter (planned)
 
----
+Converters:
+
+- VmpToSrmConverter
+- SrmToVmpConverter
+- PsfParser
+
+## Roadmap
+
+### v1 — PS1 (Adrenaline)
+
+- scan SAVEDATA folders
+- detect PS1 save directories
+- parse PARAM.SFO
+- detect VMP files
+- convert VMP ↔ SRM
+- compare remote saves
+- manual sync workflow
+- automatic backup system
+
+### v2 — PSP Saves
+
+- scan SAVEDATA folders
+- map saves by TitleID
+- bidirectional sync
+- improved conflict detection
+
+### v3 — PS Vita Native Saves
+
+- evaluate encryption constraints
+- investigate extraction workflows
+- integrate native save support where possible
+
+### v4 — Emulator Environments
+
+- RetroArch save support
+- additional emulator integrations
+- per-core save mapping
+
+### v5 — Advanced PS1 Support
+
+- inspect memory card contents
+- identify individual save blocks
+- support granular synchronization
 
 ## Requirements
 
@@ -138,9 +284,7 @@ RetroArchAdapter (planned)
 - RomM server instance with save sync enabled
 - VitaSDK toolchain
 
----
-
-## Development status
+## Development Status
 
 This project is currently in its bootstrap phase.
 
@@ -148,26 +292,26 @@ Initial goals:
 
 - setup VitaSDK project structure
 - implement filesystem scanning
-- detect VMP files
+- detect PS1 save folders
+- parse PARAM.SFO
+- detect `.VMP` files
+- implement `.VMP ↔ .SRM` conversion helpers
 - display save inventory UI
 
-RomM API integration will follow once local scanning is stable.
-
----
+RomM API integration will follow once local scanning and conversion are stable.
 
 ## Contributing
 
 Contributions, ideas, and feedback are welcome.
 
-Planned contribution areas:
+Suggested areas:
 
-- VMP parsing
+- PARAM.SFO parsing
+- VMP/SRM conversion
 - RomM API integration
 - UI improvements
 - save metadata mapping
 - emulator adapter support
-
----
 
 ## Disclaimer
 
