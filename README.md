@@ -1,5 +1,9 @@
 # romm-vita-sync
 
+<p align="center">
+    <img src="assets/logo.png" alt="RoMM Vita Sync logo" width="420">
+</p>
+
 Save synchronization client for RomM on PlayStation Vita, supporting native and emulated platforms.
 
 ## Overview
