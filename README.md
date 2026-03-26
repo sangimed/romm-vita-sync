@@ -174,7 +174,9 @@ CLI helper:
 
 - reusable C module: `src/vmp_srm_converter.c`
 - standalone wrapper: `tools/Convert-VmpToSrm.ps1`
+- shell wrapper: `tools/Convert-VmpToSrm.sh`
 - example: `.\tools\Convert-VmpToSrm.ps1 .\SCEVMC0.VMP`
+- example (Linux/macOS): `./tools/Convert-VmpToSrm.sh ./SCEVMC0.VMP`
 
 The PowerShell script uses the standalone `vmp2srm` tool and can build it automatically into `build-tools/` if needed.
 

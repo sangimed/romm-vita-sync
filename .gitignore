@@ -5,3 +5,8 @@
 *.vpk
 *.sfo
 build
+build-tools/
+tools/*.VMP
+tools/*.vmp
+tools/*.SRM
+tools/*.srm
