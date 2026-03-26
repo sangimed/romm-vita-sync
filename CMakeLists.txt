@@ -27,6 +27,7 @@ add_executable(${PROJECT_NAME}
   src/save_scanner.c
   src/sfo_parser.c
   src/ui_inventory.c
+  src/vmp_srm_converter.c
   common/debugScreen.c
 )
 

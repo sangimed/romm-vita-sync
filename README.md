@@ -170,6 +170,14 @@ Process:
 2. Remove first 128 bytes
 3. Write `.SRM` payload
 
+CLI helper:
+
+- reusable C module: `src/vmp_srm_converter.c`
+- standalone wrapper: `tools/Convert-VmpToSrm.ps1`
+- example: `.\tools\Convert-VmpToSrm.ps1 .\SCEVMC0.VMP`
+
+The PowerShell script uses the standalone `vmp2srm` tool and can build it automatically into `build-tools/` if needed.
+
 ### SRM → VMP
 
 Process:
