@@ -12,3 +12,7 @@ build-tools/
 *.srm
 *.mcd
 *.MCD
+
+# Track reference VMP templates included for SRM->VMP conversions
+!samples/vmp-templates/*.VMP
+!samples/vmp-templates/*.vmp

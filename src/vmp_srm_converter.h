@@ -28,9 +28,23 @@ const char *vmp_srm_status_str(int status);
 int vmp_build_default_srm_path(const char *vmp_path, char *out_path, size_t out_path_size);
 
 /*
+ * Builds a default .vmp output path from an input SRM path.
+ * Example: ./save.srm -> ./save.vmp
+ */
+int srm_build_default_vmp_path(const char *srm_path, char *out_path, size_t out_path_size);
+
+/*
  * Converts a VMP memory card file to its raw SRM payload.
  * Version 1 is intentionally strict and only accepts standard 131200-byte VMP files.
  */
 int vmp_to_srm_file(const char *vmp_path, const char *srm_path);
+
+/*
+ * Converts a raw SRM payload back to a VMP memory card file by reusing the
+ * first 128 bytes from a known-good template VMP file.
+ * Version 1 is intentionally strict and only accepts standard 131072-byte SRM
+ * files and 131200-byte template VMP files.
+ */
+int srm_to_vmp_file(const char *srm_path, const char *template_vmp_path, const char *vmp_path);
 
 #endif
