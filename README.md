@@ -30,6 +30,7 @@ Initial milestone includes:
 - Detect `SCEVMC0.VMP` and `SCEVMC1.VMP`
 - Display metadata (path, size, timestamp)
 - Convert `.VMP` → `.SRM`
+- Convert `.SRM` → `.VMP`
 - Compare local vs remote saves
 - Manual synchronization workflow
 - Automatic backup before overwrite
@@ -61,8 +62,6 @@ Features:
 - Convert `.SRM` → `.VMP`
 - Support manual upload/download workflows
 - Always create backups before overwrite
-
-Per-save-block parsing inside memory cards is planned for a later release.
 
 ## PS1 Save Architecture
 
@@ -120,8 +119,6 @@ Conversion strategy:
 | Vita → RomM | Remove first 128 bytes |
 | RomM → Vita | Prepend valid VMP header |
 
-This avoids block-level parsing for version 1.
-
 ## Save Model
 
 ### Local Save Representation
@@ -170,6 +167,16 @@ Process:
 2. Remove first 128 bytes
 3. Write `.SRM` payload
 
+CLI helper:
+
+- reusable C module: `src/vmp_srm_converter.c`
+- standalone wrapper: `tools/convert-vmp-to-srm.ps1`
+- shell wrapper: `tools/convert-vmp-to-srm.sh`
+- example (Windows): `.\tools\convert-vmp-to-srm.ps1 .\SCEVMC0.VMP`
+- example (Linux/macOS): `./tools/convert-vmp-to-srm.sh ./SCEVMC0.VMP`
+
+The PowerShell script uses the standalone `vmp2srm` tool and can build it automatically into `build-tools/` if needed.
+
 ### SRM → VMP
 
 Process:
@@ -178,11 +185,39 @@ Process:
 2. Prepend 128-byte VMP header
 3. Write `SCEVMC0.VMP`
 
+CLI helper:
+
+- reusable C module: `src/vmp_srm_converter.c`
+- standalone wrapper: `tools/convert-srm-to-vmp.ps1`
+- shell wrapper: `tools/convert-srm-to-vmp.sh`
+- example (Windows): `.\tools\convert-srm-to-vmp.ps1 .\SAVE.SRM .\SAVE.VMP .\SCEVMC0.VMP`
+- example (Linux/macOS): `./tools/convert-srm-to-vmp.sh ./SAVE.SRM ./SAVE.VMP ./SCEVMC0.VMP`
+
 Rules:
 
 - reuse known-good VMP headers
 - never overwrite automatically
 - always create backups first
+
+The `SRM -> VMP` wrappers require a known-good `.VMP` template header. Pass an existing Vita/Adrenaline `SCEVMC0.VMP` or `SCEVMC1.VMP` path explicitly, or set `ROMM_VMP_TEMPLATE_PATH`.
+
+Header note:
+
+- This project does not currently assume the 128-byte VMP header is fully static.
+- External format notes indicate that the VMP header contains fixed fields plus signature-related data such as a key seed and an SHA1 HMAC digest.
+- That is also consistent with existing tooling such as `vita-mcr2vmp`, which is described as signing memory card saves to produce `.VMP` files.
+- For that reason, the current `SRM -> VMP` implementation reuses the first 128 bytes from a known-good `.VMP` file instead of synthesizing a new header.
+
+References:
+
+- psdevwiki, "PSP Virtual Memory Card (.VMP)": https://www.psdevwiki.com/ps3/PS1_Savedata
+- GameBrew, `vita-mcr2vmp`: https://www.gamebrew.org/wiki/Vita-mcr2vmp
+
+Included VMP templates:
+
+- Two reference cards from Metal Gear Solid (Europe), slots 0 and 1: `samples/vmp-templates/SCEVMC0.VMP` and `samples/vmp-templates/SCEVMC1.VMP`.
+- These are versioned to give contributors a known-good header for conversions. They are ignored everywhere else by default.
+- The CLI wrappers fall back to `samples/vmp-templates/SCEVMC0.VMP` if no template argument and no `ROMM_VMP_TEMPLATE_PATH` are provided.
 
 ## PS1 Sync Pipeline
 
@@ -277,9 +312,9 @@ Converters:
 
 ### v5 — Advanced PS1 Support
 
-- inspect memory card contents
-- identify individual save blocks
-- support granular synchronization
+- improve memory card tooling
+- extend diagnostics and validation
+- refine synchronization workflows
 
 ## Requirements
 
