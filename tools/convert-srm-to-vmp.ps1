@@ -8,10 +8,14 @@ param(
     [Parameter(Position = 2)]
     [string]$TemplateVmpPath,
 
+    [ValidateSet('0','1')]
+    [string]$Slot,
+
     [switch]$Rebuild
 )
 
 $ErrorActionPreference = "Stop"
+$outputWasProvided = $PSBoundParameters.ContainsKey('OutputPath')
 
 function Get-DefaultOutputPath {
     param(
@@ -52,6 +56,11 @@ if (-not (Test-Path -LiteralPath $inputFullPath)) {
 
 if (-not $OutputPath) {
     $OutputPath = Get-DefaultOutputPath -SourcePath $inputFullPath
+}
+
+if ($Slot -and -not $outputWasProvided) {
+    $inputDir = Split-Path -Parent $inputFullPath
+    $OutputPath = Join-Path $inputDir ("SCEVMC{0}.VMP" -f $Slot)
 }
 
 if (-not $TemplateVmpPath) {

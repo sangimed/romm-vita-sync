@@ -3,7 +3,9 @@
 set -eu
 
 usage() {
-    echo "Usage: $0 <input.srm> [output.vmp] <template.vmp> [--rebuild]" >&2
+    echo "Usage: $0 <input.srm> [output.vmp] <template.vmp> [--slot 0|1] [--rebuild]" >&2
+    echo "  --slot    : target memory card slot (0 or 1). If set and no output path is given, output defaults to SCEVMC<slot>.VMP next to the input." >&2
+    echo "  --rebuild : force rebuild of srm2vmp tool" >&2
 }
 
 default_output_path() {
@@ -48,11 +50,21 @@ INPUT_PATH=""
 OUTPUT_PATH=""
 TEMPLATE_VMP_PATH=""
 REBUILD=0
+SLOT=""
+OUTPUT_EXPLICIT=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --rebuild)
             REBUILD=1
+            ;;
+        --slot)
+            if [ "$#" -lt 2 ]; then
+                echo "--slot requires a value (0 or 1)" >&2
+                exit 1
+            fi
+            SLOT=$2
+            shift
             ;;
         -h|--help)
             usage
@@ -63,6 +75,7 @@ while [ "$#" -gt 0 ]; do
                 INPUT_PATH=$1
             elif [ -z "$OUTPUT_PATH" ]; then
                 OUTPUT_PATH=$1
+                OUTPUT_EXPLICIT=1
             elif [ -z "$TEMPLATE_VMP_PATH" ]; then
                 TEMPLATE_VMP_PATH=$1
             else
@@ -99,6 +112,11 @@ elif ! is_absolute_path "$OUTPUT_PATH"; then
     OUTPUT_PATH=$PWD/$OUTPUT_PATH
 fi
 
+if [ -n "$SLOT" ] && [ "$OUTPUT_EXPLICIT" -eq 0 ]; then
+    INPUT_DIR=$(dirname "$INPUT_PATH")
+    OUTPUT_PATH="$INPUT_DIR/SCEVMC${SLOT}.VMP"
+fi
+
 if [ -z "$TEMPLATE_VMP_PATH" ] && [ -n "${ROMM_VMP_TEMPLATE_PATH:-}" ]; then
     TEMPLATE_VMP_PATH=$ROMM_VMP_TEMPLATE_PATH
 fi
@@ -123,6 +141,16 @@ fi
 if [ ! -f "$TEMPLATE_VMP_PATH" ]; then
     echo "Template VMP not found: $TEMPLATE_VMP_PATH" >&2
     exit 1
+fi
+
+if [ -n "$SLOT" ]; then
+    case "$SLOT" in
+        0|1) ;;
+        *)
+            echo "Invalid slot: $SLOT (use 0 or 1)" >&2
+            exit 1
+            ;;
+    esac
 fi
 
 BUILD_DIR=$REPO_ROOT/build-tools
