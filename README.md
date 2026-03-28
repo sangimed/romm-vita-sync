@@ -19,9 +19,13 @@ The long-term objective is cross-platform save synchronization across:
 
 The first milestone targets PS1 save synchronization using Adrenaline virtual memory cards.
 
+The first implementation targets a manual synchronization workflow executed from a dedicated homebrew application. Automatic background synchronization via system plugins is planned for a later stage.
+
 ## Project Status
 
 **Stage:** early development
+
+This project is in early development. Back up your save data before installation or any manipulation.
 
 Initial milestone includes:
 
@@ -33,10 +37,27 @@ Initial milestone includes:
 - Convert `.SRM` → `.VMP`
 - Compare local vs remote saves
 - Manual synchronization workflow
+- Synchronization is triggered manually from the application UI in this phase (automatic triggers planned later)
 - Automatic backup before overwrite
 - Zero destructive operations without confirmation
 
 No write operations will be enabled until safety mechanisms are validated.
+
+
+## Execution Model (Version 1)
+
+romm-vita-sync is implemented first as a standalone PS Vita homebrew application.
+
+Synchronization is explicitly triggered by the user from within the application UI.
+
+This approach ensures:
+
+- safe validation of save conversion logic
+- deterministic synchronization behavior
+- easier debugging during early development
+- reduced risk of unintended save overwrites
+
+Automatic synchronization based on system events (for example after exiting a game) will be introduced later through a taiHEN plugin once the synchronization engine is fully validated.
 
 ## Why This Project Exists
 
@@ -290,6 +311,7 @@ Converters:
 - compare remote saves
 - manual sync workflow
 - automatic backup system
+- manual sync button inside homebrew UI
 
 ### v2 — PSP Saves
 
@@ -315,6 +337,19 @@ Converters:
 - improve memory card tooling
 - extend diagnostics and validation
 - refine synchronization workflows
+
+
+## Future Plugin-Based Automation (Planned)
+
+After the synchronization engine is validated in the standalone homebrew version, a taiHEN plugin will be introduced to support automatic synchronization triggers.
+
+Planned triggers include:
+
+- after exiting a game
+- when returning to LiveArea
+- during safe idle system states
+
+The plugin will act as a lightweight event listener and delegate synchronization work to the existing SyncEngine.
 
 ## Requirements
 
