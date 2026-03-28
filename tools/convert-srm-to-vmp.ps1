@@ -9,7 +9,7 @@ param(
     [string]$TemplateVmpPath,
 
     [ValidateSet('0','1')]
-    [string]$Slot,
+    [string]$Slot = '0',
 
     [switch]$Rebuild
 )

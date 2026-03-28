@@ -50,7 +50,7 @@ INPUT_PATH=""
 OUTPUT_PATH=""
 TEMPLATE_VMP_PATH=""
 REBUILD=0
-SLOT=""
+SLOT="0"
 OUTPUT_EXPLICIT=0
 
 while [ "$#" -gt 0 ]; do
