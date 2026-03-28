@@ -197,13 +197,18 @@ CLI helper:
 Required setup:
 
 - `git submodule update --init tools/vita-mcr2vmp`
-- `cmake -S tools -B build-tools && cmake --build build-tools --config Release`
 
-Usage after setup:
+Build behavior:
+
+- the wrappers look for `srm2vmp` and `vita-mcr2vmp` in `build-tools/`
+- if either tool is missing (or `--rebuild` is passed), the wrappers run `cmake -S tools -B build-tools` then `cmake --build build-tools --config Release`
+- configuration fails fast when `tools/vita-mcr2vmp` is missing
+
+Usage:
 
 - Linux/macOS: `./tools/convert-srm-to-vmp.sh <INPUT.SRM> [OUTPUT.VMP] <TEMPLATE.VMP>`
 - Windows: `.\tools\convert-srm-to-vmp.ps1 <INPUT.SRM> [OUTPUT.VMP] <TEMPLATE.VMP>`
-- The script performs a VMP→MCR→VMP round-trip to recompute the signature with `vita-mcr2vmp`. Fails fast if the tool is missing.
+- The wrappers perform a VMP→MCR→VMP round-trip to recompute the signature with `vita-mcr2vmp` and then replace the unsigned output with the signed VMP.
 
 Rules:
 

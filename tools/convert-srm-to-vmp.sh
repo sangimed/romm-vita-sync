@@ -131,6 +131,11 @@ ROOT_BIN=$BUILD_DIR/srm2vmp
 RELWITHDEBINFO_BIN=$BUILD_DIR/RelWithDebInfo/srm2vmp
 DEBUG_BIN=$BUILD_DIR/Debug/srm2vmp
 
+SIGNER_RELEASE_BIN=$BUILD_DIR/Release/vita-mcr2vmp
+SIGNER_ROOT_BIN=$BUILD_DIR/vita-mcr2vmp
+SIGNER_RELWITHDEBINFO_BIN=$BUILD_DIR/RelWithDebInfo/vita-mcr2vmp
+SIGNER_DEBUG_BIN=$BUILD_DIR/Debug/vita-mcr2vmp
+
 CONVERTER_EXE=""
 if [ "$REBUILD" -eq 0 ]; then
     CONVERTER_EXE=$(find_converter_binary \
@@ -161,5 +166,60 @@ if [ -z "$CONVERTER_EXE" ]; then
     fi
 fi
 
+SIGNER_EXE=""
+if [ "$REBUILD" -eq 0 ]; then
+    SIGNER_EXE=$(find_converter_binary \
+        "$SIGNER_RELEASE_BIN" \
+        "$SIGNER_ROOT_BIN" \
+        "$SIGNER_RELWITHDEBINFO_BIN" \
+        "$SIGNER_DEBUG_BIN" || true)
+fi
+
+if [ -z "$SIGNER_EXE" ]; then
+    if ! command -v cmake >/dev/null 2>&1; then
+        echo "vita-mcr2vmp not found and cmake is unavailable. Build the tools target first." >&2
+        exit 1
+    fi
+
+    cmake -S "$REPO_ROOT/tools" -B "$BUILD_DIR"
+    cmake --build "$BUILD_DIR" --config Release
+
+    SIGNER_EXE=$(find_converter_binary \
+        "$SIGNER_RELEASE_BIN" \
+        "$SIGNER_ROOT_BIN" \
+        "$SIGNER_RELWITHDEBINFO_BIN" \
+        "$SIGNER_DEBUG_BIN" || true)
+
+    if [ -z "$SIGNER_EXE" ]; then
+        echo "Build finished but vita-mcr2vmp was not found. Ensure submodule tools/vita-mcr2vmp is present." >&2
+        exit 1
+    fi
+fi
+
 "$CONVERTER_EXE" "$INPUT_PATH" "$TEMPLATE_VMP_PATH" "$OUTPUT_PATH"
-echo "VMP generated: $OUTPUT_PATH"
+
+TEMP_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t romm_vita_sync)
+cleanup() {
+    rm -rf "$TEMP_DIR"
+}
+trap cleanup EXIT INT TERM
+
+UNSIGNED_VMP="$TEMP_DIR/unsigned.VMP"
+cp "$OUTPUT_PATH" "$UNSIGNED_VMP"
+
+"$SIGNER_EXE" "$UNSIGNED_VMP"
+MCR_PATH="$UNSIGNED_VMP.mcr"
+if [ ! -f "$MCR_PATH" ]; then
+    echo "Signing failed: expected intermediate MCR not found at $MCR_PATH" >&2
+    exit 1
+fi
+
+"$SIGNER_EXE" "$MCR_PATH"
+SIGNED_VMP_PATH="$MCR_PATH.VMP"
+if [ ! -f "$SIGNED_VMP_PATH" ]; then
+    echo "Signing failed: expected signed VMP not found at $SIGNED_VMP_PATH" >&2
+    exit 1
+fi
+
+cp "$SIGNED_VMP_PATH" "$OUTPUT_PATH"
+echo "VMP generated and signed: $OUTPUT_PATH"
