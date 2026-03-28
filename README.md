@@ -192,6 +192,24 @@ CLI helper:
 - shell wrapper: `tools/convert-srm-to-vmp.sh`
 - example (Windows): `.\tools\convert-srm-to-vmp.ps1 .\SAVE.SRM .\SAVE.VMP .\SCEVMC0.VMP`
 - example (Linux/macOS): `./tools/convert-srm-to-vmp.sh ./SAVE.SRM ./SAVE.VMP ./SCEVMC0.VMP`
+- signing: the wrappers always re-sign using `vita-mcr2vmp` (submodule `tools/vita-mcr2vmp`) to avoid checksum error (`80010005`).
+
+Required setup:
+
+- `git submodule update --init tools/vita-mcr2vmp`
+
+Build behavior:
+
+- the wrappers look for `srm2vmp` and `vita-mcr2vmp` in `build-tools/`
+- if either tool is missing (or `--rebuild` is passed), the wrappers run `cmake -S tools -B build-tools` then `cmake --build build-tools --config Release`
+- configuration fails fast when `tools/vita-mcr2vmp` is missing
+
+Usage:
+
+- Linux/macOS: `./tools/convert-srm-to-vmp.sh <INPUT.SRM> [OUTPUT.VMP] <TEMPLATE.VMP>`
+- Windows: `.\tools\convert-srm-to-vmp.ps1 <INPUT.SRM> [OUTPUT.VMP] <TEMPLATE.VMP>`
+- Slot selection: add `--slot 0` or `--slot 1` (`-Slot 0|1` on PowerShell). If no output name is provided, the script writes `SCEVMC<slot>.VMP` beside the input.
+- The wrappers perform a VMP→MCR→VMP round-trip to recompute the signature with `vita-mcr2vmp` and then replace the unsigned output with the signed VMP.
 
 Rules:
 
@@ -199,25 +217,7 @@ Rules:
 - never overwrite automatically
 - always create backups first
 
-The `SRM -> VMP` wrappers require a known-good `.VMP` template header. Pass an existing Vita/Adrenaline `SCEVMC0.VMP` or `SCEVMC1.VMP` path explicitly, or set `ROMM_VMP_TEMPLATE_PATH`.
-
-Header note:
-
-- This project does not currently assume the 128-byte VMP header is fully static.
-- External format notes indicate that the VMP header contains fixed fields plus signature-related data such as a key seed and an SHA1 HMAC digest.
-- That is also consistent with existing tooling such as `vita-mcr2vmp`, which is described as signing memory card saves to produce `.VMP` files.
-- For that reason, the current `SRM -> VMP` implementation reuses the first 128 bytes from a known-good `.VMP` file instead of synthesizing a new header.
-
-References:
-
-- psdevwiki, "PSP Virtual Memory Card (.VMP)": https://www.psdevwiki.com/ps3/PS1_Savedata
-- GameBrew, `vita-mcr2vmp`: https://www.gamebrew.org/wiki/Vita-mcr2vmp
-
-Included VMP templates:
-
-- Two reference cards from Metal Gear Solid (Europe), slots 0 and 1: `samples/vmp-templates/SCEVMC0.VMP` and `samples/vmp-templates/SCEVMC1.VMP`.
-- These are versioned to give contributors a known-good header for conversions. They are ignored everywhere else by default.
-- The CLI wrappers fall back to `samples/vmp-templates/SCEVMC0.VMP` if no template argument and no `ROMM_VMP_TEMPLATE_PATH` are provided.
+The `SRM -> VMP` wrappers require a known-good `.VMP` template header. Pass an existing Vita/Adrenaline `SCEVMC0.VMP` or `SCEVMC1.VMP`, or set `ROMM_VMP_TEMPLATE_PATH`. Templates are provided in `samples/vmp-templates/`.
 
 ## PS1 Sync Pipeline
 

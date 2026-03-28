@@ -1,0 +1,3 @@
+[submodule "tools/vita-mcr2vmp"]
+	path = tools/vita-mcr2vmp
+	url = https://github.com/dots-tb/vita-mcr2vmp

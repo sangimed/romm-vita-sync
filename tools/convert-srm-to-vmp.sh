@@ -3,7 +3,9 @@
 set -eu
 
 usage() {
-    echo "Usage: $0 <input.srm> [output.vmp] <template.vmp> [--rebuild]" >&2
+    echo "Usage: $0 <input.srm> [output.vmp] <template.vmp> [--slot 0|1] [--rebuild]" >&2
+    echo "  --slot    : target memory card slot (0 or 1). If set and no output path is given, output defaults to SCEVMC<slot>.VMP next to the input." >&2
+    echo "  --rebuild : force rebuild of srm2vmp tool" >&2
 }
 
 default_output_path() {
@@ -48,11 +50,21 @@ INPUT_PATH=""
 OUTPUT_PATH=""
 TEMPLATE_VMP_PATH=""
 REBUILD=0
+SLOT="0"
+OUTPUT_EXPLICIT=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --rebuild)
             REBUILD=1
+            ;;
+        --slot)
+            if [ "$#" -lt 2 ]; then
+                echo "--slot requires a value (0 or 1)" >&2
+                exit 1
+            fi
+            SLOT=$2
+            shift
             ;;
         -h|--help)
             usage
@@ -63,6 +75,7 @@ while [ "$#" -gt 0 ]; do
                 INPUT_PATH=$1
             elif [ -z "$OUTPUT_PATH" ]; then
                 OUTPUT_PATH=$1
+                OUTPUT_EXPLICIT=1
             elif [ -z "$TEMPLATE_VMP_PATH" ]; then
                 TEMPLATE_VMP_PATH=$1
             else
@@ -99,6 +112,11 @@ elif ! is_absolute_path "$OUTPUT_PATH"; then
     OUTPUT_PATH=$PWD/$OUTPUT_PATH
 fi
 
+if [ -n "$SLOT" ] && [ "$OUTPUT_EXPLICIT" -eq 0 ]; then
+    INPUT_DIR=$(dirname "$INPUT_PATH")
+    OUTPUT_PATH="$INPUT_DIR/SCEVMC${SLOT}.VMP"
+fi
+
 if [ -z "$TEMPLATE_VMP_PATH" ] && [ -n "${ROMM_VMP_TEMPLATE_PATH:-}" ]; then
     TEMPLATE_VMP_PATH=$ROMM_VMP_TEMPLATE_PATH
 fi
@@ -125,22 +143,37 @@ if [ ! -f "$TEMPLATE_VMP_PATH" ]; then
     exit 1
 fi
 
+if [ -n "$SLOT" ]; then
+    case "$SLOT" in
+        0|1) ;;
+        *)
+            echo "Invalid slot: $SLOT (use 0 or 1)" >&2
+            exit 1
+            ;;
+    esac
+fi
+
 BUILD_DIR=$REPO_ROOT/build-tools
 RELEASE_BIN=$BUILD_DIR/Release/srm2vmp
 ROOT_BIN=$BUILD_DIR/srm2vmp
 RELWITHDEBINFO_BIN=$BUILD_DIR/RelWithDebInfo/srm2vmp
 DEBUG_BIN=$BUILD_DIR/Debug/srm2vmp
 
-CONVERTER_EXE=""
+SIGNER_RELEASE_BIN=$BUILD_DIR/Release/vita-mcr2vmp
+SIGNER_ROOT_BIN=$BUILD_DIR/vita-mcr2vmp
+SIGNER_RELWITHDEBINFO_BIN=$BUILD_DIR/RelWithDebInfo/vita-mcr2vmp
+SIGNER_DEBUG_BIN=$BUILD_DIR/Debug/vita-mcr2vmp
+
+CONVERTER_BIN=""
 if [ "$REBUILD" -eq 0 ]; then
-    CONVERTER_EXE=$(find_converter_binary \
+    CONVERTER_BIN=$(find_converter_binary \
         "$RELEASE_BIN" \
         "$ROOT_BIN" \
         "$RELWITHDEBINFO_BIN" \
         "$DEBUG_BIN" || true)
 fi
 
-if [ -z "$CONVERTER_EXE" ]; then
+if [ -z "$CONVERTER_BIN" ]; then
     if ! command -v cmake >/dev/null 2>&1; then
         echo "srm2vmp not found and cmake is unavailable. Build the tools target first." >&2
         exit 1
@@ -149,17 +182,72 @@ if [ -z "$CONVERTER_EXE" ]; then
     cmake -S "$REPO_ROOT/tools" -B "$BUILD_DIR"
     cmake --build "$BUILD_DIR" --config Release
 
-    CONVERTER_EXE=$(find_converter_binary \
+    CONVERTER_BIN=$(find_converter_binary \
         "$RELEASE_BIN" \
         "$ROOT_BIN" \
         "$RELWITHDEBINFO_BIN" \
         "$DEBUG_BIN" || true)
 
-    if [ -z "$CONVERTER_EXE" ]; then
+    if [ -z "$CONVERTER_BIN" ]; then
         echo "Build finished but srm2vmp was not found." >&2
         exit 1
     fi
 fi
 
-"$CONVERTER_EXE" "$INPUT_PATH" "$TEMPLATE_VMP_PATH" "$OUTPUT_PATH"
-echo "VMP generated: $OUTPUT_PATH"
+SIGNER_BIN=""
+if [ "$REBUILD" -eq 0 ]; then
+    SIGNER_BIN=$(find_converter_binary \
+        "$SIGNER_RELEASE_BIN" \
+        "$SIGNER_ROOT_BIN" \
+        "$SIGNER_RELWITHDEBINFO_BIN" \
+        "$SIGNER_DEBUG_BIN" || true)
+fi
+
+if [ -z "$SIGNER_BIN" ]; then
+    if ! command -v cmake >/dev/null 2>&1; then
+        echo "vita-mcr2vmp not found and cmake is unavailable. Build the tools target first." >&2
+        exit 1
+    fi
+
+    cmake -S "$REPO_ROOT/tools" -B "$BUILD_DIR"
+    cmake --build "$BUILD_DIR" --config Release
+
+    SIGNER_BIN=$(find_converter_binary \
+        "$SIGNER_RELEASE_BIN" \
+        "$SIGNER_ROOT_BIN" \
+        "$SIGNER_RELWITHDEBINFO_BIN" \
+        "$SIGNER_DEBUG_BIN" || true)
+
+    if [ -z "$SIGNER_BIN" ]; then
+        echo "Build finished but vita-mcr2vmp was not found. Ensure submodule tools/vita-mcr2vmp is present." >&2
+        exit 1
+    fi
+fi
+
+"$CONVERTER_BIN" "$INPUT_PATH" "$TEMPLATE_VMP_PATH" "$OUTPUT_PATH"
+
+TEMP_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t romm_vita_sync)
+cleanup() {
+    rm -rf "$TEMP_DIR"
+}
+trap cleanup EXIT INT TERM
+
+UNSIGNED_VMP="$TEMP_DIR/unsigned.VMP"
+cp "$OUTPUT_PATH" "$UNSIGNED_VMP"
+
+"$SIGNER_BIN" "$UNSIGNED_VMP"
+MCR_PATH="$UNSIGNED_VMP.mcr"
+if [ ! -f "$MCR_PATH" ]; then
+    echo "Signing failed: expected intermediate MCR not found at $MCR_PATH" >&2
+    exit 1
+fi
+
+"$SIGNER_BIN" "$MCR_PATH"
+SIGNED_VMP_PATH="$MCR_PATH.VMP"
+if [ ! -f "$SIGNED_VMP_PATH" ]; then
+    echo "Signing failed: expected signed VMP not found at $SIGNED_VMP_PATH" >&2
+    exit 1
+fi
+
+cp "$SIGNED_VMP_PATH" "$OUTPUT_PATH"
+echo "VMP generated and signed: $OUTPUT_PATH"
