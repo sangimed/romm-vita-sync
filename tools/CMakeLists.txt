@@ -15,8 +15,15 @@ add_executable(srm2vmp
   ../src/vmp_srm_converter.c
 )
 
+add_executable(vita-mcr2vmp
+  vita-mcr2vmp/src/main.c
+  vita-mcr2vmp/src/aes.c
+  vita-mcr2vmp/src/sha1.c
+)
+
 target_include_directories(vmp2srm PRIVATE ../src)
 target_include_directories(srm2vmp PRIVATE ../src)
+target_include_directories(vita-mcr2vmp PRIVATE vita-mcr2vmp/include)
 
 if(MSVC)
   target_compile_options(vmp2srm PRIVATE /W4 /O2)
@@ -24,4 +31,5 @@ if(MSVC)
 else()
   target_compile_options(vmp2srm PRIVATE -Wall -Wextra -O2)
   target_compile_options(srm2vmp PRIVATE -Wall -Wextra -O2)
+  target_compile_options(vita-mcr2vmp PRIVATE -Wall -Wextra -O2)
 endif()
