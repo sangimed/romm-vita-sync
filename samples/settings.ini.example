@@ -25,3 +25,9 @@ state_store_path = ux0:data/romm-vita-sync/sync_state.tsv
 backup_directory = ux0:data/romm-vita-sync/backups
 ; Keep true for safe first runs, set false to execute transfers
 dry_run = true
+
+[Log]
+; error | warn | info | debug
+level = debug
+; Scanner logs can be very chatty, keep disabled unless needed
+scan_verbose = false

@@ -22,6 +22,11 @@
 #define APP_CONFIG_MAX_CLIENT_NAME_LEN 64
 #define APP_CONFIG_MAX_CLIENT_VERSION_LEN 32
 
+#define APP_CONFIG_LOG_LEVEL_ERROR 0
+#define APP_CONFIG_LOG_LEVEL_WARN 1
+#define APP_CONFIG_LOG_LEVEL_INFO 2
+#define APP_CONFIG_LOG_LEVEL_DEBUG 3
+
 #define APP_CONFIG_DEFAULT_PATH "ux0:data/romm-vita-sync/settings.ini"
 #define APP_CONFIG_DEFAULT_STATE_STORE_PATH "ux0:data/romm-vita-sync/sync_state.tsv"
 #define APP_CONFIG_DEFAULT_BACKUP_DIRECTORY "ux0:data/romm-vita-sync/backups"
@@ -43,6 +48,9 @@ typedef struct AppConfig {
   char sync_state_store_path[ROMM_MAX_PATH_LEN];
   char sync_backup_directory[ROMM_MAX_PATH_LEN];
   int sync_dry_run;
+
+  int log_level;
+  int log_scan_verbose;
 } AppConfig;
 
 /*

@@ -269,7 +269,7 @@ int srm_to_vmp_file(const char *srm_path, const char *template_vmp_path, const c
     return ROMM_VMP_SRM_ERR_INVALID_ARGUMENT;
   }
 
-  if ((strcmp(srm_path, vmp_path) == 0) || (strcmp(template_vmp_path, vmp_path) == 0)) {
+  if (strcmp(srm_path, vmp_path) == 0) {
     return ROMM_VMP_SRM_ERR_INVALID_ARGUMENT;
   }
 

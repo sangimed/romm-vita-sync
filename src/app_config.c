@@ -12,7 +12,8 @@ typedef enum AppConfigSection {
   APP_CONFIG_SECTION_NONE = 0,
   APP_CONFIG_SECTION_ROMM = 1,
   APP_CONFIG_SECTION_DEVICE = 2,
-  APP_CONFIG_SECTION_SYNC = 3
+  APP_CONFIG_SECTION_SYNC = 3,
+  APP_CONFIG_SECTION_LOG = 4
 } AppConfigSection;
 
 /*
@@ -149,6 +150,59 @@ static int parse_positive_int(const char *text, int fallback_value) {
 }
 
 /*
+ * Parses log level from number or text.
+ */
+static int parse_log_level_value(const char *text, int fallback_value) {
+  if (!has_text(text)) {
+    return fallback_value;
+  }
+
+  if (string_ieq(text, "error")) {
+    return APP_CONFIG_LOG_LEVEL_ERROR;
+  }
+  if (string_ieq(text, "warn") || string_ieq(text, "warning")) {
+    return APP_CONFIG_LOG_LEVEL_WARN;
+  }
+  if (string_ieq(text, "info")) {
+    return APP_CONFIG_LOG_LEVEL_INFO;
+  }
+  if (string_ieq(text, "debug") || string_ieq(text, "verbose")) {
+    return APP_CONFIG_LOG_LEVEL_DEBUG;
+  }
+
+  char *end = NULL;
+  long numeric = strtol(text, &end, 10);
+  if ((end == text) || ((end != NULL) && (*end != '\0'))) {
+    return fallback_value;
+  }
+
+  if (numeric < APP_CONFIG_LOG_LEVEL_ERROR) {
+    return APP_CONFIG_LOG_LEVEL_ERROR;
+  }
+  if (numeric > APP_CONFIG_LOG_LEVEL_DEBUG) {
+    return APP_CONFIG_LOG_LEVEL_DEBUG;
+  }
+  return numeric;
+}
+
+/*
+ * Returns text representation for persisted log level.
+ */
+static const char *log_level_to_text(int log_level) {
+  switch (log_level) {
+    case APP_CONFIG_LOG_LEVEL_ERROR:
+      return "error";
+    case APP_CONFIG_LOG_LEVEL_WARN:
+      return "warn";
+    case APP_CONFIG_LOG_LEVEL_DEBUG:
+      return "debug";
+    case APP_CONFIG_LOG_LEVEL_INFO:
+    default:
+      return "info";
+  }
+}
+
+/*
  * Removes surrounding single/double quotes when present.
  */
 static char *strip_optional_quotes(char *text) {
@@ -189,6 +243,10 @@ static AppConfigSection parse_section_name(const char *name) {
 
   if (string_ieq(name, "Sync")) {
     return APP_CONFIG_SECTION_SYNC;
+  }
+
+  if (string_ieq(name, "Log")) {
+    return APP_CONFIG_SECTION_LOG;
   }
 
   return APP_CONFIG_SECTION_NONE;
@@ -286,6 +344,18 @@ static void apply_key_value(
     } else if (string_ieq(key, "dry_run")) {
       config->sync_dry_run = parse_bool_value(value, config->sync_dry_run);
     }
+    return;
+  }
+
+  if (section == APP_CONFIG_SECTION_LOG) {
+    if (string_ieq(key, "level")) {
+      config->log_level = parse_log_level_value(value, config->log_level);
+    } else if (string_ieq(key, "verbose")) {
+      int verbose_enabled = parse_bool_value(value, config->log_level >= APP_CONFIG_LOG_LEVEL_DEBUG);
+      config->log_level = verbose_enabled ? APP_CONFIG_LOG_LEVEL_DEBUG : APP_CONFIG_LOG_LEVEL_INFO;
+    } else if (string_ieq(key, "scan_verbose")) {
+      config->log_scan_verbose = parse_bool_value(value, config->log_scan_verbose);
+    }
   }
 }
 
@@ -310,6 +380,9 @@ void app_config_init_defaults(AppConfig *config) {
   safe_copy(config->sync_state_store_path, sizeof(config->sync_state_store_path), APP_CONFIG_DEFAULT_STATE_STORE_PATH);
   safe_copy(config->sync_backup_directory, sizeof(config->sync_backup_directory), APP_CONFIG_DEFAULT_BACKUP_DIRECTORY);
   config->sync_dry_run = 1;
+
+  config->log_level = APP_CONFIG_LOG_LEVEL_DEBUG;
+  config->log_scan_verbose = 0;
 }
 
 /*
@@ -467,6 +540,15 @@ int app_config_save(const char *path, const AppConfig *config) {
     status = APP_CONFIG_ERR_WRITE;
   }
   if ((status == APP_CONFIG_OK) && (fprintf(file, "dry_run = %s\n", config->sync_dry_run ? "true" : "false") < 0)) {
+    status = APP_CONFIG_ERR_WRITE;
+  }
+  if ((status == APP_CONFIG_OK) && (fprintf(file, "\n[Log]\n") < 0)) {
+    status = APP_CONFIG_ERR_WRITE;
+  }
+  if ((status == APP_CONFIG_OK) && (fprintf(file, "level = %s\n", log_level_to_text(config->log_level)) < 0)) {
+    status = APP_CONFIG_ERR_WRITE;
+  }
+  if ((status == APP_CONFIG_OK) && (fprintf(file, "scan_verbose = %s\n", config->log_scan_verbose ? "true" : "false") < 0)) {
     status = APP_CONFIG_ERR_WRITE;
   }
 

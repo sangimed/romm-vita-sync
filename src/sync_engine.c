@@ -1,16 +1,21 @@
 #include "sync_engine.h"
 
+#include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 
+#include "app_log.h"
 #include "backup_manager.h"
 #include "conflict_resolver.h"
 #include "game_matcher.h"
 #include "sync_state_store.h"
+#include "vmp_signer.h"
+#include "vmp_srm_converter.h"
 
 #define SYNC_DEFAULT_BACKUP_DIRECTORY "ux0:data/romm-vita-sync/backups"
+#define SYNC_DEFAULT_CONVERSION_DIRECTORY "ux0:data/romm-vita-sync/cache/conversion"
 
 /*
  * Default clock provider used when caller does not inject one.
@@ -41,6 +46,168 @@ static int file_exists(const char *path) {
 
   fclose(probe);
   return 1;
+}
+
+/*
+ * Case-insensitive ASCII extension check helper.
+ */
+static int path_has_extension(const char *path, const char *extension) {
+  if (!has_text(path) || !has_text(extension)) {
+    return 0;
+  }
+
+  size_t path_len = strlen(path);
+  size_t extension_len = strlen(extension);
+  if (path_len < extension_len) {
+    return 0;
+  }
+
+  const char *path_extension = path + path_len - extension_len;
+  return sync_string_ieq(path_extension, extension);
+}
+
+/*
+ * Sanitizes a string so it can safely be used in generated file names.
+ */
+static void sanitize_path_component(const char *input, char *output, size_t output_size) {
+  if ((output == NULL) || (output_size == 0U)) {
+    return;
+  }
+
+  output[0] = '\0';
+  if (!has_text(input)) {
+    snprintf(output, output_size, "item");
+    return;
+  }
+
+  size_t out = 0U;
+  for (const unsigned char *cursor = (const unsigned char *)input;
+       (*cursor != '\0') && ((out + 1U) < output_size);
+       ++cursor) {
+    unsigned char c = *cursor;
+    if (isalnum(c) || (c == '_') || (c == '-')) {
+      output[out++] = (char)c;
+    } else {
+      output[out++] = '_';
+    }
+  }
+
+  if (out == 0U) {
+    output[out++] = 'i';
+    if (out < output_size) {
+      output[out++] = 't';
+    }
+    if (out < output_size) {
+      output[out++] = 'e';
+    }
+    if (out < output_size) {
+      output[out++] = 'm';
+    }
+  }
+
+  output[out] = '\0';
+}
+
+/*
+ * Generates a deterministic temporary conversion path for one sync action.
+ */
+static int build_conversion_temp_path(
+    const SyncSaveDescriptor *item,
+    const char *operation,
+    const char *extension,
+    int64_t seed,
+    char *out_path,
+    size_t out_path_size) {
+  if ((item == NULL) || !has_text(operation) || !has_text(extension) ||
+      (out_path == NULL) || (out_path_size == 0U)) {
+    return -1;
+  }
+
+  char safe_game_id[ROMM_GAME_ID_LEN + 8];
+  char safe_operation[32];
+  sanitize_path_component(item->game_id, safe_game_id, sizeof(safe_game_id));
+  sanitize_path_component(operation, safe_operation, sizeof(safe_operation));
+
+  int slot_number = (item->slot == SYNC_SLOT_1) ? 1 : 0;
+  int written = snprintf(
+      out_path,
+      out_path_size,
+      "%s/%s_slot%d_%s_%lld%s",
+      SYNC_DEFAULT_CONVERSION_DIRECTORY,
+      safe_game_id,
+      slot_number,
+      safe_operation,
+      (long long)seed,
+      extension);
+
+  return ((written > 0) && ((size_t)written < out_path_size)) ? 0 : -1;
+}
+
+/*
+ * Extracts the parent directory portion of a full path.
+ */
+static int extract_parent_directory(const char *path, char *out_directory, size_t out_directory_size) {
+  if (!has_text(path) || (out_directory == NULL) || (out_directory_size == 0U)) {
+    return -1;
+  }
+
+  const char *last_forward = strrchr(path, '/');
+  const char *last_backward = strrchr(path, '\\');
+  const char *separator = last_forward;
+  if ((last_backward != NULL) && ((separator == NULL) || (last_backward > separator))) {
+    separator = last_backward;
+  }
+  if ((separator == NULL) || (separator == path)) {
+    return -1;
+  }
+
+  size_t directory_length = (size_t)(separator - path);
+  if (directory_length >= out_directory_size) {
+    return -1;
+  }
+
+  memcpy(out_directory, path, directory_length);
+  out_directory[directory_length] = '\0';
+  return 0;
+}
+
+/*
+ * Chooses a trusted VMP template path for SRM->VMP reconstruction.
+ */
+static int resolve_template_vmp_path(
+    const SyncSaveDescriptor *local_item,
+    char *out_template_path,
+    size_t out_template_path_size) {
+  if ((local_item == NULL) || !has_text(local_item->path) ||
+      (out_template_path == NULL) || (out_template_path_size == 0U)) {
+    return -1;
+  }
+
+  if (file_exists(local_item->path)) {
+    snprintf(out_template_path, out_template_path_size, "%s", local_item->path);
+    return 0;
+  }
+
+  char directory[ROMM_MAX_PATH_LEN];
+  if (extract_parent_directory(local_item->path, directory, sizeof(directory)) < 0) {
+    return -1;
+  }
+
+  const char *preferred = (local_item->slot == SYNC_SLOT_1) ? "SCEVMC1.VMP" : "SCEVMC0.VMP";
+  const char *fallback = (local_item->slot == SYNC_SLOT_1) ? "SCEVMC0.VMP" : "SCEVMC1.VMP";
+
+  int written = snprintf(out_template_path, out_template_path_size, "%s/%s", directory, preferred);
+  if ((written > 0) && ((size_t)written < out_template_path_size) && file_exists(out_template_path)) {
+    return 0;
+  }
+
+  written = snprintf(out_template_path, out_template_path_size, "%s/%s", directory, fallback);
+  if ((written > 0) && ((size_t)written < out_template_path_size) && file_exists(out_template_path)) {
+    return 0;
+  }
+
+  out_template_path[0] = '\0';
+  return -1;
 }
 
 /*
@@ -180,7 +347,71 @@ static int execute_upload(
     return SYNC_ENGINE_OK;
   }
 
-  int status = romm_client_upload_save(romm_client, local_item);
+  SyncSaveDescriptor upload_item;
+  memcpy(&upload_item, local_item, sizeof(upload_item));
+
+  int has_conversion_temp = 0;
+  char conversion_temp_path[ROMM_MAX_PATH_LEN];
+  conversion_temp_path[0] = '\0';
+
+  if (has_text(local_item->path) && path_has_extension(local_item->path, ".vmp")) {
+    int ensure_status = backup_manager_ensure_directory(SYNC_DEFAULT_CONVERSION_DIRECTORY);
+    if (ensure_status != BACKUP_MANAGER_OK) {
+      action->status_code = ensure_status;
+      report->transfer_errors += 1;
+      set_reason(action, "cannot create conversion directory (%s)", backup_manager_status_str(ensure_status));
+      return ensure_status;
+    }
+
+    int64_t now = (config->now_callback != NULL) ? config->now_callback() : default_now_callback();
+    if (build_conversion_temp_path(
+            local_item,
+            "upload",
+            ".srm",
+            now,
+            conversion_temp_path,
+            sizeof(conversion_temp_path)) < 0) {
+      action->status_code = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+      report->transfer_errors += 1;
+      set_reason(action, "cannot build upload conversion path");
+      return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+    }
+
+    int convert_status = vmp_to_srm_file(local_item->path, conversion_temp_path);
+    if (convert_status != ROMM_VMP_SRM_OK) {
+      action->status_code = convert_status;
+      report->transfer_errors += 1;
+      set_reason(action, "vmp->srm conversion failed (%s)", vmp_srm_status_str(convert_status));
+      app_log_write(
+          APP_LOG_LEVEL_WARN,
+          "sync",
+          "upload conversion failed game=%s file=%s status=%s",
+          local_item->game_id,
+          action->filename,
+          vmp_srm_status_str(convert_status));
+      return convert_status;
+    }
+
+    snprintf(upload_item.path, sizeof(upload_item.path), "%s", conversion_temp_path);
+    if (sync_extract_filename(conversion_temp_path, upload_item.filename, sizeof(upload_item.filename)) < 0) {
+      upload_item.filename[0] = '\0';
+    }
+    upload_item.size_bytes = ROMM_PS1_SRM_SIZE;
+    has_conversion_temp = 1;
+    app_log_write(
+        APP_LOG_LEVEL_DEBUG,
+        "sync",
+        "upload conversion success game=%s src=%s tmp=%s",
+        local_item->game_id,
+        local_item->path,
+        conversion_temp_path);
+  }
+
+  int status = romm_client_upload_save(romm_client, &upload_item);
+  if (has_conversion_temp) {
+    remove(conversion_temp_path);
+  }
+
   action->status_code = status;
   if (status == ROMM_CLIENT_ERR_CONFLICT) {
     action->executed = 0;
@@ -259,14 +490,113 @@ static int execute_download(
     }
   }
 
-  int status = romm_client_download_save(romm_client, remote_item, local_item->path);
-  action->status_code = status;
-  if (status < 0) {
-    action->executed = 0;
-    report->transfer_errors += 1;
-    set_reason(action, "download failed (%s)", romm_client_status_str(status));
-    return status;
+  int status = ROMM_CLIENT_OK;
+  int has_conversion_temp = 0;
+  char conversion_temp_path[ROMM_MAX_PATH_LEN];
+  conversion_temp_path[0] = '\0';
+
+  if (path_has_extension(local_item->path, ".vmp")) {
+    int ensure_status = backup_manager_ensure_directory(SYNC_DEFAULT_CONVERSION_DIRECTORY);
+    if (ensure_status != BACKUP_MANAGER_OK) {
+      action->status_code = ensure_status;
+      report->transfer_errors += 1;
+      set_reason(action, "cannot create conversion directory (%s)", backup_manager_status_str(ensure_status));
+      return ensure_status;
+    }
+
+    int64_t now = (config->now_callback != NULL) ? config->now_callback() : default_now_callback();
+    if (build_conversion_temp_path(
+            local_item,
+            "download",
+            ".srm",
+            now,
+            conversion_temp_path,
+            sizeof(conversion_temp_path)) < 0) {
+      action->status_code = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+      report->transfer_errors += 1;
+      set_reason(action, "cannot build download conversion path");
+      return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+    }
+
+    status = romm_client_download_save(romm_client, remote_item, conversion_temp_path);
+    action->status_code = status;
+    if (status < 0) {
+      action->executed = 0;
+      report->transfer_errors += 1;
+      set_reason(action, "download failed (%s)", romm_client_status_str(status));
+      remove(conversion_temp_path);
+      return status;
+    }
+
+    has_conversion_temp = 1;
+
+    char template_vmp_path[ROMM_MAX_PATH_LEN];
+    if (resolve_template_vmp_path(local_item, template_vmp_path, sizeof(template_vmp_path)) < 0) {
+      action->executed = 0;
+      action->status_code = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+      report->transfer_errors += 1;
+      set_reason(action, "no trusted template VMP available for SRM->VMP reconstruction");
+      remove(conversion_temp_path);
+      return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+    }
+
+    int convert_status = srm_to_vmp_file(conversion_temp_path, template_vmp_path, local_item->path);
+    if (convert_status != ROMM_VMP_SRM_OK) {
+      action->executed = 0;
+      action->status_code = convert_status;
+      report->transfer_errors += 1;
+      set_reason(action, "srm->vmp conversion failed (%s)", vmp_srm_status_str(convert_status));
+      app_log_write(
+          APP_LOG_LEVEL_WARN,
+          "sync",
+          "download conversion failed game=%s file=%s status=%s",
+          local_item->game_id,
+          action->filename,
+          vmp_srm_status_str(convert_status));
+      remove(conversion_temp_path);
+      return convert_status;
+    }
+
+    int sign_status = vmp_sign_file_in_place(local_item->path);
+    if (sign_status != ROMM_VMP_SIGNER_OK) {
+      action->executed = 0;
+      action->status_code = sign_status;
+      report->transfer_errors += 1;
+      set_reason(action, "vmp signing failed (%s)", vmp_signer_status_str(sign_status));
+      app_log_write(
+          APP_LOG_LEVEL_WARN,
+          "sync",
+          "download signing failed game=%s file=%s status=%s",
+          local_item->game_id,
+          action->filename,
+          vmp_signer_status_str(sign_status));
+      remove(conversion_temp_path);
+      return sign_status;
+    }
+
+    app_log_write(
+        APP_LOG_LEVEL_DEBUG,
+        "sync",
+        "download conversion success game=%s tmp=%s dst=%s",
+        local_item->game_id,
+        conversion_temp_path,
+        local_item->path);
+  } else {
+    status = romm_client_download_save(romm_client, remote_item, local_item->path);
+    action->status_code = status;
+    if (status < 0) {
+      action->executed = 0;
+      report->transfer_errors += 1;
+      set_reason(action, "download failed (%s)", romm_client_status_str(status));
+      return status;
+    }
   }
+
+  if (has_conversion_temp) {
+    remove(conversion_temp_path);
+  }
+
+  action->status_code = status;
 
   action->executed = 1;
   report->downloads_executed += 1;
@@ -334,13 +664,16 @@ int sync_engine_run(
 
   memset(out_report, 0, sizeof(*out_report));
   out_report->local_count = local_count;
+  app_log_write(APP_LOG_LEVEL_DEBUG, "sync", "run begin local_count=%d dry_run=%d", local_count, config->dry_run);
 
   SyncStateStore state_store;
   sync_state_store_init(&state_store);
 
   if (has_text(config->state_store_path)) {
+    app_log_write(APP_LOG_LEVEL_DEBUG, "sync", "loading state store: %s", config->state_store_path);
     int load_status = sync_state_store_load(config->state_store_path, &state_store);
     if (load_status != SYNC_STATE_STORE_OK) {
+      app_log_write(APP_LOG_LEVEL_ERROR, "sync", "state load failed: %s", sync_state_store_status_str(load_status));
       return SYNC_ENGINE_ERR_STATE_LOAD;
     }
   }
@@ -361,9 +694,11 @@ int sync_engine_run(
   int remote_count = romm_client_list_remote_saves(
       romm_client, remote_items, (int)(sizeof(remote_items) / sizeof(remote_items[0])));
   if (remote_count < 0) {
+    app_log_write(APP_LOG_LEVEL_ERROR, "sync", "remote listing failed: %s (%d)", romm_client_status_str(remote_count), remote_count);
     return SYNC_ENGINE_ERR_REMOTE_LIST;
   }
   out_report->remote_count = remote_count;
+  app_log_write(APP_LOG_LEVEL_INFO, "sync", "remote listing returned %d items", remote_count);
 
   for (int i = 0; i < local_count; ++i) {
     const SyncSaveDescriptor *local_item = &local_items[i];
@@ -395,6 +730,13 @@ int sync_engine_run(
       action->action = SYNC_ACTION_UPLOAD;
       out_report->uploads_planned += 1;
       set_reason(action, "upload candidate (no remote match)");
+      app_log_write(
+          APP_LOG_LEVEL_DEBUG,
+          "sync",
+          "upload candidate game=%s file=%s slot=%s",
+          local_item->game_id,
+          action->filename,
+          sync_slot_str(local_item->slot));
       int upload_status = execute_upload(config, romm_client, active_device_id, local_item, &state_store, action, out_report);
       if (upload_status == ROMM_CLIENT_ERR_CONFLICT) {
         action->action = SYNC_ACTION_SKIP;
@@ -402,6 +744,7 @@ int sync_engine_run(
         out_report->conflicts_detected += 1;
         out_report->skipped += 1;
         set_reason(action, "server conflict (409): remote newer, download before upload");
+        app_log_write(APP_LOG_LEVEL_WARN, "sync", "upload conflict game=%s file=%s", local_item->game_id, action->filename);
       }
       continue;
     }
@@ -437,10 +780,18 @@ int sync_engine_run(
       action->action = SYNC_ACTION_SKIP;
       out_report->skipped += 1;
       set_reason(action, "skip same-origin remote save");
+      app_log_write(APP_LOG_LEVEL_DEBUG, "sync", "skip same-origin game=%s file=%s", local_item->game_id, action->filename);
       continue;
     }
 
     out_report->conflicts_detected += 1;
+    app_log_write(
+        APP_LOG_LEVEL_WARN,
+        "sync",
+        "conflict game=%s file=%s type=%s",
+        local_item->game_id,
+        action->filename,
+        sync_conflict_type_str(conflict));
     SyncActionType decision = conflict_resolver_default_action(conflict);
     if (decision == SYNC_ACTION_NONE) {
       decision = SYNC_ACTION_SKIP;
@@ -465,12 +816,14 @@ int sync_engine_run(
     if (decision == SYNC_ACTION_UPLOAD) {
       out_report->uploads_planned += 1;
       set_reason(action, "upload selected for conflict=%s", sync_conflict_type_str(conflict));
+      app_log_write(APP_LOG_LEVEL_INFO, "sync", "decision=upload game=%s file=%s", local_item->game_id, action->filename);
       int upload_status = execute_upload(config, romm_client, active_device_id, local_item, &state_store, action, out_report);
       if (upload_status == ROMM_CLIENT_ERR_CONFLICT) {
         action->action = SYNC_ACTION_SKIP;
         action->conflict = SYNC_CONFLICT_REMOTE_NEWER;
         out_report->skipped += 1;
         set_reason(action, "server conflict (409): remote newer, download before upload");
+        app_log_write(APP_LOG_LEVEL_WARN, "sync", "upload conflict game=%s file=%s", local_item->game_id, action->filename);
       }
       continue;
     }
@@ -478,6 +831,7 @@ int sync_engine_run(
     if (decision == SYNC_ACTION_DOWNLOAD) {
       out_report->downloads_planned += 1;
       set_reason(action, "download selected for conflict=%s", sync_conflict_type_str(conflict));
+      app_log_write(APP_LOG_LEVEL_INFO, "sync", "decision=download game=%s file=%s", local_item->game_id, action->filename);
       execute_download(
           config,
           romm_client,
@@ -497,9 +851,19 @@ int sync_engine_run(
   if (!config->dry_run && has_text(config->state_store_path)) {
     int save_status = sync_state_store_save(config->state_store_path, &state_store);
     if (save_status != SYNC_STATE_STORE_OK) {
+      app_log_write(APP_LOG_LEVEL_ERROR, "sync", "state save failed: %s", sync_state_store_status_str(save_status));
       return SYNC_ENGINE_ERR_STATE_SAVE;
     }
   }
+  app_log_write(
+      APP_LOG_LEVEL_INFO,
+      "sync",
+      "run end uploads_planned=%d downloads_planned=%d conflicts=%d skipped=%d errors=%d",
+      out_report->uploads_planned,
+      out_report->downloads_planned,
+      out_report->conflicts_detected,
+      out_report->skipped,
+      out_report->transfer_errors);
 
   return SYNC_ENGINE_OK;
 }

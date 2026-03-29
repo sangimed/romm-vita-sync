@@ -41,7 +41,12 @@ Initial milestone includes:
 - Automatic backup before overwrite
 - Zero destructive operations without confirmation
 
-No write operations will be enabled until safety mechanisms are validated.
+Current integration status:
+
+- real HTTP device registration is implemented (`POST /api/devices`)
+- upload/download conversion logic is integrated in `SyncEngine`
+- real HTTP save transfer callbacks are wired (`list/upload/download`)
+- local Vita saves are now mapped to RomM `rom_id` using `/api/roms` metadata heuristics
 
 
 ## Execution Model (Version 1)
@@ -76,13 +81,69 @@ Supported sections:
 - `[RomM]`: `url`, `token`, `username`, `password`, `verify_tls`, `timeout_seconds`
 - `[Device]`: `device_id`, `device_name`, `device_platform`, `client`, `client_version`
 - `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`
+- `[Log]`: `level` (`error|warn|info|debug`), `scan_verbose` (`true|false`)
 
 Credential rule:
 
 - either `token`, or `username` + `password`
 - if `[Device].device_id` is empty, startup calls the `RommClient` registration flow and persists the returned `device_id` into `settings.ini`
+- recommended logging for troubleshooting: `level=debug` and keep `scan_verbose=false` first; enable `scan_verbose=true` only when debugging scanner issues
 
 The sync engine now treats server `409 Conflict` responses as synchronization conflicts (remote newer) rather than generic transfer errors, aligned with `romm-retroarch-sync` behavior.
+
+## Test End-to-End (Current Milestone)
+
+This milestone validates:
+
+- local PS1 save scan
+- config loading/persistence
+- real device registration via `POST /api/devices`
+- sync planning in dry-run mode
+- in-app conversion path wiring (`VMP->SRM` for upload, `SRM->VMP` + signing for download)
+- real save transfer integration (`GET /api/saves`, `POST /api/saves`, `GET /api/saves/{id}/content`)
+
+1. Prepare RomM credentials
+2. Choose either `token` or `username` + `password`
+3. Ensure Vita can reach the RomM URL on the same network
+4. For self-signed HTTPS certificates, set `verify_tls = false` only for local testing
+
+1. Prepare `settings.ini`
+2. Copy `samples/settings.ini.example` to `ux0:data/romm-vita-sync/settings.ini`
+3. Fill `[RomM]` URL + credentials
+4. Keep `[Device].device_id` empty for first registration test
+5. Set `[Log]` for diagnostics:
+6. `level = debug`
+7. `scan_verbose = false` (set `true` only when debugging scanner traversal)
+8. Keep `[Sync].dry_run = true` for first runs
+
+1. Build and install the VPK
+2. Run:
+3. `git submodule update --init --recursive`
+4. `cmake -S . -B build`
+5. `cmake --build build --config Release`
+6. Install `build/romm_vita_sync.vpk` on Vita (for example via VitaShell FTP/USB)
+
+1. First launch checks (device bootstrap)
+2. Expected logs include:
+3. `Registering device on RomM via /api/devices`
+4. `Device registered and persisted: <device_id>`
+5. Open `ux0:data/romm-vita-sync/settings.ini` and confirm `device_id` is now filled
+
+1. Relaunch checks (id persistence)
+2. Restart the app
+3. Confirm no new registration is attempted when `device_id` is already present
+4. Confirm same `device_id` remains in `settings.ini`
+
+1. Negative-path checks
+2. Wrong credentials: expect `authentication failed`
+3. Unreachable URL/network issue: expect `network error`
+4. HTTPS with invalid cert and `verify_tls = true`: expect request failure
+5. Same endpoint with `verify_tls = false`: should proceed (test-only setting)
+
+1. Current expected sync behavior
+2. With `dry_run = true`, app computes and prints sync plan only
+3. Set `dry_run = false` to execute real transfers against RomM
+4. Upload flow sends `.SRM` through `POST /api/saves`, download flow pulls `GET /api/saves/{id}/content` then rebuilds/signs `.VMP`
 
 ## Why This Project Exists
 
@@ -106,7 +167,7 @@ Features:
 - Detect `.VMP` memory card files
 - Convert `.VMP` → `.SRM`
 - Convert `.SRM` → `.VMP`
-- Support manual upload/download workflows
+- Support manual upload/download workflow orchestration in `SyncEngine` with real RomM HTTP transport
 - Always create backups before overwrite
 
 ## PS1 Save Architecture
@@ -239,6 +300,7 @@ CLI helper:
 - example (Windows): `.\tools\convert-srm-to-vmp.ps1 .\SAVE.SRM .\SAVE.VMP .\SCEVMC0.VMP`
 - example (Linux/macOS): `./tools/convert-srm-to-vmp.sh ./SAVE.SRM ./SAVE.VMP ./SCEVMC0.VMP`
 - signing: the wrappers always re-sign using `vita-mcr2vmp` (submodule `tools/vita-mcr2vmp`) to avoid checksum error (`80010005`).
+- the app now uses the same signing logic directly in `SyncEngine` after `SRM -> VMP` reconstruction.
 
 Required setup:
 
@@ -273,7 +335,7 @@ Upload flow:
 PS Vita save folder
 → PARAM.SFO parser
 → VMP reader
-→ VMP → SRM conversion
+→ VMP → SRM conversion (in-app, temp file)
 → RomM upload / compare
 ```
 
@@ -281,7 +343,9 @@ Restore flow:
 
 ```
 RomM SRM file
+→ download to temp SRM
 → SRM → VMP conversion
+→ VMP re-sign (in-app)
 → backup existing VMP
 → restore VMP
 ```
@@ -382,6 +446,7 @@ The plugin will act as a lightweight event listener and delegate synchronization
 - Adrenaline installed (for PS1 support)
 - RomM server instance with save sync enabled
 - VitaSDK toolchain
+- submodules initialized (`git submodule update --init --recursive`)
 
 ## Development Status
 
@@ -397,7 +462,13 @@ Initial goals:
 - implement `.VMP ↔ .SRM` conversion helpers
 - display save inventory UI
 
-RomM API integration will follow once local scanning and conversion are stable.
+RomM device registration is now wired to the real HTTP endpoint (`POST /api/devices`).
+Save listing/upload/download are now wired to real HTTP callbacks in `main.c` (`/api/saves` endpoints).
+Local Vita items are resolved to server `rom_id` via `/api/roms` metadata before sync decisions.
+Conversion is now wired in the app sync flow:
+
+- upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback
+- download path: remote `.SRM` is reconstructed to local `.VMP` and re-signed in-app
 
 ## Contributing
 
@@ -407,7 +478,7 @@ Suggested areas:
 
 - PARAM.SFO parsing
 - VMP/SRM conversion
-- RomM API integration
+- RomM save endpoints integration (`list/upload/download`)
 - UI improvements
 - save metadata mapping
 - emulator adapter support

@@ -36,6 +36,7 @@ typedef enum SyncConflictType {
 } SyncConflictType;
 
 typedef struct SyncSaveDescriptor {
+  int rom_id;
   int remote_id;
   char game_id[ROMM_GAME_ID_LEN];
   char title[ROMM_GAME_TITLE_LEN];

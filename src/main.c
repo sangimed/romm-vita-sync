@@ -1,23 +1,20 @@
 #include <psp2/kernel/threadmgr.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "debugScreen.h"
 
 #include "app_config.h"
+#include "app_log.h"
 #include "ps1_paths.h"
 #include "romm_client.h"
+#include "romm_http_client.h"
 #include "scan_to_sync_adapter.h"
 #include "save_scanner.h"
 #include "sync_engine.h"
 #include "ui_inventory.h"
 
 #define printf psvDebugScreenPrintf
-
-typedef struct DemoRommClientContext {
-  const AppConfig *config;
-} DemoRommClientContext;
 
 /*
  * Returns non-zero when a string is non-null and non-empty.
@@ -27,122 +24,19 @@ static int has_text(const char *value) {
 }
 
 /*
- * FNV-1a accumulator used to create deterministic demo identifiers.
+ * Maps AppConfig numeric log level to AppLogLevel enum safely.
  */
-static uint32_t hash_accumulate(uint32_t hash, const char *text) {
-  if (text == NULL) {
-    return hash;
+static AppLogLevel app_log_level_from_config(int config_level) {
+  if (config_level <= APP_CONFIG_LOG_LEVEL_ERROR) {
+    return APP_LOG_LEVEL_ERROR;
   }
-
-  for (const unsigned char *cursor = (const unsigned char *)text; *cursor != 0U; ++cursor) {
-    hash ^= (uint32_t)(*cursor);
-    hash *= 16777619U;
+  if (config_level == APP_CONFIG_LOG_LEVEL_WARN) {
+    return APP_LOG_LEVEL_WARN;
   }
-
-  return hash;
-}
-
-/*
- * Temporary stub used by the demo RomM client to expose no remote saves.
- */
-static int demo_list_remote_saves(void *context, SyncSaveDescriptor *out_items, int max_items) {
-  (void)out_items;
-  (void)max_items;
-
-  const DemoRommClientContext *ctx = (const DemoRommClientContext *)context;
-  if ((ctx == NULL) || (ctx->config == NULL)) {
-    return 0;
+  if (config_level >= APP_CONFIG_LOG_LEVEL_DEBUG) {
+    return APP_LOG_LEVEL_DEBUG;
   }
-
-  /*
-   * Real API integration is intentionally kept out of this milestone.
-   * We still route through loaded config so the connection contract is explicit.
-   */
-  if (!app_config_has_server_url(ctx->config) || !app_config_has_auth(ctx->config)) {
-    return 0;
-  }
-
-  return 0;
-}
-
-/*
- * Infers whether this upload should simulate a server-side conflict.
- */
-static int demo_should_simulate_upload_conflict(const SyncSaveDescriptor *local_item) {
-  if ((local_item == NULL) || (local_item->filename[0] == '\0')) {
-    return 0;
-  }
-
-  /*
-   * Useful for local validation of the conflict path:
-   * naming a file "*conflict*.VMP" triggers a fake 409.
-   */
-  return (strstr(local_item->filename, "conflict") != NULL) || (strstr(local_item->filename, "CONFLICT") != NULL);
-}
-
-/*
- * Temporary upload stub that models RomM conflict semantics.
- */
-static int demo_upload_save(void *context, const SyncSaveDescriptor *local_item) {
-  (void)context;
-  if (demo_should_simulate_upload_conflict(local_item)) {
-    return ROMM_CLIENT_ERR_CONFLICT;
-  }
-
-  return ROMM_CLIENT_ERR_NOT_IMPLEMENTED;
-}
-
-/*
- * Temporary download stub for dry-run integration.
- */
-static int demo_download_save(void *context, const SyncSaveDescriptor *remote_item, const char *destination_path) {
-  (void)context;
-  (void)remote_item;
-  (void)destination_path;
-  return ROMM_CLIENT_ERR_NOT_IMPLEMENTED;
-}
-
-/*
- * Temporary registration stub that simulates server-assigned device IDs.
- * Real HTTP registration will replace this callback in the network client.
- */
-static int demo_register_device(
-    void *context,
-    const char *device_name,
-    const char *device_platform,
-    const char *client_name,
-    const char *client_version,
-    char *out_device_id,
-    size_t out_device_id_size) {
-  if ((out_device_id == NULL) || (out_device_id_size == 0U) ||
-      !has_text(device_name) || !has_text(device_platform) ||
-      !has_text(client_name) || !has_text(client_version)) {
-    return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
-  }
-
-  const DemoRommClientContext *ctx = (const DemoRommClientContext *)context;
-  if ((ctx == NULL) || (ctx->config == NULL)) {
-    return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
-  }
-
-  if (!app_config_has_server_url(ctx->config) || !app_config_has_auth(ctx->config)) {
-    return ROMM_CLIENT_ERR_AUTH;
-  }
-
-  uint32_t hash = 2166136261U;
-  hash = hash_accumulate(hash, ctx->config->romm_url);
-  hash = hash_accumulate(hash, device_name);
-  hash = hash_accumulate(hash, device_platform);
-  hash = hash_accumulate(hash, client_name);
-  hash = hash_accumulate(hash, client_version);
-
-  int written = snprintf(out_device_id, out_device_id_size, "vita-%08X", (unsigned int)hash);
-  if ((written <= 0) || ((size_t)written >= out_device_id_size)) {
-    out_device_id[0] = '\0';
-    return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
-  }
-
-  return ROMM_CLIENT_OK;
+  return APP_LOG_LEVEL_INFO;
 }
 
 /*
@@ -200,6 +94,8 @@ static void render_loaded_config(const AppConfig *config, int load_status) {
   printf("  device id           : %s\n", config->device_id[0] != '\0' ? config->device_id : "(not set)");
   printf("  state store         : %s\n", config->sync_state_store_path[0] != '\0' ? config->sync_state_store_path : "(disabled)");
   printf("  backup directory    : %s\n", config->sync_backup_directory[0] != '\0' ? config->sync_backup_directory : "(disabled)");
+  printf("  log level           : %s\n", app_log_level_str(app_log_level_from_config(config->log_level)));
+  printf("  scan verbose        : %s\n", config->log_scan_verbose ? "true" : "false");
   printf("  dry-run             : %s\n\n", config->sync_dry_run ? "true" : "false");
 }
 
@@ -217,9 +113,10 @@ static int ensure_device_registration(AppConfig *config, const RommClient *romm_
   }
 
   if (!app_config_has_server_url(config) || !app_config_has_auth(config)) {
-    printf("Device registration skipped: RomM url/auth not configured.\n");
+    app_log_write(APP_LOG_LEVEL_WARN, "main", "Device registration skipped (RomM url/auth missing)");
     return 0;
   }
+  app_log_write(APP_LOG_LEVEL_INFO, "main", "Registering device on RomM via /api/devices");
 
   char registered_device_id[ROMM_SYNC_MAX_DEVICE_ID_LEN];
   int status = romm_client_register_device(
@@ -232,22 +129,22 @@ static int ensure_device_registration(AppConfig *config, const RommClient *romm_
       sizeof(registered_device_id));
 
   if (status != ROMM_CLIENT_OK) {
-    printf("Device registration failed: %s (%d)\n", romm_client_status_str(status), status);
+    app_log_write(APP_LOG_LEVEL_ERROR, "main", "Device registration failed: %s (%d)", romm_client_status_str(status), status);
     return 0;
   }
 
   if (app_config_set_device_id(config, registered_device_id) != APP_CONFIG_OK) {
-    printf("Device registration failed: invalid device id returned.\n");
+    app_log_write(APP_LOG_LEVEL_ERROR, "main", "Device registration failed: invalid device id returned");
     return 0;
   }
 
   int save_status = app_config_save(APP_CONFIG_DEFAULT_PATH, config);
   if (save_status != APP_CONFIG_OK) {
-    printf("Device id acquired but settings save failed: %s (%d)\n", app_config_status_str(save_status), save_status);
+    app_log_write(APP_LOG_LEVEL_ERROR, "main", "Device id acquired but settings save failed: %s (%d)", app_config_status_str(save_status), save_status);
     return 0;
   }
 
-  printf("Device registered and persisted: %s\n", config->device_id);
+  app_log_write(APP_LOG_LEVEL_INFO, "main", "Device registered and persisted: %s", config->device_id);
   return 1;
 }
 
@@ -272,30 +169,40 @@ int main(int argc, char *argv[]) {
   if (config_status == APP_CONFIG_ERR_NOT_FOUND) {
     app_config_init_defaults(&app_config);
   }
+  app_log_set_level(app_log_level_from_config(app_config.log_level));
+  app_log_write(APP_LOG_LEVEL_INFO, "main", "Startup config status=%s (%d)", app_config_status_str(config_status), config_status);
 
-  DemoRommClientContext demo_context;
-  demo_context.config = &app_config;
+  RommClient romm_client;
+  romm_client.context = &app_config;
+  romm_client.list_remote_saves = romm_http_list_remote_saves_callback;
+  romm_client.upload_save = romm_http_upload_save_callback;
+  romm_client.download_save = romm_http_download_save_callback;
+  romm_client.register_device = romm_http_register_device_callback;
 
-  RommClient demo_client;
-  demo_client.context = &demo_context;
-  demo_client.list_remote_saves = demo_list_remote_saves;
-  demo_client.upload_save = demo_upload_save;
-  demo_client.download_save = demo_download_save;
-  demo_client.register_device = demo_register_device;
-
-  int wrote_config = ensure_device_registration(&app_config, &demo_client);
+  int wrote_config = ensure_device_registration(&app_config, &romm_client);
   if ((config_status == APP_CONFIG_ERR_NOT_FOUND) && wrote_config) {
     config_status = APP_CONFIG_OK;
+  }
+  if (wrote_config) {
+    app_log_write(APP_LOG_LEVEL_INFO, "main", "settings.ini updated after device bootstrap");
   }
 
   render_loaded_config(&app_config, config_status);
 
   ScanResult result;
-  int status = scan_vmp_files(kPs1VmpCandidateRoots, (int)PS1_VMP_CANDIDATE_ROOT_COUNT, 2, 1, &result);
+  app_log_write(APP_LOG_LEVEL_INFO, "main", "Starting local save scan");
+  int status = scan_vmp_files(
+      kPs1VmpCandidateRoots,
+      (int)PS1_VMP_CANDIDATE_ROOT_COUNT,
+      2,
+      app_config.log_scan_verbose,
+      &result);
 
   if (status < 0) {
     printf("Scan failed with code: %d\n", status);
+    app_log_write(APP_LOG_LEVEL_ERROR, "main", "Scan failed with status=%d", status);
   } else {
+    app_log_write(APP_LOG_LEVEL_INFO, "main", "Scan completed: found=%d access_errors=%d", result.stats.vmp_found, result.stats.access_errors);
     render_inventory(&result);
 
     SyncSaveDescriptor local_items[ROMM_SYNC_MAX_ITEMS];
@@ -306,7 +213,21 @@ int main(int argc, char *argv[]) {
 
     if (local_count < 0) {
       printf("\nFailed to build sync inventory.\n");
+      app_log_write(APP_LOG_LEVEL_ERROR, "main", "Failed to convert scan result to sync descriptors");
     } else {
+      int mapped_count = romm_http_resolve_rom_ids(&app_config, local_items, local_count);
+      if (mapped_count < 0) {
+        app_log_write(
+            APP_LOG_LEVEL_WARN,
+            "main",
+            "ROM mapping failed: %s (%d)",
+            romm_client_status_str(mapped_count),
+            mapped_count);
+      } else {
+        app_log_write(APP_LOG_LEVEL_INFO, "main", "ROM mapping resolved=%d/%d", mapped_count, local_count);
+      }
+
+      app_log_write(APP_LOG_LEVEL_INFO, "main", "Starting sync engine (dry_run=%d, locals=%d)", app_config.sync_dry_run, local_count);
       SyncEngineConfig config;
       sync_engine_config_init(&config);
       config.device_id = app_config.device_id[0] != '\0' ? app_config.device_id : NULL;
@@ -315,10 +236,20 @@ int main(int argc, char *argv[]) {
       config.dry_run = app_config.sync_dry_run;
 
       SyncRunReport sync_report;
-      int sync_status = sync_engine_run(&config, local_items, local_count, &demo_client, &sync_report);
+      int sync_status = sync_engine_run(&config, local_items, local_count, &romm_client, &sync_report);
       if (sync_status < 0) {
         printf("\nSync dry-run failed: %s (%d)\n", sync_engine_status_str(sync_status), sync_status);
+        app_log_write(APP_LOG_LEVEL_ERROR, "main", "sync_engine_run failed: %s (%d)", sync_engine_status_str(sync_status), sync_status);
       } else {
+        app_log_write(
+            APP_LOG_LEVEL_INFO,
+            "main",
+            "Sync completed: actions=%d uploads=%d downloads=%d conflicts=%d errors=%d",
+            sync_report.action_count,
+            sync_report.uploads_planned,
+            sync_report.downloads_planned,
+            sync_report.conflicts_detected,
+            sync_report.transfer_errors);
         render_sync_plan(&sync_report);
       }
     }
