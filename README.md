@@ -59,6 +59,31 @@ This approach ensures:
 
 Automatic synchronization based on system events (for example after exiting a game) will be introduced later through a taiHEN plugin once the synchronization engine is fully validated.
 
+## Configuration (`settings.ini`)
+
+Credentials and sync runtime options are read from:
+
+`ux0:data/romm-vita-sync/settings.ini`
+
+Format is INI-style (conventional in C/C++ desktop and embedded projects).
+
+Reference template:
+
+`samples/settings.ini.example`
+
+Supported sections:
+
+- `[RomM]`: `url`, `token`, `username`, `password`, `verify_tls`, `timeout_seconds`
+- `[Device]`: `device_id`, `device_name`, `device_platform`, `client`, `client_version`
+- `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`
+
+Credential rule:
+
+- either `token`, or `username` + `password`
+- if `[Device].device_id` is empty, startup calls the `RommClient` registration flow and persists the returned `device_id` into `settings.ini`
+
+The sync engine now treats server `409 Conflict` responses as synchronization conflicts (remote newer) rather than generic transfer errors, aligned with `romm-retroarch-sync` behavior.
+
 ## Why This Project Exists
 
 RomM already supports save synchronization for several platforms and clients (for example Android launchers). However, there is currently no native PS Vita sync client.

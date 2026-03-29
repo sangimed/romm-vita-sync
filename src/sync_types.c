@@ -90,6 +90,7 @@ void sync_save_descriptor_init(SyncSaveDescriptor *item) {
   }
 
   memset(item, 0, sizeof(*item));
+  item->remote_id = -1;
   item->slot = SYNC_SLOT_UNKNOWN;
 }
 

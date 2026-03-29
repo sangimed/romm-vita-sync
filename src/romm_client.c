@@ -54,6 +54,41 @@ int romm_client_download_save(
 }
 
 /*
+ * Delegates device registration to the configured RomM client callback.
+ */
+int romm_client_register_device(
+    const RommClient *client,
+    const char *device_name,
+    const char *device_platform,
+    const char *client_name,
+    const char *client_version,
+    char *out_device_id,
+    size_t out_device_id_size) {
+  if ((client == NULL) ||
+      (device_name == NULL) || (device_name[0] == '\0') ||
+      (device_platform == NULL) || (device_platform[0] == '\0') ||
+      (client_name == NULL) || (client_name[0] == '\0') ||
+      (client_version == NULL) || (client_version[0] == '\0') ||
+      (out_device_id == NULL) || (out_device_id_size == 0U)) {
+    return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
+  }
+
+  if (client->register_device == NULL) {
+    return ROMM_CLIENT_ERR_NOT_IMPLEMENTED;
+  }
+
+  out_device_id[0] = '\0';
+  return client->register_device(
+      client->context,
+      device_name,
+      device_platform,
+      client_name,
+      client_version,
+      out_device_id,
+      out_device_id_size);
+}
+
+/*
  * Returns a human-readable message for RomM client status codes.
  */
 const char *romm_client_status_str(int status) {
@@ -64,6 +99,12 @@ const char *romm_client_status_str(int status) {
       return "invalid argument";
     case ROMM_CLIENT_ERR_NOT_IMPLEMENTED:
       return "not implemented";
+    case ROMM_CLIENT_ERR_CONFLICT:
+      return "sync conflict (server newer)";
+    case ROMM_CLIENT_ERR_AUTH:
+      return "authentication failed";
+    case ROMM_CLIENT_ERR_NETWORK:
+      return "network error";
     default:
       return "unknown error";
   }

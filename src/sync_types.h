@@ -36,6 +36,7 @@ typedef enum SyncConflictType {
 } SyncConflictType;
 
 typedef struct SyncSaveDescriptor {
+  int remote_id;
   char game_id[ROMM_GAME_ID_LEN];
   char title[ROMM_GAME_TITLE_LEN];
   char filename[ROMM_SYNC_MAX_FILENAME_LEN];
@@ -45,6 +46,8 @@ typedef struct SyncSaveDescriptor {
   int64_t timestamp_unix;
   char hash[ROMM_SYNC_MAX_HASH_LEN];
   char origin_device[ROMM_SYNC_MAX_DEVICE_ID_LEN];
+  int device_is_current;
+  int device_is_untracked;
   SyncSlot slot;
 } SyncSaveDescriptor;
 

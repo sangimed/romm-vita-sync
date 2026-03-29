@@ -115,6 +115,27 @@ static int should_skip_redundant_upload(
 }
 
 /*
+ * Returns non-zero when remote metadata says this device is already current.
+ */
+static int remote_reports_current_for_device(
+    const SyncSaveDescriptor *local_item,
+    const SyncSaveDescriptor *remote_item) {
+  if ((local_item == NULL) || (remote_item == NULL)) {
+    return 0;
+  }
+
+  if (!remote_item->device_is_current) {
+    return 0;
+  }
+
+  if (!has_text(local_item->path)) {
+    return 0;
+  }
+
+  return file_exists(local_item->path);
+}
+
+/*
  * Builds a sync-state entry from a save descriptor after a transfer decision.
  */
 static void build_state_entry_from_item(
@@ -161,6 +182,12 @@ static int execute_upload(
 
   int status = romm_client_upload_save(romm_client, local_item);
   action->status_code = status;
+  if (status == ROMM_CLIENT_ERR_CONFLICT) {
+    action->executed = 0;
+    set_reason(action, "upload conflict (server newer)");
+    return status;
+  }
+
   if (status < 0) {
     action->executed = 0;
     report->transfer_errors += 1;
@@ -327,6 +354,10 @@ int sync_engine_run(
                                      : state_store.device_id;
 
   SyncSaveDescriptor remote_items[ROMM_SYNC_MAX_ITEMS];
+  for (int i = 0; i < ROMM_SYNC_MAX_ITEMS; ++i) {
+    sync_save_descriptor_init(&remote_items[i]);
+  }
+
   int remote_count = romm_client_list_remote_saves(
       romm_client, remote_items, (int)(sizeof(remote_items) / sizeof(remote_items[0])));
   if (remote_count < 0) {
@@ -364,11 +395,29 @@ int sync_engine_run(
       action->action = SYNC_ACTION_UPLOAD;
       out_report->uploads_planned += 1;
       set_reason(action, "upload candidate (no remote match)");
-      execute_upload(config, romm_client, active_device_id, local_item, &state_store, action, out_report);
+      int upload_status = execute_upload(config, romm_client, active_device_id, local_item, &state_store, action, out_report);
+      if (upload_status == ROMM_CLIENT_ERR_CONFLICT) {
+        action->action = SYNC_ACTION_SKIP;
+        action->conflict = SYNC_CONFLICT_REMOTE_NEWER;
+        out_report->conflicts_detected += 1;
+        out_report->skipped += 1;
+        set_reason(action, "server conflict (409): remote newer, download before upload");
+      }
       continue;
     }
 
     const SyncSaveDescriptor *remote_item = &remote_items[remote_index];
+    if (remote_reports_current_for_device(local_item, remote_item)) {
+      action->action = SYNC_ACTION_SKIP;
+      out_report->skipped += 1;
+      if (remote_item->remote_id >= 0) {
+        set_reason(action, "skip remote %d (device already current)", remote_item->remote_id);
+      } else {
+        set_reason(action, "skip remote save (device already current)");
+      }
+      continue;
+    }
+
     SyncConflictType conflict = conflict_resolver_detect(local_item, remote_item, active_device_id);
     action->conflict = conflict;
 
@@ -416,7 +465,13 @@ int sync_engine_run(
     if (decision == SYNC_ACTION_UPLOAD) {
       out_report->uploads_planned += 1;
       set_reason(action, "upload selected for conflict=%s", sync_conflict_type_str(conflict));
-      execute_upload(config, romm_client, active_device_id, local_item, &state_store, action, out_report);
+      int upload_status = execute_upload(config, romm_client, active_device_id, local_item, &state_store, action, out_report);
+      if (upload_status == ROMM_CLIENT_ERR_CONFLICT) {
+        action->action = SYNC_ACTION_SKIP;
+        action->conflict = SYNC_CONFLICT_REMOTE_NEWER;
+        out_report->skipped += 1;
+        set_reason(action, "server conflict (409): remote newer, download before upload");
+      }
       continue;
     }
 

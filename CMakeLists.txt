@@ -23,6 +23,7 @@ include_directories(
 )
 
 add_executable(${PROJECT_NAME}
+  src/app_config.c
   src/main.c
   src/backup_manager.c
   src/conflict_resolver.c
