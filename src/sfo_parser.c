@@ -14,10 +14,16 @@
 #define SFO_INDEX_ENTRY_SIZE 16
 #define SFO_MAX_FILE_SIZE (64 * 1024)
 
+/*
+ * Reads a little-endian 16-bit unsigned integer from raw bytes.
+ */
 static uint16_t read_le16(const unsigned char *p) {
   return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
 }
 
+/*
+ * Reads a little-endian 32-bit unsigned integer from raw bytes.
+ */
 static uint32_t read_le32(const unsigned char *p) {
   return (uint32_t)p[0] |
          ((uint32_t)p[1] << 8) |
