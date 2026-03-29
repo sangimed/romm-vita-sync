@@ -55,6 +55,7 @@ set_source_files_properties(
 target_link_libraries(${PROJECT_NAME}
   SceLibKernel_stub
   SceDisplay_stub
+  SceCtrl_stub
   SceIofilemgr_stub
   SceSysmodule_stub
   SceNet_stub

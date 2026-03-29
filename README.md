@@ -64,6 +64,52 @@ This approach ensures:
 
 Automatic synchronization based on system events (for example after exiting a game) will be introduced later through a taiHEN plugin once the synchronization engine is fully validated.
 
+## Installation & Quick Start
+
+This section summarizes the practical setup for both end users and developers.
+
+### End User Prerequisites
+
+- PlayStation Vita with homebrew support
+- VitaShell (or equivalent method to install VPK files)
+- Adrenaline installed (for PS1 save support)
+- Network access from Vita to your RomM server
+- Valid RomM credentials (`token` or `username` + `password`)
+
+### Developer Build Prerequisites
+
+- VitaSDK toolchain
+- CMake
+- Git with submodules support
+
+### Build and Install
+
+1. Initialize submodules:
+2. `git submodule update --init --recursive`
+3. Configure and build:
+4. `cmake -S . -B build`
+5. `cmake --build build --config Release`
+6. Install `build/romm_vita_sync.vpk` on Vita (for example via VitaShell FTP/USB)
+
+### First Launch
+
+1. Launch the app on Vita
+2. The app automatically creates `ux0:data/romm-vita-sync/`
+3. Open the in-app settings area and enter RomM `url`, `username`, `password`
+4. Use the in-app save action to persist credentials into `settings.ini`
+
+### First Sync
+
+1. Ensure Vita can reach the RomM URL
+2. In the game list, choose a detected PS1 game
+3. Trigger `[Sync]` for that game
+4. Follow progress and errors in the on-screen log area
+
+Notes:
+
+- Credentials are currently stored in plain text (no encryption) in `settings.ini`.
+- Default `dry_run = true`; set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
+
 ## Configuration (`settings.ini`)
 
 Credentials and sync runtime options are read from:
@@ -72,7 +118,10 @@ Credentials and sync runtime options are read from:
 
 Format is INI-style (conventional in C/C++ desktop and embedded projects).
 
-Reference template:
+The app now creates `ux0:data/romm-vita-sync/` automatically on startup.
+You can configure credentials directly in the in-app UI; manual file creation is not required.
+
+Reference template (optional, for manual editing/debug):
 
 `samples/settings.ini.example`
 
@@ -83,67 +132,83 @@ Supported sections:
 - `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`
 - `[Log]`: `level` (`error|warn|info|debug`), `scan_verbose` (`true|false`)
 
+Security notice:
+
+- RomM credentials are currently stored locally in `settings.ini` **without encryption** (plain text).
+- This is intentional for the current milestone and will be hardened in a later iteration.
+
 Credential rule:
 
 - either `token`, or `username` + `password`
 - if `[Device].device_id` is empty, startup calls the `RommClient` registration flow and persists the returned `device_id` into `settings.ini`
 - recommended logging for troubleshooting: `level=debug` and keep `scan_verbose=false` first; enable `scan_verbose=true` only when debugging scanner issues
 
+Current in-app UI behavior:
+
+- The homebrew now provides a settings area for RomM `url`, `username`, and `password`.
+- Editing a field from the UI persists values to `ux0:data/romm-vita-sync/settings.ini`.
+- The main screen lists all detected local PS1 games.
+- Each detected game has an in-app sync action that runs synchronization for that game only.
+- A dedicated log area is visible in the UI to follow progress, executed steps, success messages, and error messages.
+- The current UI is intentionally simple and text-first (debug screen based), focused on clarity and reliability for this milestone.
+
 The sync engine now treats server `409 Conflict` responses as synchronization conflicts (remote newer) rather than generic transfer errors, aligned with `romm-retroarch-sync` behavior.
 
 ## Test End-to-End (Current Milestone)
 
-This milestone validates:
+Coverage:
 
 - local PS1 save scan
 - config loading/persistence
 - real device registration via `POST /api/devices`
-- sync planning in dry-run mode
+- per-game sync triggering from the Vita UI
+- visible sync/log output on-device
 - in-app conversion path wiring (`VMP->SRM` for upload, `SRM->VMP` + signing for download)
 - real save transfer integration (`GET /api/saves`, `POST /api/saves`, `GET /api/saves/{id}/content`)
 
-1. Prepare RomM credentials
-2. Choose either `token` or `username` + `password`
-3. Ensure Vita can reach the RomM URL on the same network
-4. For self-signed HTTPS certificates, set `verify_tls = false` only for local testing
+### 1. Build And Install
 
-1. Prepare `settings.ini`
-2. Copy `samples/settings.ini.example` to `ux0:data/romm-vita-sync/settings.ini`
-3. Fill `[RomM]` URL + credentials
-4. Keep `[Device].device_id` empty for first registration test
-5. Set `[Log]` for diagnostics:
-6. `level = debug`
-7. `scan_verbose = false` (set `true` only when debugging scanner traversal)
-8. Keep `[Sync].dry_run = true` for first runs
+1. `git submodule update --init --recursive`
+2. `cmake -S . -B build`
+3. `cmake --build build --config Release`
+4. Install `build/romm_vita_sync.vpk` on Vita (for example via VitaShell FTP/USB)
 
-1. Build and install the VPK
-2. Run:
-3. `git submodule update --init --recursive`
-4. `cmake -S . -B build`
-5. `cmake --build build --config Release`
-6. Install `build/romm_vita_sync.vpk` on Vita (for example via VitaShell FTP/USB)
+### 2. First Launch Setup
 
-1. First launch checks (device bootstrap)
-2. Expected logs include:
-3. `Registering device on RomM via /api/devices`
-4. `Device registered and persisted: <device_id>`
-5. Open `ux0:data/romm-vita-sync/settings.ini` and confirm `device_id` is now filled
+1. Launch the app on Vita.
+2. Confirm the app creates `ux0:data/romm-vita-sync/`.
+3. Open the in-app settings area and enter RomM `url`, `username`, `password`.
+4. Press the in-app save action to persist credentials.
 
-1. Relaunch checks (id persistence)
-2. Restart the app
-3. Confirm no new registration is attempted when `device_id` is already present
-4. Confirm same `device_id` remains in `settings.ini`
+### 3. Network And Auth Preconditions
 
-1. Negative-path checks
-2. Wrong credentials: expect `authentication failed`
-3. Unreachable URL/network issue: expect `network error`
-4. HTTPS with invalid cert and `verify_tls = true`: expect request failure
-5. Same endpoint with `verify_tls = false`: should proceed (test-only setting)
+1. Ensure Vita can reach the RomM URL on the same network.
+2. Use either `token`, or `username` + `password` (UI currently targets username/password flow).
+3. For self-signed HTTPS certificates, use `verify_tls = false` only for local testing.
 
-1. Current expected sync behavior
-2. With `dry_run = true`, app computes and prints sync plan only
-3. Set `dry_run = false` to execute real transfers against RomM
-4. Upload flow sends `.SRM` through `POST /api/saves`, download flow pulls `GET /api/saves/{id}/content` then rebuilds/signs `.VMP`
+### 4. Sync Validation
+
+1. Return to the game list, select a detected PS1 game, then trigger `[Sync]`.
+2. Confirm progress/steps/success/errors are visible in the on-screen log area.
+3. On first successful authenticated sync, confirm `device_id` is persisted in `settings.ini`.
+
+### 5. Persistence Validation
+
+1. Restart the app.
+2. Confirm URL/username/password are still present.
+3. Confirm `device_id` remains stable across launches.
+
+### 6. Negative Path Validation
+
+1. Wrong credentials: expect `authentication failed`.
+2. Unreachable URL/network issue: expect `network error`.
+3. HTTPS with invalid cert and `verify_tls = true`: expect request failure.
+
+### 7. `dry_run` Validation
+
+1. Default is `dry_run = true` for safety-first runs.
+2. Set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
+3. Upload flow sends `.SRM` through `POST /api/saves`; download flow pulls `GET /api/saves/{id}/content` then rebuilds/signs `.VMP`.
 
 ## Why This Project Exists
 
@@ -442,10 +507,16 @@ The plugin will act as a lightweight event listener and delegate synchronization
 
 ## Requirements
 
+Runtime:
+
 - PlayStation Vita with homebrew support
 - Adrenaline installed (for PS1 support)
 - RomM server instance with save sync enabled
+
+Build:
+
 - VitaSDK toolchain
+- CMake
 - submodules initialized (`git submodule update --init --recursive`)
 
 ## Development Status

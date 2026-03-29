@@ -9,6 +9,11 @@ typedef enum AppLogLevel {
 } AppLogLevel;
 
 /*
+ * Maximum number of log lines kept in memory for UI rendering.
+ */
+#define APP_LOG_HISTORY_CAPACITY 256
+
+/*
  * Sets the global log level threshold.
  */
 void app_log_set_level(AppLogLevel level);
@@ -27,6 +32,22 @@ int app_log_is_enabled(AppLogLevel level);
  * Writes one structured log line to the debug screen when enabled.
  */
 void app_log_write(AppLogLevel level, const char *tag, const char *format, ...);
+
+/*
+ * Clears all in-memory log history lines.
+ */
+void app_log_clear_history(void);
+
+/*
+ * Returns the number of lines currently kept in memory.
+ */
+int app_log_history_count(void);
+
+/*
+ * Returns one log line from history by chronological index.
+ * Index 0 is the oldest retained line.
+ */
+const char *app_log_history_line(int index);
 
 /*
  * Returns short textual name for a log level.

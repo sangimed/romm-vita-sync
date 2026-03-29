@@ -1,5 +1,6 @@
 ; romm-vita-sync configuration example
 ; Copy this file to: ux0:data/romm-vita-sync/settings.ini
+; SECURITY NOTICE: url/username/password/token are currently stored as plain text (no encryption).
 
 [RomM]
 ; Base URL of your RomM instance (without trailing slash preferred)

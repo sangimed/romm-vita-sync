@@ -1244,10 +1244,11 @@ static void http_runtime_term(HttpRuntimeState *state) {
   }
 
   if (state->netctl_inited) {
-    int status = sceNetCtlTerm();
-    if (status < 0) {
-      app_log_write(APP_LOG_LEVEL_WARN, "http", "sceNetCtlTerm failed: 0x%08X", (unsigned int)status);
-    }
+    /*
+     * VitaSDK headers may declare sceNetCtlTerm() as void on some versions.
+     * Keep teardown best-effort and avoid assuming an int return status.
+     */
+    (void)sceNetCtlTerm();
   }
 
   if (state->net_inited) {
