@@ -4,10 +4,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "debugScreen.h"
-
-#define printf psvDebugScreenPrintf
-
 static AppLogLevel g_log_level = APP_LOG_LEVEL_INFO;
 static char g_log_history[APP_LOG_HISTORY_CAPACITY][320];
 static int g_log_history_start = 0;
@@ -108,7 +104,7 @@ int app_log_is_enabled(AppLogLevel level) {
 }
 
 /*
- * Writes one structured log line to the debug screen when enabled.
+ * Writes one structured log line to the in-memory history when enabled.
  */
 void app_log_write(AppLogLevel level, const char *tag, const char *format, ...) {
   if (!app_log_is_enabled(level) || (format == NULL)) {
@@ -129,5 +125,4 @@ void app_log_write(AppLogLevel level, const char *tag, const char *format, ...) 
   }
 
   append_history_line(rendered);
-  printf("%s\n", rendered);
 }

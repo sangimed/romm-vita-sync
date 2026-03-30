@@ -150,7 +150,7 @@ Current in-app UI behavior:
 - The main screen lists all detected local PS1 games.
 - Each detected game has an in-app sync action that runs synchronization for that game only.
 - A dedicated log area is visible in the UI to follow progress, executed steps, success messages, and error messages.
-- The current UI is intentionally simple and text-first (debug screen based), focused on clarity and reliability for this milestone.
+- The current UI uses a native 2D Vita-style layout (panels, highlighted rows, modal reports) for a settings-like experience.
 
 The sync engine now treats server `409 Conflict` responses as synchronization conflicts (remote newer) rather than generic transfer errors, aligned with `romm-retroarch-sync` behavior.
 

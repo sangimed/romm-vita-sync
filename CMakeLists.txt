@@ -53,15 +53,27 @@ set_source_files_properties(
 )
 
 target_link_libraries(${PROJECT_NAME}
+  vita2d
   SceLibKernel_stub
+  SceAppMgr_stub
+  SceCommonDialog_stub
   SceDisplay_stub
   SceCtrl_stub
   SceIofilemgr_stub
   SceSysmodule_stub
+  SceGxm_stub
+  ScePgf_stub
+  SceKernelDmacMgr_stub
+  SceShaccCg_stub
   SceNet_stub
   SceNetCtl_stub
   SceHttp_stub
   SceSsl_stub
+  m
+  z
+  jpeg
+  png
+  freetype
 )
 
 vita_create_self(${PROJECT_NAME}.self ${PROJECT_NAME}

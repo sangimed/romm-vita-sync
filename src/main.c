@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <vita2d.h>
+
 #include "debugScreen.h"
 
 #include "app_config.h"
@@ -18,8 +20,6 @@
 #include "save_scanner.h"
 #include "sync_engine.h"
 
-#define printf psvDebugScreenPrintf
-
 #define UI_SELECT_SERVER_URL 0
 #define UI_SELECT_USERNAME 1
 #define UI_SELECT_PASSWORD 2
@@ -27,11 +27,31 @@
 #define UI_SELECT_RESCAN 4
 #define UI_SELECT_GAME_BASE 5
 
-#define UI_GAME_LIST_VISIBLE 14
-#define UI_LOG_VISIBLE_LINES 18
+#define UI_SCREEN_WIDTH 960.0f
+#define UI_SCREEN_HEIGHT 544.0f
+
+#define UI_GAME_LIST_VISIBLE 9
+#define UI_LOG_VISIBLE_LINES 5
+#define UI_REPORT_VISIBLE_LINES 16
+#define UI_REPORT_MAX_LINES 192
 #define UI_STATUS_LINE_LEN 192
 #define UI_EDITOR_BUFFER_LEN 512
 #define APP_RUNTIME_DATA_DIRECTORY "ux0:data/romm-vita-sync"
+
+#define UI_COLOR_BACKGROUND RGBA8(10, 16, 28, 255)
+#define UI_COLOR_BACKGROUND_ACCENT RGBA8(17, 28, 46, 255)
+#define UI_COLOR_PANEL RGBA8(25, 38, 60, 230)
+#define UI_COLOR_PANEL_BORDER RGBA8(64, 90, 126, 255)
+#define UI_COLOR_HEADER RGBA8(31, 58, 94, 255)
+#define UI_COLOR_HEADER_BORDER RGBA8(87, 132, 188, 255)
+#define UI_COLOR_TEXT RGBA8(246, 250, 255, 255)
+#define UI_COLOR_TEXT_MUTED RGBA8(171, 187, 210, 255)
+#define UI_COLOR_STATUS RGBA8(121, 173, 234, 255)
+#define UI_COLOR_SELECTION RGBA8(52, 105, 172, 255)
+#define UI_COLOR_SELECTION_BORDER RGBA8(138, 191, 255, 255)
+#define UI_COLOR_ROW RGBA8(29, 46, 72, 255)
+#define UI_COLOR_ROW_BORDER RGBA8(55, 80, 112, 255)
+#define UI_COLOR_WARNING RGBA8(222, 156, 93, 255)
 
 typedef struct UiGameEntry {
   char key[ROMM_GAME_ID_LEN];
@@ -39,6 +59,11 @@ typedef struct UiGameEntry {
   char title[ROMM_GAME_TITLE_LEN];
   int save_count;
 } UiGameEntry;
+
+typedef struct UiReportBuffer {
+  char lines[UI_REPORT_MAX_LINES][UI_STATUS_LINE_LEN];
+  int count;
+} UiReportBuffer;
 
 typedef struct UiAppState {
   AppConfig config;
@@ -60,6 +85,7 @@ typedef struct UiAppState {
 } UiAppState;
 
 static UiAppState g_app_state;
+static vita2d_pgf *g_ui_font = NULL;
 
 /*
  * Returns non-zero when a string is non-null and non-empty.
@@ -85,7 +111,7 @@ static AppLogLevel app_log_level_from_config(int config_level) {
 }
 
 /*
- * Writes one short status message shown near the top of the main screen.
+ * Writes one short status message shown in the main screen status line.
  */
 static void ui_set_status(UiAppState *state, const char *format, ...) {
   if ((state == NULL) || (format == NULL)) {
@@ -497,6 +523,270 @@ static int ensure_runtime_data_directory(void) {
 }
 
 /*
+ * Starts one drawing frame and paints the two-layer background.
+ */
+static void ui_begin_frame(void) {
+  vita2d_start_drawing();
+  vita2d_clear_screen();
+
+  vita2d_draw_rectangle(0.0f, 0.0f, UI_SCREEN_WIDTH, UI_SCREEN_HEIGHT, UI_COLOR_BACKGROUND);
+  vita2d_draw_rectangle(0.0f, 260.0f, UI_SCREEN_WIDTH, UI_SCREEN_HEIGHT - 260.0f, UI_COLOR_BACKGROUND_ACCENT);
+}
+
+/*
+ * Ends one drawing frame and swaps front/back buffers.
+ */
+static void ui_end_frame(void) {
+  vita2d_end_drawing();
+  vita2d_swap_buffers();
+}
+
+/*
+ * Draws a formatted text line using the default PGF font.
+ */
+static void ui_draw_text(float x, float y, unsigned int color, float scale, const char *format, ...) {
+  if ((g_ui_font == NULL) || !has_text(format)) {
+    return;
+  }
+
+  char line[512];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(line, sizeof(line), format, args);
+  va_end(args);
+
+  vita2d_pgf_draw_text(g_ui_font, x, y, color, scale, line);
+}
+
+/*
+ * Estimates text width to center short labels in panels.
+ */
+static float ui_estimate_text_width(const char *text, float scale) {
+  if (!has_text(text)) {
+    return 0.0f;
+  }
+  return (float)strlen(text) * 11.0f * scale;
+}
+
+/*
+ * Draws text centered around a target x coordinate.
+ */
+static void ui_draw_text_center(float center_x, float y, unsigned int color, float scale, const char *text) {
+  if (!has_text(text)) {
+    return;
+  }
+
+  float width = ui_estimate_text_width(text, scale);
+  ui_draw_text(center_x - (width * 0.5f), y, color, scale, "%s", text);
+}
+
+/*
+ * Draws one panel with a simple bordered rectangle style.
+ */
+static void ui_draw_panel(float x, float y, float w, float h, unsigned int fill, unsigned int border) {
+  if ((w <= 0.0f) || (h <= 0.0f)) {
+    return;
+  }
+
+  vita2d_draw_rectangle(x, y, w, h, fill);
+  vita2d_draw_rectangle(x, y, w, 2.0f, border);
+  vita2d_draw_rectangle(x, y + h - 2.0f, w, 2.0f, border);
+  vita2d_draw_rectangle(x, y, 2.0f, h, border);
+  vita2d_draw_rectangle(x + w - 2.0f, y, 2.0f, h, border);
+}
+
+/*
+ * Draws one selectable list row with visual feedback for selection.
+ */
+static void ui_draw_row(float x, float y, float w, float h, int selected) {
+  ui_draw_panel(
+      x,
+      y,
+      w,
+      h,
+      selected ? UI_COLOR_SELECTION : UI_COLOR_ROW,
+      selected ? UI_COLOR_SELECTION_BORDER : UI_COLOR_ROW_BORDER);
+}
+
+/*
+ * Renders the top title bar and status line used by the main screen.
+ */
+static void ui_render_header(const UiAppState *state) {
+  ui_draw_panel(24.0f, 18.0f, 912.0f, 62.0f, UI_COLOR_HEADER, UI_COLOR_HEADER_BORDER);
+  ui_draw_text(42.0f, 50.0f, UI_COLOR_TEXT, 1.15f, "RomM Vita Sync");
+  ui_draw_text(265.0f, 50.0f, UI_COLOR_TEXT_MUTED, 0.85f, "PS1 save synchronization");
+
+  char status[UI_STATUS_LINE_LEN];
+  ui_truncate_text((state != NULL) ? state->status_line : NULL, status, sizeof(status));
+  ui_draw_text(42.0f, 76.0f, UI_COLOR_STATUS, 0.72f, "Status: %s", status);
+}
+
+/*
+ * Renders the settings panel content and highlights selected setting rows.
+ */
+static void ui_render_settings_panel(const UiAppState *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  ui_draw_panel(24.0f, 96.0f, 286.0f, 286.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
+  ui_draw_text(40.0f, 124.0f, UI_COLOR_TEXT, 0.85f, "Settings");
+
+  char url_display[64];
+  char user_display[44];
+  char pass_display[44];
+  ui_truncate_text(state->config.romm_url, url_display, sizeof(url_display));
+  ui_truncate_text(state->config.romm_username, user_display, sizeof(user_display));
+  ui_mask_secret(state->config.romm_password, pass_display, sizeof(pass_display));
+
+  float row_y = 136.0f;
+  const float row_h = 40.0f;
+
+  ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_SERVER_URL);
+  ui_draw_text(46.0f, row_y + 17.0f, UI_COLOR_TEXT_MUTED, 0.68f, "Server URL");
+  ui_draw_text(46.0f, row_y + 34.0f, UI_COLOR_TEXT, 0.74f, "%s", url_display);
+
+  row_y += 44.0f;
+  ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_USERNAME);
+  ui_draw_text(46.0f, row_y + 17.0f, UI_COLOR_TEXT_MUTED, 0.68f, "Username");
+  ui_draw_text(46.0f, row_y + 34.0f, UI_COLOR_TEXT, 0.74f, "%s", user_display);
+
+  row_y += 44.0f;
+  ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_PASSWORD);
+  ui_draw_text(46.0f, row_y + 17.0f, UI_COLOR_TEXT_MUTED, 0.68f, "Password");
+  ui_draw_text(46.0f, row_y + 34.0f, UI_COLOR_TEXT, 0.74f, "%s", pass_display);
+
+  row_y += 44.0f;
+  ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_SAVE_SETTINGS);
+  ui_draw_text(46.0f, row_y + 27.0f, UI_COLOR_TEXT, 0.74f, "Save settings.ini");
+
+  row_y += 44.0f;
+  ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_RESCAN);
+  ui_draw_text(46.0f, row_y + 27.0f, UI_COLOR_TEXT, 0.74f, "Rescan local games");
+
+  ui_draw_text(40.0f, 374.0f, UI_COLOR_WARNING, 0.62f, "Credentials are stored locally in plain text.");
+}
+
+/*
+ * Renders the games panel and highlights the currently selected game row.
+ */
+static void ui_render_games_panel(const UiAppState *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  ui_draw_panel(324.0f, 96.0f, 612.0f, 286.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
+  ui_draw_text(340.0f, 124.0f, UI_COLOR_TEXT, 0.85f, "Detected PS1 games (%d)", state->game_count);
+
+  if (state->game_count <= 0) {
+    ui_draw_text(350.0f, 184.0f, UI_COLOR_TEXT_MUTED, 0.8f, "No PS1 memory card files detected.");
+    return;
+  }
+
+  int start = state->game_scroll;
+  int end = start + UI_GAME_LIST_VISIBLE;
+  if (end > state->game_count) {
+    end = state->game_count;
+  }
+
+  float row_y = 138.0f;
+  const float row_h = 25.0f;
+  for (int i = start; i < end; ++i) {
+    const UiGameEntry *game = &state->games[i];
+    int selected = (state->selected_index == (UI_SELECT_GAME_BASE + i));
+    ui_draw_row(336.0f, row_y, 588.0f, row_h, selected);
+
+    char id_display[48];
+    char title_display[64];
+    ui_truncate_text(game->game_id, id_display, sizeof(id_display));
+    ui_truncate_text(has_text(game->title) ? game->title : "(no title)", title_display, sizeof(title_display));
+
+    ui_draw_text(
+        346.0f,
+        row_y + 18.0f,
+        UI_COLOR_TEXT,
+        0.70f,
+        "%s  |  %s  |  saves=%d",
+        id_display,
+        title_display,
+        game->save_count);
+
+    row_y += 28.0f;
+  }
+
+  if ((start > 0) || (end < state->game_count)) {
+    ui_draw_text(760.0f, 374.0f, UI_COLOR_TEXT_MUTED, 0.64f, "%d-%d / %d", start + 1, end, state->game_count);
+  }
+}
+
+/*
+ * Renders in-memory logs in a dedicated lower panel.
+ */
+static void ui_render_log_panel(void) {
+  ui_draw_panel(24.0f, 392.0f, 912.0f, 116.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
+  ui_draw_text(40.0f, 418.0f, UI_COLOR_TEXT, 0.80f, "Recent logs");
+
+  int total = app_log_history_count();
+  if (total <= 0) {
+    ui_draw_text(42.0f, 447.0f, UI_COLOR_TEXT_MUTED, 0.72f, "(no logs yet)");
+    return;
+  }
+
+  int start = total - UI_LOG_VISIBLE_LINES;
+  if (start < 0) {
+    start = 0;
+  }
+
+  float y = 437.0f;
+  for (int i = start; i < total; ++i) {
+    const char *line = app_log_history_line(i);
+    if (!has_text(line)) {
+      continue;
+    }
+
+    char clipped[132];
+    ui_truncate_text(line, clipped, sizeof(clipped));
+    ui_draw_text(42.0f, y, UI_COLOR_TEXT_MUTED, 0.68f, "%s", clipped);
+    y += 18.0f;
+  }
+}
+
+/*
+ * Draws the home screen with settings, game list, and log area.
+ */
+static void ui_render_main_screen(UiAppState *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  ui_begin_frame();
+  ui_render_header(state);
+  ui_render_settings_panel(state);
+  ui_render_games_panel(state);
+  ui_render_log_panel();
+  ui_draw_text(
+      36.0f,
+      535.0f,
+      UI_COLOR_TEXT_MUTED,
+      0.67f,
+      "UP/DOWN: navigate   X: select/edit   SELECT: clear logs   START: exit");
+  ui_end_frame();
+}
+
+/*
+ * Draws one centered busy screen while long synchronous tasks execute.
+ */
+static void ui_render_busy_screen(const char *title, const char *subtitle) {
+  ui_begin_frame();
+  ui_draw_panel(140.0f, 190.0f, 680.0f, 164.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
+  ui_draw_text_center(UI_SCREEN_WIDTH * 0.5f, 244.0f, UI_COLOR_TEXT, 1.05f, has_text(title) ? title : "Please wait");
+  if (has_text(subtitle)) {
+    ui_draw_text_center(UI_SCREEN_WIDTH * 0.5f, 284.0f, UI_COLOR_TEXT_MUTED, 0.82f, subtitle);
+  }
+  ui_end_frame();
+}
+
+/*
  * Scans local Vita storage for PS1 saves and rebuilds the UI game list.
  */
 static int ui_refresh_local_inventory(UiAppState *state) {
@@ -504,11 +794,8 @@ static int ui_refresh_local_inventory(UiAppState *state) {
     return -1;
   }
 
-  psvDebugScreenClear(0x10141F);
-  printf("RomM Vita Sync\n\n");
-  printf("Scanning local PS1 saves...\n");
-  printf("Path: ux0:pspemu/PSP/SAVEDATA\n");
-  printf("Please wait.\n");
+  ui_set_status(state, "Scanning local PS1 saves...");
+  ui_render_busy_screen("Scanning local PS1 saves", "Path: ux0:pspemu/PSP/SAVEDATA");
 
   memset(&state->scan_result, 0, sizeof(state->scan_result));
   int scan_status = scan_vmp_files(
@@ -602,44 +889,142 @@ static int ui_collect_game_items(
 }
 
 /*
- * Waits until user presses Circle, Cross, or Start.
+ * Clears the report line buffer before appending a new operation report.
  */
-static void ui_wait_for_return_button(void) {
+static void ui_report_clear(UiReportBuffer *buffer) {
+  if (buffer == NULL) {
+    return;
+  }
+
+  memset(buffer, 0, sizeof(*buffer));
+}
+
+/*
+ * Appends one formatted line to a report buffer when capacity allows.
+ */
+static void ui_report_add(UiReportBuffer *buffer, const char *format, ...) {
+  if ((buffer == NULL) || (format == NULL)) {
+    return;
+  }
+
+  if (buffer->count >= UI_REPORT_MAX_LINES) {
+    return;
+  }
+
+  va_list args;
+  va_start(args, format);
+  vsnprintf(buffer->lines[buffer->count], sizeof(buffer->lines[buffer->count]), format, args);
+  va_end(args);
+  buffer->count += 1;
+}
+
+/*
+ * Draws one report screen page with optional vertical scrolling.
+ */
+static void ui_render_report_screen(const char *title, const UiReportBuffer *buffer, int scroll) {
+  ui_begin_frame();
+  ui_draw_panel(32.0f, 24.0f, 896.0f, 496.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
+  ui_draw_text(52.0f, 56.0f, UI_COLOR_TEXT, 0.95f, "%s", has_text(title) ? title : "Report");
+
+  int total = (buffer != NULL) ? buffer->count : 0;
+  int start = scroll;
+  if (start < 0) {
+    start = 0;
+  }
+  if (start > total) {
+    start = total;
+  }
+
+  int end = start + UI_REPORT_VISIBLE_LINES;
+  if (end > total) {
+    end = total;
+  }
+
+  float y = 86.0f;
+  if (total <= 0) {
+    ui_draw_text(54.0f, 120.0f, UI_COLOR_TEXT_MUTED, 0.80f, "No details available.");
+  } else {
+    for (int i = start; i < end; ++i) {
+      char clipped[UI_STATUS_LINE_LEN];
+      ui_truncate_text(buffer->lines[i], clipped, sizeof(clipped));
+      ui_draw_text(54.0f, y, UI_COLOR_TEXT, 0.74f, "%s", clipped);
+      y += 24.0f;
+    }
+  }
+
+  if (total > UI_REPORT_VISIBLE_LINES) {
+    ui_draw_text(
+        744.0f,
+        502.0f,
+        UI_COLOR_TEXT_MUTED,
+        0.68f,
+        "UP/DOWN scroll %d-%d/%d",
+        start + 1,
+        end,
+        total);
+  }
+
+  ui_draw_text(54.0f, 502.0f, UI_COLOR_TEXT_MUTED, 0.68f, "O/X/START: return");
+  ui_end_frame();
+}
+
+/*
+ * Presents a scrollable report until user confirms return to home screen.
+ */
+static void ui_present_report(const char *title, const UiReportBuffer *buffer) {
+  int total = (buffer != NULL) ? buffer->count : 0;
+  int max_scroll = total - UI_REPORT_VISIBLE_LINES;
+  if (max_scroll < 0) {
+    max_scroll = 0;
+  }
+
+  int scroll = 0;
   unsigned int previous_buttons = 0U;
   for (;;) {
+    ui_render_report_screen(title, buffer, scroll);
+
     unsigned int pressed = ui_poll_pressed(&previous_buttons);
+    if ((pressed & SCE_CTRL_UP) && (scroll > 0)) {
+      scroll -= 1;
+    }
+    if ((pressed & SCE_CTRL_DOWN) && (scroll < max_scroll)) {
+      scroll += 1;
+    }
     if (pressed & (SCE_CTRL_CIRCLE | SCE_CTRL_CROSS | SCE_CTRL_START)) {
       return;
     }
+
     sceKernelDelayThread(16 * 1000);
   }
 }
 
 /*
- * Renders synchronization report summary and action outcomes.
+ * Appends sync summary metrics and action lines to a report buffer.
  */
-static void ui_render_sync_report(const SyncRunReport *report) {
-  if (report == NULL) {
-    printf("No sync report available.\n");
+static void ui_append_sync_report(UiReportBuffer *buffer, const SyncRunReport *report) {
+  if ((buffer == NULL) || (report == NULL)) {
     return;
   }
 
-  printf("\nSync summary\n");
-  printf("  local saves        : %d\n", report->local_count);
-  printf("  remote saves       : %d\n", report->remote_count);
-  printf("  uploads planned    : %d\n", report->uploads_planned);
-  printf("  downloads planned  : %d\n", report->downloads_planned);
-  printf("  uploads executed   : %d\n", report->uploads_executed);
-  printf("  downloads executed : %d\n", report->downloads_executed);
-  printf("  conflicts          : %d\n", report->conflicts_detected);
-  printf("  skipped            : %d\n", report->skipped);
-  printf("  errors             : %d\n", report->transfer_errors);
+  ui_report_add(buffer, "");
+  ui_report_add(buffer, "Sync summary");
+  ui_report_add(buffer, "  local saves        : %d", report->local_count);
+  ui_report_add(buffer, "  remote saves       : %d", report->remote_count);
+  ui_report_add(buffer, "  uploads planned    : %d", report->uploads_planned);
+  ui_report_add(buffer, "  downloads planned  : %d", report->downloads_planned);
+  ui_report_add(buffer, "  uploads executed   : %d", report->uploads_executed);
+  ui_report_add(buffer, "  downloads executed : %d", report->downloads_executed);
+  ui_report_add(buffer, "  conflicts          : %d", report->conflicts_detected);
+  ui_report_add(buffer, "  skipped            : %d", report->skipped);
+  ui_report_add(buffer, "  errors             : %d", report->transfer_errors);
 
   if (report->action_count <= 0) {
     return;
   }
 
-  printf("\nAction log\n");
+  ui_report_add(buffer, "");
+  ui_report_add(buffer, "Action log");
+
   int render_count = report->action_count;
   if (render_count > 24) {
     render_count = 24;
@@ -647,8 +1032,9 @@ static void ui_render_sync_report(const SyncRunReport *report) {
 
   for (int i = 0; i < render_count; ++i) {
     const SyncActionRecord *action = &report->actions[i];
-    printf(
-        "[%02d] %s %s %s status=%d reason=%s\n",
+    ui_report_add(
+        buffer,
+        "[%02d] %s %s %s status=%d reason=%s",
         i + 1,
         sync_slot_str(action->slot),
         sync_action_type_str(action->action),
@@ -658,12 +1044,12 @@ static void ui_render_sync_report(const SyncRunReport *report) {
   }
 
   if (report->action_count > render_count) {
-    printf("... %d more action(s) not shown\n", report->action_count - render_count);
+    ui_report_add(buffer, "... %d more action(s) not shown", report->action_count - render_count);
   }
 }
 
 /*
- * Runs synchronization only for one selected game and prints a live step log.
+ * Runs synchronization for one selected game and renders a full report modal.
  */
 static void ui_run_sync_for_game(UiAppState *state, int game_index) {
   if ((state == NULL) || (game_index < 0) || (game_index >= state->game_count)) {
@@ -677,62 +1063,66 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
       state->sync_work_items,
       (int)(sizeof(state->sync_work_items) / sizeof(state->sync_work_items[0])));
 
-  psvDebugScreenClear(0x10141F);
+  UiReportBuffer report;
+  ui_report_clear(&report);
   app_log_clear_history();
 
-  printf("RomM Vita Sync - Game Sync\n\n");
-  printf("Game ID : %s\n", game->game_id);
-  printf("Title   : %s\n", has_text(game->title) ? game->title : "(no title)");
-  printf("Saves   : %d\n\n", game_item_count);
+  ui_report_add(&report, "Game sync report");
+  ui_report_add(&report, "Game ID : %s", game->game_id);
+  ui_report_add(&report, "Title   : %s", has_text(game->title) ? game->title : "(no title)");
+  ui_report_add(&report, "Saves   : %d", game_item_count);
 
   if (game_item_count <= 0) {
-    printf("No local save found for this game.\n");
-    printf("\nPress O or START to return.\n");
-    ui_wait_for_return_button();
+    ui_set_status(state, "No local save found for %s", game->game_id);
+    ui_report_add(&report, "");
+    ui_report_add(&report, "No local save found for this game.");
+    ui_present_report("Synchronization", &report);
     return;
   }
 
-  printf("[1/4] Validating RomM configuration...\n");
+  ui_render_busy_screen("Synchronizing game", game->game_id);
+
+  ui_report_add(&report, "");
+  ui_report_add(&report, "[1/4] Validating RomM configuration...");
   if (!app_config_has_server_url(&state->config)) {
-    printf("  ERROR: RomM server URL is empty.\n");
+    ui_report_add(&report, "ERROR: RomM server URL is empty.");
     ui_set_status(state, "Sync canceled: RomM URL is missing");
-    printf("\nPress O or START to return.\n");
-    ui_wait_for_return_button();
+    ui_present_report("Synchronization", &report);
     return;
   }
   if (!app_config_has_auth(&state->config)) {
-    printf("  ERROR: username/password or token is required.\n");
+    ui_report_add(&report, "ERROR: username/password or token is required.");
     ui_set_status(state, "Sync canceled: credentials are missing");
-    printf("\nPress O or START to return.\n");
-    ui_wait_for_return_button();
+    ui_present_report("Synchronization", &report);
     return;
   }
-  printf("  OK: credentials are configured.\n");
+  ui_report_add(&report, "OK: credentials are configured.");
 
-  printf("[2/4] Ensuring device registration...\n");
+  ui_report_add(&report, "[2/4] Ensuring device registration...");
   int wrote_config = ensure_device_registration(&state->config, &state->romm_client);
   if (wrote_config) {
-    printf("  OK: device_id persisted to settings.ini (%s)\n", state->config.device_id);
+    ui_report_add(&report, "OK: device_id persisted to settings.ini (%s)", state->config.device_id);
   } else if (has_text(state->config.device_id)) {
-    printf("  OK: device_id available (%s)\n", state->config.device_id);
+    ui_report_add(&report, "OK: device_id available (%s)", state->config.device_id);
   } else {
-    printf("  WARN: no device_id available, sync will continue if endpoints allow it.\n");
+    ui_report_add(&report, "WARN: no device_id available, sync continues if endpoint allows it.");
   }
 
-  printf("[3/4] Resolving RomM rom_id mapping...\n");
+  ui_report_add(&report, "[3/4] Resolving RomM rom_id mapping...");
   int mapped_count = romm_http_resolve_rom_ids(&state->config, state->sync_work_items, game_item_count);
   if (mapped_count < 0) {
-    printf(
-        "  WARN: Rom mapping failed: %s (%d)\n",
+    ui_report_add(
+        &report,
+        "WARN: Rom mapping failed: %s (%d)",
         romm_client_status_str(mapped_count),
         mapped_count);
   } else {
-    printf("  OK: mapped %d/%d save(s).\n", mapped_count, game_item_count);
+    ui_report_add(&report, "OK: mapped %d/%d save(s).", mapped_count, game_item_count);
   }
 
-  printf("[4/4] Running synchronization...\n");
+  ui_report_add(&report, "[4/4] Running synchronization...");
   if (state->config.sync_dry_run) {
-    printf("  INFO: dry-run is enabled (no upload/download execution).\n");
+    ui_report_add(&report, "INFO: dry-run is enabled (no upload/download execution).");
   }
 
   SyncEngineConfig config;
@@ -749,8 +1139,9 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
       &state->romm_client,
       &state->sync_report);
   if (sync_status < 0) {
-    printf(
-        "\nSynchronization failed: %s (%d)\n",
+    ui_report_add(
+        &report,
+        "Synchronization failed: %s (%d)",
         sync_engine_status_str(sync_status),
         sync_status);
     ui_set_status(
@@ -759,8 +1150,8 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
         game->game_id,
         sync_engine_status_str(sync_status));
   } else {
-    printf("\nSynchronization finished.\n");
-    ui_render_sync_report(&state->sync_report);
+    ui_report_add(&report, "Synchronization finished.");
+    ui_append_sync_report(&report, &state->sync_report);
     ui_set_status(
         state,
         "Sync finished for %s (uploads=%d, downloads=%d, errors=%d)",
@@ -770,101 +1161,7 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
         state->sync_report.transfer_errors);
   }
 
-  printf("\nPress O or START to return to main UI.\n");
-  ui_wait_for_return_button();
-}
-
-/*
- * Prints the current in-memory log history as the bottom UI log panel.
- */
-static void ui_render_log_panel(void) {
-  printf("\nRecent Logs\n");
-
-  int total = app_log_history_count();
-  if (total <= 0) {
-    printf("  (no logs yet)\n");
-    return;
-  }
-
-  int start = total - UI_LOG_VISIBLE_LINES;
-  if (start < 0) {
-    start = 0;
-  }
-
-  for (int i = start; i < total; ++i) {
-    const char *line = app_log_history_line(i);
-    if (!has_text(line)) {
-      continue;
-    }
-
-    char clipped[112];
-    ui_truncate_text(line, clipped, sizeof(clipped));
-    printf("  %s\n", clipped);
-  }
-}
-
-/*
- * Draws the home screen with settings, game list, and log area.
- */
-static void ui_render_main_screen(UiAppState *state) {
-  if (state == NULL) {
-    return;
-  }
-
-  psvDebugScreenClear(0x10141F);
-
-  printf("RomM Vita Sync - PS1 Save Synchronization\n");
-  printf("X Select/Edit | Up/Down Navigate | START Exit | SELECT Clear Logs\n");
-  printf("Status: %s\n", has_text(state->status_line) ? state->status_line : "Ready");
-
-  printf("\nSettings (stored in settings.ini)\n");
-  char url_display[68];
-  char user_display[44];
-  char pass_display[44];
-  ui_truncate_text(state->config.romm_url, url_display, sizeof(url_display));
-  ui_truncate_text(state->config.romm_username, user_display, sizeof(user_display));
-  ui_mask_secret(state->config.romm_password, pass_display, sizeof(pass_display));
-
-  printf("%c Server URL : %s\n", (state->selected_index == UI_SELECT_SERVER_URL) ? '>' : ' ', url_display);
-  printf("%c Username   : %s\n", (state->selected_index == UI_SELECT_USERNAME) ? '>' : ' ', user_display);
-  printf("%c Password   : %s\n", (state->selected_index == UI_SELECT_PASSWORD) ? '>' : ' ', pass_display);
-  printf(
-      "%c Save settings to %s\n",
-      (state->selected_index == UI_SELECT_SAVE_SETTINGS) ? '>' : ' ',
-      APP_CONFIG_DEFAULT_PATH);
-  printf("%c Rescan local PS1 games\n", (state->selected_index == UI_SELECT_RESCAN) ? '>' : ' ');
-  printf("  Credentials are currently stored WITHOUT encryption.\n");
-
-  printf("\nDetected PS1 Games (%d)\n", state->game_count);
-  if (state->game_count <= 0) {
-    printf("  No PS1 memory card files detected.\n");
-  } else {
-    int start = state->game_scroll;
-    int end = start + UI_GAME_LIST_VISIBLE;
-    if (end > state->game_count) {
-      end = state->game_count;
-    }
-
-    for (int i = start; i < end; ++i) {
-      const UiGameEntry *game = &state->games[i];
-      int selected = (state->selected_index == (UI_SELECT_GAME_BASE + i));
-
-      char title_display[44];
-      ui_truncate_text(has_text(game->title) ? game->title : "(no title)", title_display, sizeof(title_display));
-      printf(
-          "%c [Sync] %s | %s | saves=%d\n",
-          selected ? '>' : ' ',
-          game->game_id,
-          title_display,
-          game->save_count);
-    }
-
-    if ((start > 0) || (end < state->game_count)) {
-      printf("  showing %d-%d / %d\n", start + 1, end, state->game_count);
-    }
-  }
-
-  ui_render_log_panel();
+  ui_present_report("Synchronization", &report);
 }
 
 /*
@@ -881,10 +1178,10 @@ static char ui_display_char(char value) {
 }
 
 /*
- * Renders a small moving window around the currently selected editor character.
+ * Draws a horizontal character chooser centered around the selected slot.
  */
-static void ui_render_charset_window(const char *charset, int selected_index) {
-  if (!has_text(charset)) {
+static void ui_draw_charset_window(const char *charset, int selected_index, float x, float y, int visible_count) {
+  if (!has_text(charset) || (visible_count <= 0)) {
     return;
   }
 
@@ -900,32 +1197,35 @@ static void ui_render_charset_window(const char *charset, int selected_index) {
     selected_index = length - 1;
   }
 
-  int from = selected_index - 12;
+  int from = selected_index - (visible_count / 2);
   if (from < 0) {
     from = 0;
   }
-  int to = from + 24;
+  int to = from + visible_count;
   if (to > length) {
     to = length;
-    from = to - 24;
+    from = to - visible_count;
     if (from < 0) {
       from = 0;
     }
   }
 
+  const float cell_w = 42.0f;
+  const float cell_h = 42.0f;
   for (int i = from; i < to; ++i) {
-    char display = ui_display_char(charset[i]);
-    if (i == selected_index) {
-      printf("[%c]", display);
-    } else {
-      printf(" %c ", display);
-    }
+    float cell_x = x + ((float)(i - from) * cell_w);
+    int selected = (i == selected_index);
+    ui_draw_row(cell_x, y, cell_w - 4.0f, cell_h, selected);
+
+    char symbol[2];
+    symbol[0] = ui_display_char(charset[i]);
+    symbol[1] = '\0';
+    ui_draw_text(cell_x + 12.0f, y + 27.0f, UI_COLOR_TEXT, 0.95f, "%s", symbol);
   }
-  printf("\n");
 }
 
 /*
- * Opens a small controller-driven text editor and writes result when confirmed.
+ * Opens a controller-driven text editor and writes result when confirmed.
  */
 static int ui_edit_text_field(
     const char *field_name,
@@ -967,8 +1267,9 @@ static int ui_edit_text_field(
       selected_char_index = 0;
     }
 
-    psvDebugScreenClear(0x10141F);
-    printf("Edit %s\n\n", field_name);
+    ui_begin_frame();
+    ui_draw_panel(72.0f, 62.0f, 816.0f, 420.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
+    ui_draw_text(98.0f, 98.0f, UI_COLOR_TEXT, 0.95f, "Edit %s", field_name);
 
     char preview[104];
     if (mask_value_in_preview) {
@@ -976,17 +1277,23 @@ static int ui_edit_text_field(
     } else {
       ui_truncate_text(draft, preview, sizeof(preview));
     }
-    printf("Current value: %s\n", preview);
-    printf("Charset: %s\n", kCharsetNames[charset_index]);
-    printf("Selected character: '%c'\n\n", ui_display_char(charset[selected_char_index]));
-    ui_render_charset_window(charset, selected_char_index);
 
-    printf("\nLeft/Right: choose character | Up/Down: change charset\n");
-    printf("X: add character | Triangle: backspace | Select: clear\n");
-    printf("START: save | O: cancel\n");
+    ui_draw_text(98.0f, 130.0f, UI_COLOR_TEXT_MUTED, 0.75f, "Current value");
+    ui_draw_row(96.0f, 138.0f, 768.0f, 42.0f, 0);
+    ui_draw_text(106.0f, 165.0f, UI_COLOR_TEXT, 0.78f, "%s", preview);
+
+    ui_draw_text(98.0f, 204.0f, UI_COLOR_TEXT_MUTED, 0.72f, "Charset: %s", kCharsetNames[charset_index]);
+    ui_draw_charset_window(charset, selected_char_index, 96.0f, 216.0f, 17);
+
+    ui_draw_text(98.0f, 300.0f, UI_COLOR_TEXT_MUTED, 0.68f, "LEFT/RIGHT: char   UP/DOWN: charset");
+    ui_draw_text(98.0f, 322.0f, UI_COLOR_TEXT_MUTED, 0.68f, "X: add   TRIANGLE: backspace   SELECT: clear");
+    ui_draw_text(98.0f, 344.0f, UI_COLOR_TEXT_MUTED, 0.68f, "START: save   O: cancel");
+
     if (has_text(message)) {
-      printf("\n%s\n", message);
+      ui_draw_text(98.0f, 380.0f, UI_COLOR_STATUS, 0.72f, "%s", message);
     }
+
+    ui_end_frame();
 
     unsigned int pressed = ui_poll_pressed(&previous_buttons);
     if (pressed & SCE_CTRL_LEFT) {
@@ -1195,15 +1502,61 @@ static void ui_initialize_state(UiAppState *state) {
 }
 
 /*
+ * Initializes the Vita2D renderer and the default PGF font.
+ */
+static int ui_renderer_init(void) {
+  int status = vita2d_init();
+  if (status < 0) {
+    return status;
+  }
+
+  g_ui_font = vita2d_load_default_pgf();
+  if (g_ui_font == NULL) {
+    vita2d_fini();
+    return -1;
+  }
+
+  return 0;
+}
+
+/*
+ * Releases Vita2D renderer resources before application exit.
+ */
+static void ui_renderer_term(void) {
+  vita2d_wait_rendering_done();
+  if (g_ui_font != NULL) {
+    vita2d_free_pgf(g_ui_font);
+    g_ui_font = NULL;
+  }
+  vita2d_fini();
+}
+
+/*
+ * Shows a one-shot graceful exit screen before terminating the process.
+ */
+static void ui_render_exit_screen(void) {
+  ui_begin_frame();
+  ui_draw_panel(220.0f, 214.0f, 520.0f, 112.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
+  ui_draw_text_center(UI_SCREEN_WIDTH * 0.5f, 274.0f, UI_COLOR_TEXT, 0.95f, "Exiting RomM Vita Sync...");
+  ui_end_frame();
+}
+
+/*
  * Entry point for the interactive PS Vita UI flow.
  */
 int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
 
-  psvDebugScreenInit();
   sceCtrlSetSamplingMode(SCE_CTRL_MODE_DIGITAL);
   app_log_clear_history();
+
+  if (ui_renderer_init() < 0) {
+    psvDebugScreenInit();
+    psvDebugScreenPrintf("Failed to initialize vita2d renderer.\n");
+    sceKernelDelayThread(900 * 1000);
+    return 1;
+  }
 
   UiAppState *state = &g_app_state;
   ui_initialize_state(state);
@@ -1244,8 +1597,8 @@ int main(int argc, char *argv[]) {
     sceKernelDelayThread(16 * 1000);
   }
 
-  psvDebugScreenClear(0x10141F);
-  printf("Exiting RomM Vita Sync...\n");
+  ui_render_exit_screen();
   sceKernelDelayThread(400 * 1000);
+  ui_renderer_term();
   return 0;
 }

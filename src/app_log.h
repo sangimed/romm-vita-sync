@@ -29,7 +29,7 @@ AppLogLevel app_log_get_level(void);
 int app_log_is_enabled(AppLogLevel level);
 
 /*
- * Writes one structured log line to the debug screen when enabled.
+ * Writes one structured log line to in-memory history when enabled.
  */
 void app_log_write(AppLogLevel level, const char *tag, const char *format, ...);
 
