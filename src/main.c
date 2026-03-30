@@ -34,7 +34,7 @@
 #define UI_SCREEN_WIDTH 960.0f
 #define UI_SCREEN_HEIGHT 544.0f
 
-#define UI_GAME_LIST_VISIBLE 9
+#define UI_GAME_LIST_VISIBLE 5
 #define UI_LOG_VISIBLE_LINES 5
 #define UI_REPORT_VISIBLE_LINES 16
 #define UI_REPORT_MAX_LINES 192
@@ -42,20 +42,25 @@
 #define UI_EDITOR_BUFFER_LEN 512
 #define APP_RUNTIME_DATA_DIRECTORY "ux0:data/romm-vita-sync"
 
-#define UI_COLOR_BACKGROUND RGBA8(214, 227, 242, 255)
-#define UI_COLOR_BACKGROUND_ACCENT RGBA8(198, 216, 235, 255)
-#define UI_COLOR_PANEL RGBA8(245, 250, 255, 244)
-#define UI_COLOR_PANEL_BORDER RGBA8(154, 176, 202, 255)
-#define UI_COLOR_HEADER RGBA8(58, 109, 178, 255)
-#define UI_COLOR_HEADER_BORDER RGBA8(104, 156, 224, 255)
-#define UI_COLOR_TEXT RGBA8(34, 50, 72, 255)
-#define UI_COLOR_TEXT_MUTED RGBA8(95, 120, 148, 255)
-#define UI_COLOR_STATUS RGBA8(39, 96, 165, 255)
-#define UI_COLOR_SELECTION RGBA8(85, 143, 207, 255)
-#define UI_COLOR_SELECTION_BORDER RGBA8(226, 241, 255, 255)
-#define UI_COLOR_ROW RGBA8(232, 240, 250, 255)
-#define UI_COLOR_ROW_BORDER RGBA8(180, 198, 219, 255)
-#define UI_COLOR_WARNING RGBA8(178, 107, 45, 255)
+#define UI_COLOR_BACKGROUND RGBA8(10, 112, 0, 255)
+#define UI_COLOR_BACKGROUND_MID RGBA8(18, 143, 0, 255)
+#define UI_COLOR_BACKGROUND_ACCENT RGBA8(36, 245, 12, 255)
+#define UI_COLOR_PANEL RGBA8(18, 103, 6, 188)
+#define UI_COLOR_PANEL_BORDER RGBA8(213, 255, 213, 72)
+#define UI_COLOR_HEADER RGBA8(8, 8, 8, 228)
+#define UI_COLOR_HEADER_BORDER RGBA8(255, 255, 255, 36)
+#define UI_COLOR_TEXT RGBA8(255, 255, 255, 255)
+#define UI_COLOR_TEXT_MUTED RGBA8(220, 255, 220, 220)
+#define UI_COLOR_STATUS RGBA8(240, 255, 240, 232)
+#define UI_COLOR_SELECTION RGBA8(41, 255, 18, 210)
+#define UI_COLOR_SELECTION_BORDER RGBA8(210, 255, 210, 92)
+#define UI_COLOR_ROW RGBA8(26, 120, 10, 148)
+#define UI_COLOR_ROW_BORDER RGBA8(230, 255, 230, 44)
+#define UI_COLOR_WARNING RGBA8(255, 237, 172, 255)
+#define UI_COLOR_SIDEBAR RGBA8(0, 0, 0, 34)
+#define UI_COLOR_SIDEBAR_ACTIVE RGBA8(62, 180, 40, 162)
+#define UI_COLOR_SIDEBAR_ACTIVE_BORDER RGBA8(220, 255, 220, 84)
+#define UI_COLOR_WATERMARK RGBA8(255, 255, 255, 20)
 
 typedef struct UiGameEntry {
   char key[ROMM_GAME_ID_LEN];
@@ -68,6 +73,12 @@ typedef struct UiReportBuffer {
   char lines[UI_REPORT_MAX_LINES][UI_STATUS_LINE_LEN];
   int count;
 } UiReportBuffer;
+
+typedef enum UiSection {
+  UI_SECTION_CONNECTION = 0,
+  UI_SECTION_ACTIONS = 1,
+  UI_SECTION_GAMES = 2
+} UiSection;
 
 typedef struct UiAppState {
   AppConfig config;
@@ -520,6 +531,36 @@ static void ui_update_game_scroll(UiAppState *state) {
 }
 
 /*
+ * Returns which shell section is active for the current selection.
+ */
+static UiSection ui_selected_section(const UiAppState *state) {
+  if (state == NULL) {
+    return UI_SECTION_CONNECTION;
+  }
+
+  if (state->selected_index < UI_SELECT_SAVE_SETTINGS) {
+    return UI_SECTION_CONNECTION;
+  }
+  if (state->selected_index < UI_SELECT_GAME_BASE) {
+    return UI_SECTION_ACTIONS;
+  }
+  return UI_SECTION_GAMES;
+}
+
+/*
+ * Pumps pending AppUtil events so dialogs stay responsive.
+ */
+static void ui_pump_app_events(void) {
+  if (!g_dialog_runtime_initialized) {
+    return;
+  }
+
+  SceAppUtilAppEventParam app_event;
+  memset(&app_event, 0, sizeof(app_event));
+  sceAppUtilReceiveAppEvent(&app_event);
+}
+
+/*
  * Saves current configuration to settings.ini and updates UI status text.
  */
 static int ui_save_config(UiAppState *state, const char *success_message) {
@@ -632,14 +673,27 @@ static int ensure_runtime_data_directory(void) {
 }
 
 /*
- * Starts one drawing frame and paints the two-layer background.
+ * Starts one drawing frame and paints the VitaDeploy-inspired shell background.
  */
 static void ui_begin_frame(void) {
   vita2d_start_drawing();
   vita2d_clear_screen();
 
-  vita2d_draw_rectangle(0.0f, 0.0f, UI_SCREEN_WIDTH, UI_SCREEN_HEIGHT, UI_COLOR_BACKGROUND);
-  vita2d_draw_rectangle(0.0f, 260.0f, UI_SCREEN_WIDTH, UI_SCREEN_HEIGHT - 260.0f, UI_COLOR_BACKGROUND_ACCENT);
+  vita2d_draw_rectangle(0.0f, 0.0f, UI_SCREEN_WIDTH, 102.0f, UI_COLOR_BACKGROUND);
+  vita2d_draw_rectangle(0.0f, 102.0f, UI_SCREEN_WIDTH, 164.0f, UI_COLOR_BACKGROUND_MID);
+  vita2d_draw_rectangle(0.0f, 266.0f, UI_SCREEN_WIDTH, UI_SCREEN_HEIGHT - 266.0f, UI_COLOR_BACKGROUND_ACCENT);
+
+  vita2d_draw_rectangle(0.0f, 0.0f, UI_SCREEN_WIDTH, 26.0f, UI_COLOR_HEADER);
+  vita2d_draw_rectangle(0.0f, 26.0f, UI_SCREEN_WIDTH, 1.0f, UI_COLOR_HEADER_BORDER);
+  vita2d_draw_rectangle(0.0f, 458.0f, UI_SCREEN_WIDTH, UI_SCREEN_HEIGHT - 458.0f, UI_COLOR_SIDEBAR);
+  vita2d_draw_rectangle(0.0f, 458.0f, UI_SCREEN_WIDTH, 1.0f, UI_COLOR_PANEL_BORDER);
+
+  /* Simple translucent motif to avoid a flat background. */
+  vita2d_draw_rectangle(548.0f, 236.0f, 280.0f, 62.0f, UI_COLOR_WATERMARK);
+  vita2d_draw_rectangle(642.0f, 162.0f, 94.0f, 138.0f, UI_COLOR_WATERMARK);
+  vita2d_draw_rectangle(515.0f, 300.0f, 78.0f, 92.0f, UI_COLOR_WATERMARK);
+  vita2d_draw_rectangle(738.0f, 300.0f, 78.0f, 92.0f, UI_COLOR_WATERMARK);
+  vita2d_draw_rectangle(588.0f, 392.0f, 160.0f, 18.0f, UI_COLOR_WATERMARK);
 }
 
 /*
@@ -708,96 +762,165 @@ static void ui_draw_panel(float x, float y, float w, float h, unsigned int fill,
 }
 
 /*
- * Draws one selectable list row with visual feedback for selection.
+ * Draws one shell row with a bright top highlight when selected.
  */
 static void ui_draw_row(float x, float y, float w, float h, int selected) {
+  unsigned int fill = selected ? UI_COLOR_SELECTION : UI_COLOR_ROW;
+  unsigned int highlight = selected ? UI_COLOR_SELECTION_BORDER : UI_COLOR_ROW_BORDER;
+
+  vita2d_draw_rectangle(x, y, w, h, fill);
+  vita2d_draw_rectangle(x, y, w, h * 0.34f, highlight);
+  vita2d_draw_rectangle(x, y + h - 1.0f, w, 1.0f, UI_COLOR_ROW_BORDER);
+  vita2d_draw_rectangle(x, y, 4.0f, h, highlight);
+}
+
+/*
+ * Draws one left-rail section entry.
+ */
+static void ui_draw_sidebar_item(float x, float y, float w, float h, int selected, const char *title, const char *detail) {
   ui_draw_panel(
       x,
       y,
       w,
       h,
-      selected ? UI_COLOR_SELECTION : UI_COLOR_ROW,
-      selected ? UI_COLOR_SELECTION_BORDER : UI_COLOR_ROW_BORDER);
+      selected ? UI_COLOR_SIDEBAR_ACTIVE : UI_COLOR_SIDEBAR,
+      selected ? UI_COLOR_SIDEBAR_ACTIVE_BORDER : UI_COLOR_HEADER_BORDER);
+  ui_draw_text(x + 14.0f, y + 24.0f, UI_COLOR_TEXT, 0.83f, "%s", title);
+  if (has_text(detail)) {
+    ui_draw_text(x + 14.0f, y + 43.0f, UI_COLOR_TEXT_MUTED, 0.58f, "%s", detail);
+  }
 }
 
 /*
- * Renders the top title bar and status line used by the main screen.
+ * Draws one main shell content row with title/detail and a chevron.
+ */
+static void ui_draw_shell_row(float x, float y, float w, int selected, const char *title, const char *detail) {
+  ui_draw_row(x, y, w, 54.0f, selected);
+  ui_draw_text(x + 18.0f, y + 24.0f, UI_COLOR_TEXT, 0.89f, "%s", title);
+  if (has_text(detail)) {
+    ui_draw_text(x + 18.0f, y + 44.0f, UI_COLOR_TEXT_MUTED, 0.62f, "%s", detail);
+  }
+  ui_draw_text(x + w - 20.0f, y + 31.0f, UI_COLOR_TEXT, 0.88f, ">");
+}
+
+/*
+ * Renders the top shell title area.
  */
 static void ui_render_header(const UiAppState *state) {
-  ui_draw_panel(24.0f, 18.0f, 912.0f, 62.0f, UI_COLOR_HEADER, UI_COLOR_HEADER_BORDER);
-  ui_draw_text(42.0f, 50.0f, UI_COLOR_TEXT, 1.15f, "RomM Vita Sync");
-  ui_draw_text(265.0f, 50.0f, UI_COLOR_TEXT_MUTED, 0.85f, "PS1 save synchronization");
+  const char *section = "Connection";
+  if (ui_selected_section(state) == UI_SECTION_ACTIONS) {
+    section = "Actions";
+  } else if (ui_selected_section(state) == UI_SECTION_GAMES) {
+    section = "PS1 games";
+  }
 
-  char status[UI_STATUS_LINE_LEN];
-  ui_truncate_text((state != NULL) ? state->status_line : NULL, status, sizeof(status));
-  ui_draw_text(42.0f, 76.0f, UI_COLOR_STATUS, 0.72f, "Status: %s", status);
+  ui_draw_text(18.0f, 18.0f, UI_COLOR_TEXT_MUTED, 0.58f, "RomM Vita Sync");
+  ui_draw_text(820.0f, 18.0f, UI_COLOR_TEXT_MUTED, 0.58f, "%s", section);
+  ui_draw_text_center(UI_SCREEN_WIDTH * 0.5f, 76.0f, UI_COLOR_TEXT, 1.28f, "RomM Vita Sync");
+  ui_draw_text_center(UI_SCREEN_WIDTH * 0.5f, 102.0f, UI_COLOR_TEXT_MUTED, 0.76f, "PS1 save synchronization");
 }
 
 /*
- * Renders the settings panel content and highlights selected setting rows.
+ * Renders the left navigation rail.
  */
 static void ui_render_settings_panel(const UiAppState *state) {
   if (state == NULL) {
     return;
   }
 
-  ui_draw_panel(24.0f, 96.0f, 286.0f, 286.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
-  ui_draw_text(40.0f, 124.0f, UI_COLOR_TEXT, 0.85f, "Settings");
+  UiSection section = ui_selected_section(state);
+  char game_summary[48];
+  snprintf(game_summary, sizeof(game_summary), "%d game(s) detected", state->game_count);
 
-  char url_display[64];
-  char user_display[44];
-  char pass_display[44];
-  ui_truncate_text(state->config.romm_url, url_display, sizeof(url_display));
-  ui_truncate_text(state->config.romm_username, user_display, sizeof(user_display));
-  ui_mask_secret(state->config.romm_password, pass_display, sizeof(pass_display));
+  ui_draw_text(32.0f, 142.0f, UI_COLOR_TEXT_MUTED, 0.63f, "Sections");
+  ui_draw_sidebar_item(
+      24.0f,
+      154.0f,
+      164.0f,
+      56.0f,
+      section == UI_SECTION_CONNECTION,
+      "Connection",
+      "URL, username, password");
+  ui_draw_sidebar_item(
+      24.0f,
+      222.0f,
+      164.0f,
+      56.0f,
+      section == UI_SECTION_ACTIONS,
+      "Actions",
+      "Save settings and rescan");
+  ui_draw_sidebar_item(
+      24.0f,
+      290.0f,
+      164.0f,
+      56.0f,
+      section == UI_SECTION_GAMES,
+      "PS1 games",
+      game_summary);
 
-  float row_y = 136.0f;
-  const float row_h = 40.0f;
-
-  ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_SERVER_URL);
-  ui_draw_text(46.0f, row_y + 17.0f, UI_COLOR_TEXT_MUTED, 0.68f, "Server URL");
-  ui_draw_text(46.0f, row_y + 34.0f, UI_COLOR_TEXT, 0.74f, "%s", url_display);
-  ui_draw_text(276.0f, row_y + 28.0f, UI_COLOR_TEXT_MUTED, 0.78f, ">");
-
-  row_y += 44.0f;
-  ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_USERNAME);
-  ui_draw_text(46.0f, row_y + 17.0f, UI_COLOR_TEXT_MUTED, 0.68f, "Username");
-  ui_draw_text(46.0f, row_y + 34.0f, UI_COLOR_TEXT, 0.74f, "%s", user_display);
-  ui_draw_text(276.0f, row_y + 28.0f, UI_COLOR_TEXT_MUTED, 0.78f, ">");
-
-  row_y += 44.0f;
-  ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_PASSWORD);
-  ui_draw_text(46.0f, row_y + 17.0f, UI_COLOR_TEXT_MUTED, 0.68f, "Password");
-  ui_draw_text(46.0f, row_y + 34.0f, UI_COLOR_TEXT, 0.74f, "%s", pass_display);
-  ui_draw_text(276.0f, row_y + 28.0f, UI_COLOR_TEXT_MUTED, 0.78f, ">");
-
-  row_y += 44.0f;
-  ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_SAVE_SETTINGS);
-  ui_draw_text(46.0f, row_y + 27.0f, UI_COLOR_TEXT, 0.74f, "Save settings.ini");
-  ui_draw_text(276.0f, row_y + 28.0f, UI_COLOR_TEXT_MUTED, 0.78f, ">");
-
-  row_y += 44.0f;
-  ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_RESCAN);
-  ui_draw_text(46.0f, row_y + 27.0f, UI_COLOR_TEXT, 0.74f, "Rescan local games");
-  ui_draw_text(276.0f, row_y + 28.0f, UI_COLOR_TEXT_MUTED, 0.78f, ">");
-
-  ui_draw_text(40.0f, 357.0f, UI_COLOR_TEXT_MUTED, 0.62f, "X on a field opens the official PS Vita keyboard.");
-  ui_draw_text(40.0f, 374.0f, UI_COLOR_WARNING, 0.62f, "Credentials are stored locally in plain text.");
+  ui_draw_text(30.0f, 390.0f, UI_COLOR_TEXT_MUTED, 0.58f, "X opens the official");
+  ui_draw_text(30.0f, 406.0f, UI_COLOR_TEXT_MUTED, 0.58f, "PS Vita keyboard.");
+  ui_draw_text(30.0f, 432.0f, UI_COLOR_WARNING, 0.58f, "Credentials stay local");
+  ui_draw_text(30.0f, 448.0f, UI_COLOR_WARNING, 0.58f, "in plain text.");
 }
 
 /*
- * Renders the games panel and highlights the currently selected game row.
+ * Renders the active shell content area.
  */
 static void ui_render_games_panel(const UiAppState *state) {
   if (state == NULL) {
     return;
   }
 
-  ui_draw_panel(324.0f, 96.0f, 612.0f, 286.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
-  ui_draw_text(340.0f, 124.0f, UI_COLOR_TEXT, 0.85f, "Detected PS1 games (%d)", state->game_count);
+  const float content_x = 214.0f;
+  const float content_w = 698.0f;
+  float row_y = 192.0f;
+
+  UiSection section = ui_selected_section(state);
+  if (section == UI_SECTION_CONNECTION) {
+    char url_display[96];
+    char user_display[96];
+    char pass_display[96];
+    ui_truncate_text(state->config.romm_url, url_display, sizeof(url_display));
+    ui_truncate_text(state->config.romm_username, user_display, sizeof(user_display));
+    ui_mask_secret(state->config.romm_password, pass_display, sizeof(pass_display));
+
+    ui_draw_text(content_x, 150.0f, UI_COLOR_TEXT, 1.02f, "RomM connection");
+    ui_draw_text(content_x, 172.0f, UI_COLOR_TEXT_MUTED, 0.68f, "Press X to edit with the official PS Vita keyboard.");
+    ui_draw_shell_row(content_x, row_y, content_w, state->selected_index == UI_SELECT_SERVER_URL, "Server URL", url_display);
+    row_y += 60.0f;
+    ui_draw_shell_row(content_x, row_y, content_w, state->selected_index == UI_SELECT_USERNAME, "Username", user_display);
+    row_y += 60.0f;
+    ui_draw_shell_row(content_x, row_y, content_w, state->selected_index == UI_SELECT_PASSWORD, "Password", pass_display);
+    return;
+  }
+
+  if (section == UI_SECTION_ACTIONS) {
+    ui_draw_text(content_x, 150.0f, UI_COLOR_TEXT, 1.02f, "Actions");
+    ui_draw_text(content_x, 172.0f, UI_COLOR_TEXT_MUTED, 0.68f, "Persist the configuration or rebuild the detected local inventory.");
+    ui_draw_shell_row(
+        content_x,
+        row_y,
+        content_w,
+        state->selected_index == UI_SELECT_SAVE_SETTINGS,
+        "Save settings.ini",
+        "Write the current RomM configuration to ux0:data/romm-vita-sync");
+    row_y += 60.0f;
+    ui_draw_shell_row(
+        content_x,
+        row_y,
+        content_w,
+        state->selected_index == UI_SELECT_RESCAN,
+        "Rescan local games",
+        "Scan ux0:pspemu/PSP/SAVEDATA and rebuild the PS1 game list");
+    return;
+  }
+
+  ui_draw_text(content_x, 150.0f, UI_COLOR_TEXT, 1.02f, "Detected PS1 games (%d)", state->game_count);
+  ui_draw_text(content_x, 172.0f, UI_COLOR_TEXT_MUTED, 0.68f, "Press X to synchronize the selected game.");
 
   if (state->game_count <= 0) {
-    ui_draw_text(350.0f, 184.0f, UI_COLOR_TEXT_MUTED, 0.8f, "No PS1 memory card files detected.");
+    ui_draw_text(content_x, 228.0f, UI_COLOR_TEXT_MUTED, 0.84f, "No PS1 memory card files detected.");
     return;
   }
 
@@ -807,65 +930,68 @@ static void ui_render_games_panel(const UiAppState *state) {
     end = state->game_count;
   }
 
-  float row_y = 138.0f;
-  const float row_h = 25.0f;
   for (int i = start; i < end; ++i) {
     const UiGameEntry *game = &state->games[i];
     int selected = (state->selected_index == (UI_SELECT_GAME_BASE + i));
-    ui_draw_row(336.0f, row_y, 588.0f, row_h, selected);
+    char title_display[80];
+    char detail[128];
+    const char *resolved_title = has_text(game->title) ? game->title : game->game_id;
 
-    char id_display[48];
-    char title_display[64];
-    ui_truncate_text(game->game_id, id_display, sizeof(id_display));
-    ui_truncate_text(has_text(game->title) ? game->title : "(no title)", title_display, sizeof(title_display));
-
-    ui_draw_text(
-        346.0f,
-        row_y + 18.0f,
-        UI_COLOR_TEXT,
-        0.70f,
-        "%s  |  %s  |  saves=%d",
-        id_display,
-        title_display,
-        game->save_count);
-
-    row_y += 28.0f;
+    ui_truncate_text(resolved_title, title_display, sizeof(title_display));
+    snprintf(detail, sizeof(detail), "%s  |  %d save card(s)", game->game_id, game->save_count);
+    ui_draw_shell_row(content_x, row_y, content_w, selected, title_display, detail);
+    row_y += 60.0f;
   }
 
   if ((start > 0) || (end < state->game_count)) {
-    ui_draw_text(760.0f, 374.0f, UI_COLOR_TEXT_MUTED, 0.64f, "%d-%d / %d", start + 1, end, state->game_count);
+    ui_draw_text(
+        content_x,
+        438.0f,
+        UI_COLOR_TEXT_MUTED,
+        0.64f,
+        "Showing %d-%d of %d",
+        start + 1,
+        end,
+        state->game_count);
   }
 }
 
 /*
- * Renders in-memory logs in a dedicated lower panel.
+ * Renders the lower status strip and recent activity lines.
  */
-static void ui_render_log_panel(void) {
-  ui_draw_panel(24.0f, 392.0f, 912.0f, 116.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
-  ui_draw_text(40.0f, 418.0f, UI_COLOR_TEXT, 0.80f, "Recent logs");
-
-  int total = app_log_history_count();
-  if (total <= 0) {
-    ui_draw_text(42.0f, 447.0f, UI_COLOR_TEXT_MUTED, 0.72f, "(no logs yet)");
+static void ui_render_log_panel(const UiAppState *state) {
+  if (state == NULL) {
     return;
   }
 
-  int start = total - UI_LOG_VISIBLE_LINES;
-  if (start < 0) {
-    start = 0;
-  }
+  char status[UI_STATUS_LINE_LEN];
+  ui_truncate_text(state->status_line, status, sizeof(status));
 
-  float y = 437.0f;
-  for (int i = start; i < total; ++i) {
-    const char *line = app_log_history_line(i);
-    if (!has_text(line)) {
-      continue;
+  ui_draw_text(24.0f, 484.0f, UI_COLOR_TEXT, 0.75f, "Status");
+  ui_draw_text(24.0f, 506.0f, UI_COLOR_STATUS, 0.67f, "%s", status);
+  ui_draw_text(430.0f, 484.0f, UI_COLOR_TEXT, 0.75f, "Recent activity");
+
+  int total = app_log_history_count();
+  if (total <= 0) {
+    ui_draw_text(430.0f, 506.0f, UI_COLOR_TEXT_MUTED, 0.64f, "(no logs yet)");
+  } else {
+    int start = total - 2;
+    if (start < 0) {
+      start = 0;
     }
 
-    char clipped[132];
-    ui_truncate_text(line, clipped, sizeof(clipped));
-    ui_draw_text(42.0f, y, UI_COLOR_TEXT_MUTED, 0.68f, "%s", clipped);
-    y += 18.0f;
+    float y = 506.0f;
+    for (int i = start; i < total; ++i) {
+      const char *line = app_log_history_line(i);
+      if (!has_text(line)) {
+        continue;
+      }
+
+      char clipped[92];
+      ui_truncate_text(line, clipped, sizeof(clipped));
+      ui_draw_text(430.0f, y, UI_COLOR_TEXT_MUTED, 0.60f, "%s", clipped);
+      y += 16.0f;
+    }
   }
 }
 
@@ -881,12 +1007,12 @@ static void ui_render_main_screen(UiAppState *state) {
   ui_render_header(state);
   ui_render_settings_panel(state);
   ui_render_games_panel(state);
-  ui_render_log_panel();
+  ui_render_log_panel(state);
   ui_draw_text(
-      36.0f,
+      24.0f,
       535.0f,
       UI_COLOR_TEXT_MUTED,
-      0.67f,
+      0.63f,
       "UP/DOWN: navigate   X: open/apply   SELECT: clear logs   START: exit");
   ui_end_frame();
 }
@@ -1099,6 +1225,7 @@ static void ui_present_report(const char *title, const UiReportBuffer *buffer) {
   int scroll = 0;
   unsigned int previous_buttons = 0U;
   for (;;) {
+    ui_pump_app_events();
     ui_render_report_screen(title, buffer, scroll);
 
     unsigned int pressed = ui_poll_pressed(&previous_buttons);
@@ -1351,7 +1478,12 @@ static int ui_edit_text_field(
   }
 
   g_common_dialog_active = 1;
-  while (sceImeDialogGetStatus() == SCE_COMMON_DIALOG_STATUS_RUNNING) {
+  for (;;) {
+    ui_pump_app_events();
+    if (sceImeDialogGetStatus() == SCE_COMMON_DIALOG_STATUS_FINISHED) {
+      break;
+    }
+
     if (state != NULL) {
       ui_render_main_screen(state);
     } else {
@@ -1360,12 +1492,12 @@ static int ui_edit_text_field(
     }
     sceKernelDelayThread(16 * 1000);
   }
-  g_common_dialog_active = 0;
 
   SceImeDialogResult ime_result;
   memset(&ime_result, 0, sizeof(ime_result));
   int result_status = sceImeDialogGetResult(&ime_result);
   sceImeDialogTerm();
+  g_common_dialog_active = 0;
 
   if (result_status < 0) {
     app_log_write(APP_LOG_LEVEL_ERROR, "ui", "sceImeDialogGetResult failed: 0x%08X", (unsigned int)result_status);
@@ -1603,6 +1735,7 @@ int main(int argc, char *argv[]) {
 
   unsigned int previous_buttons = 0U;
   for (;;) {
+    ui_pump_app_events();
     ui_clamp_selection(state);
     ui_update_game_scroll(state);
     ui_render_main_screen(state);
