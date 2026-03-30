@@ -146,11 +146,12 @@ Credential rule:
 Current in-app UI behavior:
 
 - The homebrew now provides a settings area for RomM `url`, `username`, and `password`.
-- Editing a field from the UI persists values to `ux0:data/romm-vita-sync/settings.ini`.
+- Editing `url`, `username`, and `password` opens the official PS Vita system keyboard (`SceImeDialog`).
+- Confirming keyboard input persists values to `ux0:data/romm-vita-sync/settings.ini`.
 - The main screen lists all detected local PS1 games.
 - Each detected game has an in-app sync action that runs synchronization for that game only.
 - A dedicated log area is visible in the UI to follow progress, executed steps, success messages, and error messages.
-- The current UI uses a native 2D Vita-style layout (panels, highlighted rows, modal reports) for a settings-like experience.
+- The current UI uses a native Vita Settings-style 2D layout (panels, highlighted rows, modal reports).
 
 The sync engine now treats server `409 Conflict` responses as synchronization conflicts (remote newer) rather than generic transfer errors, aligned with `romm-retroarch-sync` behavior.
 

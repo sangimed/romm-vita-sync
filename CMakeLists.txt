@@ -54,6 +54,8 @@ set_source_files_properties(
 
 target_link_libraries(${PROJECT_NAME}
   vita2d
+  SceAppUtil_stub
+  SceIme_stub
   SceLibKernel_stub
   SceAppMgr_stub
   SceCommonDialog_stub

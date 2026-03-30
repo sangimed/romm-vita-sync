@@ -1,5 +1,9 @@
 #include <psp2/ctrl.h>
+#include <psp2/ime_dialog.h>
+#include <psp2/apputil.h>
+#include <psp2/common_dialog.h>
 #include <psp2/kernel/threadmgr.h>
+#include <psp2/sysmodule.h>
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -38,20 +42,20 @@
 #define UI_EDITOR_BUFFER_LEN 512
 #define APP_RUNTIME_DATA_DIRECTORY "ux0:data/romm-vita-sync"
 
-#define UI_COLOR_BACKGROUND RGBA8(10, 16, 28, 255)
-#define UI_COLOR_BACKGROUND_ACCENT RGBA8(17, 28, 46, 255)
-#define UI_COLOR_PANEL RGBA8(25, 38, 60, 230)
-#define UI_COLOR_PANEL_BORDER RGBA8(64, 90, 126, 255)
-#define UI_COLOR_HEADER RGBA8(31, 58, 94, 255)
-#define UI_COLOR_HEADER_BORDER RGBA8(87, 132, 188, 255)
-#define UI_COLOR_TEXT RGBA8(246, 250, 255, 255)
-#define UI_COLOR_TEXT_MUTED RGBA8(171, 187, 210, 255)
-#define UI_COLOR_STATUS RGBA8(121, 173, 234, 255)
-#define UI_COLOR_SELECTION RGBA8(52, 105, 172, 255)
-#define UI_COLOR_SELECTION_BORDER RGBA8(138, 191, 255, 255)
-#define UI_COLOR_ROW RGBA8(29, 46, 72, 255)
-#define UI_COLOR_ROW_BORDER RGBA8(55, 80, 112, 255)
-#define UI_COLOR_WARNING RGBA8(222, 156, 93, 255)
+#define UI_COLOR_BACKGROUND RGBA8(214, 227, 242, 255)
+#define UI_COLOR_BACKGROUND_ACCENT RGBA8(198, 216, 235, 255)
+#define UI_COLOR_PANEL RGBA8(245, 250, 255, 244)
+#define UI_COLOR_PANEL_BORDER RGBA8(154, 176, 202, 255)
+#define UI_COLOR_HEADER RGBA8(58, 109, 178, 255)
+#define UI_COLOR_HEADER_BORDER RGBA8(104, 156, 224, 255)
+#define UI_COLOR_TEXT RGBA8(34, 50, 72, 255)
+#define UI_COLOR_TEXT_MUTED RGBA8(95, 120, 148, 255)
+#define UI_COLOR_STATUS RGBA8(39, 96, 165, 255)
+#define UI_COLOR_SELECTION RGBA8(85, 143, 207, 255)
+#define UI_COLOR_SELECTION_BORDER RGBA8(226, 241, 255, 255)
+#define UI_COLOR_ROW RGBA8(232, 240, 250, 255)
+#define UI_COLOR_ROW_BORDER RGBA8(180, 198, 219, 255)
+#define UI_COLOR_WARNING RGBA8(178, 107, 45, 255)
 
 typedef struct UiGameEntry {
   char key[ROMM_GAME_ID_LEN];
@@ -86,6 +90,9 @@ typedef struct UiAppState {
 
 static UiAppState g_app_state;
 static vita2d_pgf *g_ui_font = NULL;
+static int g_common_dialog_active = 0;
+static int g_dialog_runtime_initialized = 0;
+static int g_ime_module_loaded = 0;
 
 /*
  * Returns non-zero when a string is non-null and non-empty.
@@ -193,6 +200,108 @@ static void ui_mask_secret(const char *secret, char *out_masked, size_t out_size
 
   memset(out_masked, '*', length);
   out_masked[length] = '\0';
+}
+
+/*
+ * Converts an ASCII/UTF-8 C string to a UTF-16 buffer for Vita IME APIs.
+ * Non-ASCII bytes are mapped to '?' because config fields are ASCII-oriented.
+ */
+static void ui_to_wchar16(const char *source, SceWChar16 *out_text, size_t out_len) {
+  if ((out_text == NULL) || (out_len == 0U)) {
+    return;
+  }
+
+  out_text[0] = 0;
+  if (!has_text(source)) {
+    return;
+  }
+
+  size_t write = 0U;
+  for (size_t i = 0U; source[i] != '\0' && (write + 1U) < out_len; ++i) {
+    unsigned char c = (unsigned char)source[i];
+    out_text[write++] = (c <= 0x7FU) ? (SceWChar16)c : (SceWChar16)'?';
+  }
+  out_text[write] = 0;
+}
+
+/*
+ * Converts Vita IME UTF-16 output back into app ASCII/UTF-8 config buffers.
+ * Characters outside printable ASCII are replaced with '?'.
+ */
+static void ui_from_wchar16(const SceWChar16 *source, char *out_text, size_t out_len) {
+  if ((out_text == NULL) || (out_len == 0U)) {
+    return;
+  }
+
+  out_text[0] = '\0';
+  if (source == NULL) {
+    return;
+  }
+
+  size_t write = 0U;
+  for (size_t i = 0U; source[i] != 0 && (write + 1U) < out_len; ++i) {
+    unsigned int codepoint = (unsigned int)source[i];
+    out_text[write++] = (codepoint <= 0x7FU) ? (char)codepoint : '?';
+  }
+  out_text[write] = '\0';
+}
+
+/*
+ * Initializes AppUtil/CommonDialog/IME modules required for system keyboard use.
+ */
+static int ui_dialog_runtime_init(void) {
+  if (g_dialog_runtime_initialized) {
+    return 0;
+  }
+
+  SceAppUtilInitParam app_util_init;
+  SceAppUtilBootParam app_util_boot;
+  memset(&app_util_init, 0, sizeof(app_util_init));
+  memset(&app_util_boot, 0, sizeof(app_util_boot));
+
+  int status = sceAppUtilInit(&app_util_init, &app_util_boot);
+  if (status < 0) {
+    app_log_write(APP_LOG_LEVEL_ERROR, "ui", "sceAppUtilInit failed: 0x%08X", (unsigned int)status);
+    return status;
+  }
+
+  SceCommonDialogConfigParam dialog_config;
+  sceCommonDialogConfigParamInit(&dialog_config);
+  status = sceCommonDialogSetConfigParam(&dialog_config);
+  if (status < 0) {
+    app_log_write(APP_LOG_LEVEL_ERROR, "ui", "sceCommonDialogSetConfigParam failed: 0x%08X", (unsigned int)status);
+    sceAppUtilShutdown();
+    return status;
+  }
+
+  int ime_was_loaded = (sceSysmoduleIsLoaded(SCE_SYSMODULE_IME) >= 0);
+  status = sceSysmoduleLoadModule(SCE_SYSMODULE_IME);
+  if (status < 0) {
+    app_log_write(APP_LOG_LEVEL_ERROR, "ui", "sceSysmoduleLoadModule(IME) failed: 0x%08X", (unsigned int)status);
+    sceAppUtilShutdown();
+    return status;
+  }
+
+  g_ime_module_loaded = !ime_was_loaded;
+  g_dialog_runtime_initialized = 1;
+  return 0;
+}
+
+/*
+ * Releases AppUtil/CommonDialog/IME runtime resources before process exit.
+ */
+static void ui_dialog_runtime_term(void) {
+  if (!g_dialog_runtime_initialized) {
+    return;
+  }
+
+  if (g_ime_module_loaded) {
+    sceSysmoduleUnloadModule(SCE_SYSMODULE_IME);
+    g_ime_module_loaded = 0;
+  }
+
+  sceAppUtilShutdown();
+  g_dialog_runtime_initialized = 0;
 }
 
 /*
@@ -538,6 +647,9 @@ static void ui_begin_frame(void) {
  */
 static void ui_end_frame(void) {
   vita2d_end_drawing();
+  if (g_common_dialog_active) {
+    vita2d_common_dialog_update();
+  }
   vita2d_swap_buffers();
 }
 
@@ -645,25 +757,31 @@ static void ui_render_settings_panel(const UiAppState *state) {
   ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_SERVER_URL);
   ui_draw_text(46.0f, row_y + 17.0f, UI_COLOR_TEXT_MUTED, 0.68f, "Server URL");
   ui_draw_text(46.0f, row_y + 34.0f, UI_COLOR_TEXT, 0.74f, "%s", url_display);
+  ui_draw_text(276.0f, row_y + 28.0f, UI_COLOR_TEXT_MUTED, 0.78f, ">");
 
   row_y += 44.0f;
   ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_USERNAME);
   ui_draw_text(46.0f, row_y + 17.0f, UI_COLOR_TEXT_MUTED, 0.68f, "Username");
   ui_draw_text(46.0f, row_y + 34.0f, UI_COLOR_TEXT, 0.74f, "%s", user_display);
+  ui_draw_text(276.0f, row_y + 28.0f, UI_COLOR_TEXT_MUTED, 0.78f, ">");
 
   row_y += 44.0f;
   ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_PASSWORD);
   ui_draw_text(46.0f, row_y + 17.0f, UI_COLOR_TEXT_MUTED, 0.68f, "Password");
   ui_draw_text(46.0f, row_y + 34.0f, UI_COLOR_TEXT, 0.74f, "%s", pass_display);
+  ui_draw_text(276.0f, row_y + 28.0f, UI_COLOR_TEXT_MUTED, 0.78f, ">");
 
   row_y += 44.0f;
   ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_SAVE_SETTINGS);
   ui_draw_text(46.0f, row_y + 27.0f, UI_COLOR_TEXT, 0.74f, "Save settings.ini");
+  ui_draw_text(276.0f, row_y + 28.0f, UI_COLOR_TEXT_MUTED, 0.78f, ">");
 
   row_y += 44.0f;
   ui_draw_row(36.0f, row_y, 262.0f, row_h, state->selected_index == UI_SELECT_RESCAN);
   ui_draw_text(46.0f, row_y + 27.0f, UI_COLOR_TEXT, 0.74f, "Rescan local games");
+  ui_draw_text(276.0f, row_y + 28.0f, UI_COLOR_TEXT_MUTED, 0.78f, ">");
 
+  ui_draw_text(40.0f, 357.0f, UI_COLOR_TEXT_MUTED, 0.62f, "X on a field opens the official PS Vita keyboard.");
   ui_draw_text(40.0f, 374.0f, UI_COLOR_WARNING, 0.62f, "Credentials are stored locally in plain text.");
 }
 
@@ -769,7 +887,7 @@ static void ui_render_main_screen(UiAppState *state) {
       535.0f,
       UI_COLOR_TEXT_MUTED,
       0.67f,
-      "UP/DOWN: navigate   X: select/edit   SELECT: clear logs   START: exit");
+      "UP/DOWN: navigate   X: open/apply   SELECT: clear logs   START: exit");
   ui_end_frame();
 }
 
@@ -1165,198 +1283,106 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
 }
 
 /*
- * Returns one printable representation for editor candidate character display.
- */
-static char ui_display_char(char value) {
-  if (value == ' ') {
-    return '_';
-  }
-  if (value == '\0') {
-    return '?';
-  }
-  return value;
-}
-
-/*
- * Draws a horizontal character chooser centered around the selected slot.
- */
-static void ui_draw_charset_window(const char *charset, int selected_index, float x, float y, int visible_count) {
-  if (!has_text(charset) || (visible_count <= 0)) {
-    return;
-  }
-
-  int length = (int)strlen(charset);
-  if (length <= 0) {
-    return;
-  }
-
-  if (selected_index < 0) {
-    selected_index = 0;
-  }
-  if (selected_index >= length) {
-    selected_index = length - 1;
-  }
-
-  int from = selected_index - (visible_count / 2);
-  if (from < 0) {
-    from = 0;
-  }
-  int to = from + visible_count;
-  if (to > length) {
-    to = length;
-    from = to - visible_count;
-    if (from < 0) {
-      from = 0;
-    }
-  }
-
-  const float cell_w = 42.0f;
-  const float cell_h = 42.0f;
-  for (int i = from; i < to; ++i) {
-    float cell_x = x + ((float)(i - from) * cell_w);
-    int selected = (i == selected_index);
-    ui_draw_row(cell_x, y, cell_w - 4.0f, cell_h, selected);
-
-    char symbol[2];
-    symbol[0] = ui_display_char(charset[i]);
-    symbol[1] = '\0';
-    ui_draw_text(cell_x + 12.0f, y + 27.0f, UI_COLOR_TEXT, 0.95f, "%s", symbol);
-  }
-}
-
-/*
- * Opens a controller-driven text editor and writes result when confirmed.
+ * Opens the official PS Vita IME keyboard for one text field.
  */
 static int ui_edit_text_field(
+    UiAppState *state,
     const char *field_name,
     char *value,
     size_t value_size,
-    int mask_value_in_preview) {
+    unsigned int ime_type,
+    unsigned int textbox_mode) {
   if (!has_text(field_name) || (value == NULL) || (value_size == 0U) || (value_size > UI_EDITOR_BUFFER_LEN)) {
+    return -1;
+  }
+
+  if (!g_dialog_runtime_initialized) {
+    if (state != NULL) {
+      ui_set_status(state, "System keyboard is unavailable");
+    }
+    app_log_write(APP_LOG_LEVEL_ERROR, "ui", "IME edit requested before dialog runtime init");
+    return -1;
+  }
+
+  size_t max_chars = value_size - 1U;
+  if (max_chars > (size_t)SCE_IME_DIALOG_MAX_TEXT_LENGTH) {
+    max_chars = (size_t)SCE_IME_DIALOG_MAX_TEXT_LENGTH;
+  }
+  if (max_chars >= UI_EDITOR_BUFFER_LEN) {
+    max_chars = UI_EDITOR_BUFFER_LEN - 1U;
+  }
+
+  SceWChar16 title_utf16[SCE_IME_DIALOG_MAX_TITLE_LENGTH + 1];
+  SceWChar16 initial_utf16[UI_EDITOR_BUFFER_LEN];
+  SceWChar16 input_utf16[UI_EDITOR_BUFFER_LEN];
+  ui_to_wchar16(field_name, title_utf16, sizeof(title_utf16) / sizeof(title_utf16[0]));
+  ui_to_wchar16(value, initial_utf16, sizeof(initial_utf16) / sizeof(initial_utf16[0]));
+  ui_to_wchar16(value, input_utf16, sizeof(input_utf16) / sizeof(input_utf16[0]));
+
+  SceImeDialogParam ime_param;
+  sceImeDialogParamInit(&ime_param);
+  ime_param.supportedLanguages =
+      SCE_IME_LANGUAGE_ENGLISH |
+      SCE_IME_LANGUAGE_ENGLISH_GB |
+      SCE_IME_LANGUAGE_FRENCH |
+      SCE_IME_LANGUAGE_GERMAN |
+      SCE_IME_LANGUAGE_ITALIAN |
+      SCE_IME_LANGUAGE_SPANISH |
+      SCE_IME_LANGUAGE_PORTUGUESE |
+      SCE_IME_LANGUAGE_PORTUGUESE_BR;
+  ime_param.languagesForced = SCE_FALSE;
+  ime_param.type = ime_type;
+  ime_param.option = SCE_IME_OPTION_NO_ASSISTANCE;
+  ime_param.dialogMode = SCE_IME_DIALOG_DIALOG_MODE_WITH_CANCEL;
+  ime_param.textBoxMode = textbox_mode;
+  ime_param.enterLabel = (ime_type == SCE_IME_TYPE_URL) ? SCE_IME_ENTER_LABEL_GO : SCE_IME_ENTER_LABEL_DEFAULT;
+  ime_param.title = title_utf16;
+  ime_param.maxTextLength = (SceUInt32)max_chars;
+  ime_param.initialText = initial_utf16;
+  ime_param.inputTextBuffer = input_utf16;
+
+  int init_status = sceImeDialogInit(&ime_param);
+  if (init_status < 0) {
+    if (state != NULL) {
+      ui_set_status(state, "Cannot open system keyboard: 0x%08X", (unsigned int)init_status);
+    }
+    app_log_write(APP_LOG_LEVEL_ERROR, "ui", "sceImeDialogInit failed: 0x%08X", (unsigned int)init_status);
+    return -1;
+  }
+
+  g_common_dialog_active = 1;
+  while (sceImeDialogGetStatus() == SCE_COMMON_DIALOG_STATUS_RUNNING) {
+    if (state != NULL) {
+      ui_render_main_screen(state);
+    } else {
+      ui_begin_frame();
+      ui_end_frame();
+    }
+    sceKernelDelayThread(16 * 1000);
+  }
+  g_common_dialog_active = 0;
+
+  SceImeDialogResult ime_result;
+  memset(&ime_result, 0, sizeof(ime_result));
+  int result_status = sceImeDialogGetResult(&ime_result);
+  sceImeDialogTerm();
+
+  if (result_status < 0) {
+    app_log_write(APP_LOG_LEVEL_ERROR, "ui", "sceImeDialogGetResult failed: 0x%08X", (unsigned int)result_status);
+    if (state != NULL) {
+      ui_set_status(state, "System keyboard result failed: 0x%08X", (unsigned int)result_status);
+    }
+    return -1;
+  }
+
+  if (ime_result.button != SCE_IME_DIALOG_BUTTON_ENTER) {
     return 0;
   }
 
-  static const char *kCharsets[] = {
-      "abcdefghijklmnopqrstuvwxyz0123456789-._:/@",
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._:/@",
-      "0123456789-._:/@!#$%&*+?=,;()[]{} "};
-  static const char *kCharsetNames[] = {
-      "lowercase",
-      "uppercase",
-      "symbols"};
-
-  char draft[UI_EDITOR_BUFFER_LEN];
-  snprintf(draft, sizeof(draft), "%s", value);
-
-  int charset_index = 0;
-  int selected_char_index = 0;
-  char message[96];
-  message[0] = '\0';
-
-  unsigned int previous_buttons = 0U;
-  for (;;) {
-    const char *charset = kCharsets[charset_index];
-    int charset_length = (int)strlen(charset);
-    if (charset_length <= 0) {
-      return 0;
-    }
-    if (selected_char_index >= charset_length) {
-      selected_char_index = charset_length - 1;
-    }
-    if (selected_char_index < 0) {
-      selected_char_index = 0;
-    }
-
-    ui_begin_frame();
-    ui_draw_panel(72.0f, 62.0f, 816.0f, 420.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
-    ui_draw_text(98.0f, 98.0f, UI_COLOR_TEXT, 0.95f, "Edit %s", field_name);
-
-    char preview[104];
-    if (mask_value_in_preview) {
-      ui_mask_secret(draft, preview, sizeof(preview));
-    } else {
-      ui_truncate_text(draft, preview, sizeof(preview));
-    }
-
-    ui_draw_text(98.0f, 130.0f, UI_COLOR_TEXT_MUTED, 0.75f, "Current value");
-    ui_draw_row(96.0f, 138.0f, 768.0f, 42.0f, 0);
-    ui_draw_text(106.0f, 165.0f, UI_COLOR_TEXT, 0.78f, "%s", preview);
-
-    ui_draw_text(98.0f, 204.0f, UI_COLOR_TEXT_MUTED, 0.72f, "Charset: %s", kCharsetNames[charset_index]);
-    ui_draw_charset_window(charset, selected_char_index, 96.0f, 216.0f, 17);
-
-    ui_draw_text(98.0f, 300.0f, UI_COLOR_TEXT_MUTED, 0.68f, "LEFT/RIGHT: char   UP/DOWN: charset");
-    ui_draw_text(98.0f, 322.0f, UI_COLOR_TEXT_MUTED, 0.68f, "X: add   TRIANGLE: backspace   SELECT: clear");
-    ui_draw_text(98.0f, 344.0f, UI_COLOR_TEXT_MUTED, 0.68f, "START: save   O: cancel");
-
-    if (has_text(message)) {
-      ui_draw_text(98.0f, 380.0f, UI_COLOR_STATUS, 0.72f, "%s", message);
-    }
-
-    ui_end_frame();
-
-    unsigned int pressed = ui_poll_pressed(&previous_buttons);
-    if (pressed & SCE_CTRL_LEFT) {
-      selected_char_index--;
-      if (selected_char_index < 0) {
-        selected_char_index = charset_length - 1;
-      }
-      message[0] = '\0';
-    }
-    if (pressed & SCE_CTRL_RIGHT) {
-      selected_char_index++;
-      if (selected_char_index >= charset_length) {
-        selected_char_index = 0;
-      }
-      message[0] = '\0';
-    }
-    if (pressed & SCE_CTRL_UP) {
-      charset_index--;
-      if (charset_index < 0) {
-        charset_index = (int)(sizeof(kCharsets) / sizeof(kCharsets[0])) - 1;
-      }
-      selected_char_index = 0;
-      message[0] = '\0';
-    }
-    if (pressed & SCE_CTRL_DOWN) {
-      charset_index++;
-      if (charset_index >= (int)(sizeof(kCharsets) / sizeof(kCharsets[0]))) {
-        charset_index = 0;
-      }
-      selected_char_index = 0;
-      message[0] = '\0';
-    }
-    if (pressed & SCE_CTRL_CROSS) {
-      size_t current_length = strlen(draft);
-      if ((current_length + 1U) < value_size) {
-        draft[current_length] = charset[selected_char_index];
-        draft[current_length + 1U] = '\0';
-        message[0] = '\0';
-      } else {
-        snprintf(message, sizeof(message), "Field is full (max %u chars)", (unsigned int)(value_size - 1U));
-      }
-    }
-    if (pressed & SCE_CTRL_TRIANGLE) {
-      size_t current_length = strlen(draft);
-      if (current_length > 0U) {
-        draft[current_length - 1U] = '\0';
-      }
-      message[0] = '\0';
-    }
-    if (pressed & SCE_CTRL_SELECT) {
-      draft[0] = '\0';
-      snprintf(message, sizeof(message), "Value cleared");
-    }
-    if (pressed & SCE_CTRL_START) {
-      snprintf(value, value_size, "%s", draft);
-      return 1;
-    }
-    if (pressed & SCE_CTRL_CIRCLE) {
-      return 0;
-    }
-
-    sceKernelDelayThread(16 * 1000);
-  }
+  char edited[UI_EDITOR_BUFFER_LEN];
+  ui_from_wchar16(input_utf16, edited, sizeof(edited));
+  snprintf(value, value_size, "%s", edited);
+  return 1;
 }
 
 /*
@@ -1367,7 +1393,8 @@ static void ui_edit_config_field(
     const char *label,
     char *field,
     size_t field_size,
-    int mask_preview) {
+    unsigned int ime_type,
+    int password_mode) {
   if ((state == NULL) || !has_text(label) || (field == NULL) || (field_size == 0U)) {
     return;
   }
@@ -1375,9 +1402,15 @@ static void ui_edit_config_field(
   char previous_value[UI_EDITOR_BUFFER_LEN];
   snprintf(previous_value, sizeof(previous_value), "%s", field);
 
-  int edited = ui_edit_text_field(label, field, field_size, mask_preview);
-  if (!edited) {
+  unsigned int textbox_mode = password_mode
+                                  ? SCE_IME_DIALOG_TEXTBOX_MODE_PASSWORD
+                                  : SCE_IME_DIALOG_TEXTBOX_MODE_DEFAULT;
+  int edited = ui_edit_text_field(state, label, field, field_size, ime_type, textbox_mode);
+  if (edited == 0) {
     ui_set_status(state, "%s edit canceled", label);
+    return;
+  }
+  if (edited < 0) {
     return;
   }
 
@@ -1405,6 +1438,7 @@ static void ui_activate_selection(UiAppState *state) {
         "Server URL",
         state->config.romm_url,
         sizeof(state->config.romm_url),
+        SCE_IME_TYPE_URL,
         0);
     return;
   }
@@ -1415,6 +1449,7 @@ static void ui_activate_selection(UiAppState *state) {
         "Username",
         state->config.romm_username,
         sizeof(state->config.romm_username),
+        SCE_IME_TYPE_BASIC_LATIN,
         0);
     return;
   }
@@ -1425,6 +1460,7 @@ static void ui_activate_selection(UiAppState *state) {
         "Password",
         state->config.romm_password,
         sizeof(state->config.romm_password),
+        SCE_IME_TYPE_BASIC_LATIN,
         1);
     return;
   }
@@ -1550,11 +1586,15 @@ int main(int argc, char *argv[]) {
 
   sceCtrlSetSamplingMode(SCE_CTRL_MODE_DIGITAL);
   app_log_clear_history();
+  if (ui_dialog_runtime_init() < 0) {
+    app_log_write(APP_LOG_LEVEL_WARN, "main", "system keyboard runtime unavailable; text editing will be disabled");
+  }
 
   if (ui_renderer_init() < 0) {
     psvDebugScreenInit();
     psvDebugScreenPrintf("Failed to initialize vita2d renderer.\n");
     sceKernelDelayThread(900 * 1000);
+    ui_dialog_runtime_term();
     return 1;
   }
 
@@ -1599,6 +1639,7 @@ int main(int argc, char *argv[]) {
 
   ui_render_exit_screen();
   sceKernelDelayThread(400 * 1000);
+  ui_dialog_runtime_term();
   ui_renderer_term();
   return 0;
 }
