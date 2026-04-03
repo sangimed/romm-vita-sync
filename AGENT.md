@@ -1,69 +1,85 @@
-# Function Documentation Policy
+# Documentation Policy
 
-Every function must include a clear and precise comment describing its purpose and behavior.
+Documentation is part of the implementation and must stay consistent with the codebase at all times.
 
-The objective is not to add verbose documentation, but to make each function immediately understandable for a future maintainer.
+Both function-level comments and project-level Markdown documentation must be updated whenever behavior changes.
 
-## Mandatory rules
+---
 
-Each function comment must explain, when relevant:
+# Function Documentation Rules
+
+Every non-trivial function must include a clear comment explaining:
 
 - what the function does
-- why it exists if the intent is not obvious
-- the meaning of important inputs
-- the returned value
-- important side effects
-- important safety constraints
-- assumptions or invariants relied upon by the function
+- why it exists (if not obvious)
+- important inputs
+- return value
+- side effects
+- safety constraints
+- assumptions or invariants
 
-## Style expectations
-
-Function comments must be:
+Comments must be:
 
 - precise
 - concise
-- easy to read
 - written in clear English
-- focused on behavior, not line-by-line implementation details
+- focused on behavior (not implementation details)
 
 Avoid:
 
-- redundant comments that only restate the function name
-- overly long comments
-- vague comments such as "Handle sync" or "Process data"
-- outdated comments that no longer match the code
+- redundant comments
+- vague descriptions
+- outdated documentation
 
-## Update policy
+If a function changes behavior, its comment must be updated in the same change.
 
-Function comments must be reviewed whenever a function is modified.
+---
 
-If the behavior, purpose, inputs, outputs, side effects, or constraints change, the comment must be updated in the same change.
+# Markdown Documentation Update Policy
 
-It is not acceptable to modify a function and leave an inaccurate or incomplete comment behind.
+Markdown documentation must always reflect the current implementation.
 
-If a modification does not change the documented behavior, the existing comment may remain unchanged.
+If a change modifies an already documented concept, the documentation must be updated in the same commit.
 
-## Minimum expectation
+This includes changes to:
 
-No non-trivial function should be left without a meaningful comment.
+- synchronization logic
+- upload vs download decisions
+- conflict resolution rules
+- save formats (VMP, SRM, MCD, etc.)
+- backup strategy
+- slot handling
+- configuration structure
+- filesystem layout
+- UI workflow
+- CLI behavior
+- RomM integration
 
-Small obvious helpers may use shorter comments, but any function related to synchronization, conversion, matching, backup, conflict resolution, or RomM communication must be documented clearly.
+Outdated documentation is not acceptable.
 
-## Synchronization-specific requirement
+---
 
-For functions related to save synchronization, comments must explicitly clarify the most important safety and decision rules, especially when the function:
+# Synchronization-Specific Requirement
 
-- decides whether to upload or download
-- compares local and remote save state
-- handles conflict resolution
-- manipulates VMP or SRM data
-- performs restore or overwrite-related operations
-- creates or uses backups
+Functions related to save synchronization must explicitly document:
 
-## Contributor rule
+- upload vs download decisions
+- comparison logic between local and remote saves
+- conflict resolution behavior
+- overwrite or restore operations
+- backup creation or usage
+- VMP / SRM manipulation rules
 
-When adding or editing code:
+These behaviors must never remain implicit.
 
-1. write or update the function comment first if the function behavior is not trivial
-2. keep the comment aligned with the implementation
-3. prefer one accurate comment over multiple vague comments
+---
+
+# Contributor Rules
+
+When adding or modifying code:
+
+1. write or update function comments if behavior is non-trivial
+2. keep comments aligned with implementation
+3. update Markdown documentation when a documented concept changes
+4. never leave outdated documentation behind
+5. prioritize clarity over verbosity

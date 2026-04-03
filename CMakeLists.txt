@@ -38,6 +38,7 @@ add_executable(${PROJECT_NAME}
   src/sync_engine.c
   src/sync_state_store.c
   src/sync_types.c
+  src/ui_dialogs.c
   src/ui_inventory.c
   src/vmp_signer.c
   src/vmp_srm_converter.c

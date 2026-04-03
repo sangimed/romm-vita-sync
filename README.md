@@ -95,15 +95,15 @@ This section summarizes the practical setup for both end users and developers.
 
 1. Launch the app on Vita
 2. The app automatically creates `ux0:data/romm-vita-sync/`
-3. Open the in-app settings area and enter RomM `url`, `username`, `password`
-4. Use the in-app save action to persist credentials into `settings.ini`
+3. Select the connection fields and enter RomM `url`, `username`, and `password`
+4. Confirm each field saves immediately after closing the system keyboard
 
 ### First Sync
 
 1. Ensure Vita can reach the RomM URL
 2. In the game list, choose a detected PS1 game
-3. Trigger `[Sync]` for that game
-4. Follow progress and errors in the on-screen log area
+3. Return to `Synchronize Selected Game` and press `X`
+4. Follow progress and errors in the synchronization report flow and footer status line
 
 Notes:
 
@@ -145,13 +145,13 @@ Credential rule:
 
 Current in-app UI behavior:
 
-- The homebrew now provides a settings area for RomM `url`, `username`, and `password`.
-- Editing `url`, `username`, and `password` opens the official PS Vita system keyboard (`SceImeDialog`).
-- Confirming keyboard input persists values to `ux0:data/romm-vita-sync/settings.ini`.
-- The main screen lists all detected local PS1 games.
-- Each detected game has an in-app sync action that runs synchronization for that game only.
-- A dedicated log area is visible in the UI to follow progress, executed steps, success messages, and error messages.
-- The current UI uses a native Vita Settings-style 2D layout (panels, highlighted rows, modal reports).
+- The home screen exposes dedicated fields for the RomM `url`, `username`, and `password`.
+- Editing those fields opens the official PS Vita system keyboard (`SceImeDialog`).
+- Confirming keyboard input persists values immediately to `ux0:data/romm-vita-sync/settings.ini`.
+- The main screen keeps a visible primary `Synchronize Selected Game` action and a secondary `Rescan Local Saves` action.
+- The current sync target is selected from the detected PS1 game list and remains highlighted even when focus moves back to the sync button.
+- Status feedback stays visible in the footer, while full synchronization details still open in modal report screens.
+- The current UI uses a sober single-screen Vita layout with compact panels, controller navigation, and sharper text placement.
 
 The sync engine now treats server `409 Conflict` responses as synchronization conflicts (remote newer) rather than generic transfer errors, aligned with `romm-retroarch-sync` behavior.
 
@@ -178,8 +178,8 @@ Coverage:
 
 1. Launch the app on Vita.
 2. Confirm the app creates `ux0:data/romm-vita-sync/`.
-3. Open the in-app settings area and enter RomM `url`, `username`, `password`.
-4. Press the in-app save action to persist credentials.
+3. Select each connection field and enter the RomM `url`, `username`, and `password`.
+4. Confirm that each field saves immediately after closing the system keyboard.
 
 ### 3. Network And Auth Preconditions
 
@@ -189,9 +189,10 @@ Coverage:
 
 ### 4. Sync Validation
 
-1. Return to the game list, select a detected PS1 game, then trigger `[Sync]`.
-2. Confirm progress/steps/success/errors are visible in the on-screen log area.
-3. On first successful authenticated sync, confirm `device_id` is persisted in `settings.ini`.
+1. Move through the detected PS1 game list to choose the current sync target.
+2. Return to `Synchronize Selected Game` and press `X`.
+3. Confirm progress/steps/success/errors are visible in the synchronization report flow and reflected in the footer status line.
+4. On first successful authenticated sync, confirm `device_id` is persisted in `settings.ini`.
 
 ### 5. Persistence Validation
 
