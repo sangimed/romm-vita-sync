@@ -1,0 +1,34 @@
+; romm-vita-sync configuration example
+; Copy this file to: ux0:data/romm-vita-sync/settings.ini
+; SECURITY NOTICE: url/username/password/token are currently stored as plain text (no encryption).
+
+[RomM]
+; Base URL of your RomM instance (without trailing slash preferred)
+url = https://romm.example.com
+; Use either token OR username/password
+token =
+username =
+password =
+verify_tls = true
+timeout_seconds = 30
+
+[Device]
+; Keep this stable once assigned to avoid creating duplicate device records.
+; If empty, romm-vita-sync will register the device and persist this value.
+device_id =
+device_name = PS Vita
+device_platform = PSVita
+client = romm-vita-sync
+client_version = 0.1
+
+[Sync]
+state_store_path = ux0:data/romm-vita-sync/sync_state.tsv
+backup_directory = ux0:data/romm-vita-sync/backups
+; Keep true for safe first runs, set false to execute transfers
+dry_run = true
+
+[Log]
+; error | warn | info | debug
+level = debug
+; Scanner logs can be very chatty, keep disabled unless needed
+scan_verbose = false

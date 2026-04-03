@@ -20,21 +20,63 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -O2")
 include_directories(
   common
   src
+  tools/vita-mcr2vmp/include
 )
 
 add_executable(${PROJECT_NAME}
+  src/app_config.c
+  src/app_log.c
   src/main.c
+  src/backup_manager.c
+  src/conflict_resolver.c
+  src/game_matcher.c
+  src/romm_client.c
+  src/romm_http_client.c
+  src/scan_to_sync_adapter.c
   src/save_scanner.c
   src/sfo_parser.c
+  src/sync_engine.c
+  src/sync_state_store.c
+  src/sync_types.c
+  src/ui_dialogs.c
   src/ui_inventory.c
+  src/vmp_signer.c
   src/vmp_srm_converter.c
+  tools/vita-mcr2vmp/src/aes.c
+  tools/vita-mcr2vmp/src/sha1.c
   common/debugScreen.c
 )
 
+set_source_files_properties(
+  tools/vita-mcr2vmp/src/sha1.c
+  PROPERTIES
+    COMPILE_DEFINITIONS "LITTLE_ENDIAN=1234;BIG_ENDIAN=4321;BYTE_ORDER=LITTLE_ENDIAN"
+)
+
 target_link_libraries(${PROJECT_NAME}
+  vita2d
+  SceAppUtil_stub
+  SceIme_stub
   SceLibKernel_stub
+  SceAppMgr_stub
+  SceCommonDialog_stub
   SceDisplay_stub
+  SceCtrl_stub
   SceIofilemgr_stub
+  SceSysmodule_stub
+  SceGxm_stub
+  ScePgf_stub
+  SceKernelDmacMgr_stub
+  SceShaccCg_stub
+  SceNet_stub
+  SceNetCtl_stub
+  SceHttp_stub
+  SceSsl_stub
+  m
+  z
+  jpeg
+  png
+  freetype
 )
 
 vita_create_self(${PROJECT_NAME}.self ${PROJECT_NAME}

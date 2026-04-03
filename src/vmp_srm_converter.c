@@ -5,6 +5,9 @@
 
 #define ROMM_COPY_BUFFER_SIZE 4096U
 
+/*
+ * Converts one ASCII character to lowercase for case-insensitive comparisons.
+ */
 static char ascii_lower(char value) {
   if ((value >= 'A') && (value <= 'Z')) {
     return (char)(value - 'A' + 'a');
@@ -13,6 +16,9 @@ static char ascii_lower(char value) {
   return value;
 }
 
+/*
+ * Returns file size while preserving file position at the beginning.
+ */
 static int get_file_size(FILE *fp, long *out_size) {
   if ((fp == NULL) || (out_size == NULL)) {
     return ROMM_VMP_SRM_ERR_INVALID_ARGUMENT;
@@ -35,6 +41,9 @@ static int get_file_size(FILE *fp, long *out_size) {
   return ROMM_VMP_SRM_OK;
 }
 
+/*
+ * Copies an exact number of bytes from input stream to output stream.
+ */
 static int copy_payload(FILE *input, FILE *output, size_t bytes_to_copy) {
   if ((input == NULL) || (output == NULL)) {
     return ROMM_VMP_SRM_ERR_INVALID_ARGUMENT;
@@ -65,6 +74,9 @@ static int copy_payload(FILE *input, FILE *output, size_t bytes_to_copy) {
   return ROMM_VMP_SRM_OK;
 }
 
+/*
+ * Writes a fixed memory buffer to a stream.
+ */
 static int write_buffer(FILE *output, const unsigned char *buffer, size_t bytes_to_write) {
   if ((output == NULL) || (buffer == NULL)) {
     return ROMM_VMP_SRM_ERR_INVALID_ARGUMENT;
@@ -78,6 +90,9 @@ static int write_buffer(FILE *output, const unsigned char *buffer, size_t bytes_
   return ROMM_VMP_SRM_OK;
 }
 
+/*
+ * Case-insensitive extension check helper.
+ */
 static int path_has_extension(const char *path, const char *extension) {
   if ((path == NULL) || (extension == NULL)) {
     return 0;
@@ -100,6 +115,9 @@ static int path_has_extension(const char *path, const char *extension) {
   return 1;
 }
 
+/*
+ * Builds a default output path by swapping or appending file extensions.
+ */
 static int build_default_output_path(
     const char *input_path,
     const char *from_extension,
@@ -137,6 +155,9 @@ static int build_default_output_path(
   return ROMM_VMP_SRM_OK;
 }
 
+/*
+ * Maps converter status codes to user-facing strings.
+ */
 const char *vmp_srm_status_str(int status) {
   switch (status) {
     case ROMM_VMP_SRM_OK:
@@ -160,14 +181,23 @@ const char *vmp_srm_status_str(int status) {
   }
 }
 
+/*
+ * Builds default SRM output path from a VMP input path.
+ */
 int vmp_build_default_srm_path(const char *vmp_path, char *out_path, size_t out_path_size) {
   return build_default_output_path(vmp_path, ".vmp", ".srm", out_path, out_path_size);
 }
 
+/*
+ * Builds default VMP output path from a SRM input path.
+ */
 int srm_build_default_vmp_path(const char *srm_path, char *out_path, size_t out_path_size) {
   return build_default_output_path(srm_path, ".srm", ".vmp", out_path, out_path_size);
 }
 
+/*
+ * Converts a standard 131200-byte VMP container into a 131072-byte SRM payload.
+ */
 int vmp_to_srm_file(const char *vmp_path, const char *srm_path) {
   if ((vmp_path == NULL) || (srm_path == NULL) || (vmp_path[0] == '\0') || (srm_path[0] == '\0')) {
     return ROMM_VMP_SRM_ERR_INVALID_ARGUMENT;
@@ -230,13 +260,16 @@ int vmp_to_srm_file(const char *vmp_path, const char *srm_path) {
   return status;
 }
 
+/*
+ * Rebuilds a VMP file from SRM payload using header bytes from a trusted template.
+ */
 int srm_to_vmp_file(const char *srm_path, const char *template_vmp_path, const char *vmp_path) {
   if ((srm_path == NULL) || (template_vmp_path == NULL) || (vmp_path == NULL) ||
       (srm_path[0] == '\0') || (template_vmp_path[0] == '\0') || (vmp_path[0] == '\0')) {
     return ROMM_VMP_SRM_ERR_INVALID_ARGUMENT;
   }
 
-  if ((strcmp(srm_path, vmp_path) == 0) || (strcmp(template_vmp_path, vmp_path) == 0)) {
+  if (strcmp(srm_path, vmp_path) == 0) {
     return ROMM_VMP_SRM_ERR_INVALID_ARGUMENT;
   }
 
