@@ -38,6 +38,7 @@
 #define UI_SCREEN_HEIGHT 544.0f
 
 #define UI_GAME_LIST_VISIBLE 4
+#define UI_GAME_ROW_HEIGHT 28.0f
 #define UI_LOG_VISIBLE_LINES 5
 #define UI_REPORT_VISIBLE_LINES 16
 #define UI_REPORT_MAX_LINES 192
@@ -68,6 +69,15 @@
 #define UI_COLOR_SUCCESS RGBA8(138, 214, 167, 255)
 #define UI_COLOR_WARNING RGBA8(255, 194, 119, 255)
 #define UI_COLOR_DANGER RGBA8(255, 140, 140, 255)
+
+#define UI_TEXT_SCALE_BOOST 1.20f
+#define UI_TEXT_SCALE_MIN 1.00f
+#define UI_TEXT_SCALE_MAX 1.52f
+
+#define UI_NAV_UP 0
+#define UI_NAV_DOWN 1
+#define UI_NAV_LEFT 2
+#define UI_NAV_RIGHT 3
 
 typedef struct UiGameEntry {
   char key[ROMM_GAME_ID_LEN];
@@ -566,6 +576,152 @@ static int ui_total_selectable_entries(const UiAppState *state) {
 }
 
 /*
+ * Returns a stable 2D anchor (screen-like coordinates) for one selectable item.
+ * Game list items use a virtual y-coordinate so directional navigation still works
+ * even when the item is currently outside the visible window.
+ */
+static int ui_get_selection_anchor(const UiAppState *state, int index, float *out_x, float *out_y) {
+  if ((state == NULL) || (out_x == NULL) || (out_y == NULL)) {
+    return -1;
+  }
+
+  if (index == UI_SELECT_SERVER_URL) {
+    *out_x = 48.0f + (398.0f * 0.5f);
+    *out_y = 154.0f + (44.0f * 0.5f);
+    return 0;
+  }
+  if (index == UI_SELECT_USERNAME) {
+    *out_x = 48.0f + (398.0f * 0.5f);
+    *out_y = 208.0f + (44.0f * 0.5f);
+    return 0;
+  }
+  if (index == UI_SELECT_PASSWORD) {
+    *out_x = 48.0f + (398.0f * 0.5f);
+    *out_y = 262.0f + (44.0f * 0.5f);
+    return 0;
+  }
+  if (index == UI_SELECT_SYNC_PRIMARY) {
+    *out_x = 494.0f + (418.0f * 0.5f);
+    *out_y = 252.0f + (28.0f * 0.5f);
+    return 0;
+  }
+  if (index == UI_SELECT_SYNC_ALL) {
+    *out_x = 494.0f + (418.0f * 0.5f);
+    *out_y = 284.0f + (28.0f * 0.5f);
+    return 0;
+  }
+  if (index == UI_SELECT_RESCAN) {
+    *out_x = 494.0f + (418.0f * 0.5f);
+    *out_y = 316.0f + (28.0f * 0.5f);
+    return 0;
+  }
+
+  if (index >= UI_SELECT_GAME_BASE) {
+    int game_index = index - UI_SELECT_GAME_BASE;
+    if ((game_index < 0) || (game_index >= state->game_count)) {
+      return -1;
+    }
+
+    *out_x = 48.0f + (864.0f * 0.5f);
+    *out_y = 390.0f + (UI_GAME_ROW_HEIGHT * (float)game_index) + (UI_GAME_ROW_HEIGHT * 0.5f);
+    return 0;
+  }
+
+  return -1;
+}
+
+/*
+ * Moves selection in one directional axis by choosing the nearest candidate item
+ * that lies in the requested direction.
+ */
+static int ui_move_selection_direction(UiAppState *state, int direction) {
+  if (state == NULL) {
+    return 0;
+  }
+
+  int total = ui_total_selectable_entries(state);
+  if (total <= 0) {
+    return 0;
+  }
+
+  float current_x = 0.0f;
+  float current_y = 0.0f;
+  if (ui_get_selection_anchor(state, state->selected_index, &current_x, &current_y) < 0) {
+    return 0;
+  }
+
+  int best_index = -1;
+  float best_primary = 0.0f;
+  float best_secondary = 0.0f;
+
+  for (int i = 0; i < total; ++i) {
+    if (i == state->selected_index) {
+      continue;
+    }
+
+    float candidate_x = 0.0f;
+    float candidate_y = 0.0f;
+    if (ui_get_selection_anchor(state, i, &candidate_x, &candidate_y) < 0) {
+      continue;
+    }
+
+    float dx = candidate_x - current_x;
+    float dy = candidate_y - current_y;
+
+    int valid = 0;
+    float primary = 0.0f;
+    float secondary = 0.0f;
+    if (direction == UI_NAV_UP) {
+      if (dy < -0.5f) {
+        valid = 1;
+        primary = -dy;
+        secondary = fabsf(dx);
+      }
+    } else if (direction == UI_NAV_DOWN) {
+      if (dy > 0.5f) {
+        valid = 1;
+        primary = dy;
+        secondary = fabsf(dx);
+      }
+    } else if (direction == UI_NAV_LEFT) {
+      if (dx < -0.5f) {
+        valid = 1;
+        primary = -dx;
+        secondary = fabsf(dy);
+      }
+    } else if (direction == UI_NAV_RIGHT) {
+      if (dx > 0.5f) {
+        valid = 1;
+        primary = dx;
+        secondary = fabsf(dy);
+      }
+    }
+
+    if (!valid) {
+      continue;
+    }
+
+    if ((best_index < 0) ||
+        (primary < best_primary) ||
+        ((fabsf(primary - best_primary) < 0.01f) && (secondary < best_secondary))) {
+      best_index = i;
+      best_primary = primary;
+      best_secondary = secondary;
+    }
+  }
+
+  if (best_index < 0) {
+    return 0;
+  }
+
+  state->selected_index = best_index;
+  if (state->selected_index >= UI_SELECT_GAME_BASE) {
+    state->active_game_index = state->selected_index - UI_SELECT_GAME_BASE;
+  }
+  return 1;
+}
+
+/*
  * Clamps the remembered sync target so the primary action always points at a valid game.
  */
 static void ui_clamp_active_game(UiAppState *state) {
@@ -818,6 +974,21 @@ static float ui_snap_to_pixel(float value) {
 }
 
 /*
+ * Applies a readability-oriented text scale policy for Vita's display.
+ * Tiny scales are lifted to avoid hard-to-read pixelated labels.
+ */
+static float ui_resolve_text_scale(float scale) {
+  float resolved = scale * UI_TEXT_SCALE_BOOST;
+  if (resolved < UI_TEXT_SCALE_MIN) {
+    resolved = UI_TEXT_SCALE_MIN;
+  }
+  if (resolved > UI_TEXT_SCALE_MAX) {
+    resolved = UI_TEXT_SCALE_MAX;
+  }
+  return resolved;
+}
+
+/*
  * Starts one drawing frame and paints a restrained dark Vita-style background.
  */
 static void ui_begin_frame(void) {
@@ -859,7 +1030,8 @@ static void ui_draw_text(float x, float y, unsigned int color, float scale, cons
   vsnprintf(line, sizeof(line), format, args);
   va_end(args);
 
-  vita2d_pgf_draw_text(g_ui_font, ui_snap_to_pixel(x), ui_snap_to_pixel(y), color, scale, line);
+  float draw_scale = ui_resolve_text_scale(scale);
+  vita2d_pgf_draw_text(g_ui_font, ui_snap_to_pixel(x), ui_snap_to_pixel(y), color, draw_scale, line);
 }
 
 /*
@@ -869,7 +1041,7 @@ static float ui_estimate_text_width(const char *text, float scale) {
   if (!has_text(text)) {
     return 0.0f;
   }
-  return (float)strlen(text) * 11.0f * scale;
+  return (float)strlen(text) * 11.0f * ui_resolve_text_scale(scale);
 }
 
 /*
@@ -969,10 +1141,10 @@ static void ui_draw_game_row(
     vita2d_draw_rectangle(ui_snap_to_pixel(x), ui_snap_to_pixel(y), 3.0f, ui_snap_to_pixel(h), UI_COLOR_ACCENT);
   }
 
-  ui_draw_text(x + 12.0f, y + 16.0f, title_color, 0.82f, "%s", title);
+  ui_draw_text(x + 12.0f, y + 17.0f, title_color, 0.82f, "%s", title);
   ui_draw_text(
       x + w - 106.0f,
-      y + 16.0f,
+      y + 17.0f,
       count_color,
       0.76f,
       "%d card%s",
@@ -1015,13 +1187,13 @@ static void ui_render_connection_panel(const UiAppState *state) {
 
   ui_draw_panel(32.0f, 88.0f, 430.0f, 258.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
   ui_draw_text(48.0f, 118.0f, UI_COLOR_TEXT, 0.96f, "Connection");
-  ui_draw_text(48.0f, 140.0f, UI_COLOR_TEXT_MUTED, 0.78f, "Press X to edit a field. Changes save immediately.");
+  ui_draw_text(48.0f, 140.0f, UI_COLOR_TEXT_MUTED, 0.78f, "X: edit selected field (auto-save).");
 
   ui_draw_field_row(48.0f, 154.0f, 398.0f, 44.0f, state->selected_index == UI_SELECT_SERVER_URL, "RoMM server address", url_display);
   ui_draw_field_row(48.0f, 208.0f, 398.0f, 44.0f, state->selected_index == UI_SELECT_USERNAME, "RoMM username", user_display);
   ui_draw_field_row(48.0f, 262.0f, 398.0f, 44.0f, state->selected_index == UI_SELECT_PASSWORD, "RoMM password", pass_display);
 
-  ui_draw_text(48.0f, 332.0f, UI_COLOR_WARNING, 0.76f, "Credentials remain on-device in plain text.");
+  ui_draw_text(48.0f, 332.0f, UI_COLOR_WARNING, 0.76f, "Credentials are local plain text.");
 }
 
 /*
@@ -1064,7 +1236,7 @@ static void ui_render_sync_panel(const UiAppState *state) {
 
   ui_draw_panel(478.0f, 88.0f, 450.0f, 258.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
   ui_draw_text(494.0f, 118.0f, UI_COLOR_TEXT, 0.96f, "Synchronize");
-  ui_draw_text(494.0f, 140.0f, UI_COLOR_TEXT_MUTED, 0.78f, "Move through the list below to choose the target game.");
+  ui_draw_text(494.0f, 140.0f, UI_COLOR_TEXT_MUTED, 0.78f, "Choose the target game in the list below.");
   ui_draw_text(494.0f, 184.0f, game != NULL ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED, 0.98f, "%s", title_display);
   ui_draw_text(494.0f, 208.0f, UI_COLOR_TEXT_MUTED, 0.78f, "%s", detail);
   ui_draw_text(494.0f, 232.0f, readiness_color, 0.78f, "%s", readiness);
@@ -1134,12 +1306,12 @@ static void ui_render_game_panel(const UiAppState *state) {
         48.0f,
         row_y,
         864.0f,
-        24.0f,
+        UI_GAME_ROW_HEIGHT,
         state->selected_index == (UI_SELECT_GAME_BASE + i),
         state->active_game_index == i,
         row_title,
         game->save_count);
-    row_y += 24.0f;
+    row_y += UI_GAME_ROW_HEIGHT;
   }
 }
 
@@ -1156,7 +1328,7 @@ static void ui_render_footer(const UiAppState *state) {
 
   ui_draw_text(32.0f, 522.0f, UI_COLOR_TEXT_DIM, 0.76f, "Status");
   ui_draw_text(92.0f, 522.0f, UI_COLOR_STATUS, 0.80f, "%s", status);
-  ui_draw_text(640.0f, 522.0f, UI_COLOR_TEXT_MUTED, 0.74f, "D-Pad navigate   X edit/apply   START exit");
+  ui_draw_text(560.0f, 522.0f, UI_COLOR_TEXT_MUTED, 0.74f, "D-Pad move   X apply   START quit");
 }
 
 /*
@@ -1546,9 +1718,12 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
   if (mapped_count < 0) {
     ui_report_add(
         &report,
-        "WARN: Rom mapping failed: %s (%d)",
+        "ERROR: Rom mapping failed: %s (%d)",
         romm_client_status_str(mapped_count),
         mapped_count);
+    ui_set_status(state, "Sync canceled: Rom mapping failed (%s)", romm_client_status_str(mapped_count));
+    ui_present_report("Synchronization", &report);
+    return;
   } else {
     ui_report_add(&report, "OK: mapped %d/%d save(s).", mapped_count, game_item_count);
   }
@@ -1676,9 +1851,12 @@ static void ui_run_sync_all_saves(UiAppState *state) {
   if (mapped_count < 0) {
     ui_report_add(
         &report,
-        "WARN: Rom mapping failed: %s (%d)",
+        "ERROR: Rom mapping failed: %s (%d)",
         romm_client_status_str(mapped_count),
         mapped_count);
+    ui_set_status(state, "Sync canceled: Rom mapping failed (%s)", romm_client_status_str(mapped_count));
+    ui_present_report("Synchronization", &report);
+    return;
   } else {
     ui_report_add(&report, "OK: mapped %d/%d save(s).", mapped_count, work_item_count);
   }
@@ -2130,16 +2308,26 @@ int main(int argc, char *argv[]) {
 
     int total_entries = ui_total_selectable_entries(state);
     if (pressed & SCE_CTRL_UP) {
-      state->selected_index--;
-      if (state->selected_index < 0) {
-        state->selected_index = total_entries - 1;
+      if (!ui_move_selection_direction(state, UI_NAV_UP)) {
+        state->selected_index--;
+        if (state->selected_index < 0) {
+          state->selected_index = total_entries - 1;
+        }
       }
     }
     if (pressed & SCE_CTRL_DOWN) {
-      state->selected_index++;
-      if (state->selected_index >= total_entries) {
-        state->selected_index = 0;
+      if (!ui_move_selection_direction(state, UI_NAV_DOWN)) {
+        state->selected_index++;
+        if (state->selected_index >= total_entries) {
+          state->selected_index = 0;
+        }
       }
+    }
+    if (pressed & SCE_CTRL_LEFT) {
+      ui_move_selection_direction(state, UI_NAV_LEFT);
+    }
+    if (pressed & SCE_CTRL_RIGHT) {
+      ui_move_selection_direction(state, UI_NAV_RIGHT);
     }
     if (state->selected_index >= UI_SELECT_GAME_BASE) {
       state->active_game_index = state->selected_index - UI_SELECT_GAME_BASE;
