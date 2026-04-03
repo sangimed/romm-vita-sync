@@ -1,0 +1,38 @@
+name: Build PS Vita VPK
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: build-vpk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-vpk:
+    runs-on: ubuntu-latest
+    container:
+      image: vitasdk/vitasdk:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Upload VPK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: romm_vita_sync-${{ github.sha }}
+          path: |
+            build/romm_vita_sync.vpk
+            build/romm_vita_sync.self
+          if-no-files-found: error
