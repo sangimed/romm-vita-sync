@@ -114,7 +114,7 @@ try {
         Select-Object -First 1
 
     if (-not $vpkFile) {
-        throw "Aucun fichier .vpk trouve dans $buildDir"
+        throw "No .vpk file found in $buildDir"
     }
 
     $remoteUrl = "ftp://$resolvedFtpHost`:$resolvedFtpPort/$resolvedFtpRemoteDir/$($vpkFile.Name)"
@@ -140,7 +140,7 @@ try {
         throw "FTP upload failed with curl exit code $LASTEXITCODE."
     }
 
-    Write-Host "==> Terminé"
+    Write-Host "==> Completed"
 }
 finally {
     Pop-Location

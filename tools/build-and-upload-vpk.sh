@@ -107,7 +107,7 @@ cmake --build "$BUILD_DIR" --config "$CONFIGURATION"
 
 vpk_file=$(ls -1t "$BUILD_DIR"/*.vpk 2>/dev/null | head -n 1 || true)
 if [ -z "$vpk_file" ]; then
-  echo "Aucun fichier .vpk trouve dans $BUILD_DIR" >&2
+  echo "No .vpk file found in $BUILD_DIR" >&2
   exit 1
 fi
 
@@ -134,4 +134,4 @@ curl \
     exit "$curl_exit"
   }
 
-echo "==> Termine"
+echo "==> Completed"

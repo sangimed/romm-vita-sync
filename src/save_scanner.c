@@ -219,7 +219,7 @@ static void try_add_vmp_file(const char *path, const SceIoStat *st, int verbose,
 
   result->count += 1;
   result->stats.vmp_found += 1;
-  scan_log(verbose, "VMP detecte: game=%s file=%s",
+  scan_log(verbose, "VMP detected: game=%s file=%s",
            item->game_id[0] != '\0' ? item->game_id : "unknown",
            item->path);
 }
@@ -233,12 +233,12 @@ static int scan_directory_recursive(const char *root, int depth, int max_depth, 
     return 0;
   }
 
-  scan_log(verbose, "scan dossier (depth=%d): %s", depth, root);
+  scan_log(verbose, "scan directory (depth=%d): %s", depth, root);
 
   SceUID dfd = sceIoDopen(root);
   if (dfd < 0) {
     result->stats.access_errors += 1;
-    scan_log(verbose, "erreur acces dossier (%d): %s", (int)dfd, root);
+    scan_log(verbose, "directory access error (%d): %s", (int)dfd, root);
     return dfd;
   }
 
@@ -297,7 +297,7 @@ int scan_vmp_files(const char *const *roots, int root_count, int max_depth, int 
   }
 
   memset(out_result, 0, sizeof(*out_result));
-  scan_log(verbose, "debut scan racines=%d max_depth=%d", root_count, max_depth);
+  scan_log(verbose, "scan start roots=%d max_depth=%d", root_count, max_depth);
 
   for (int i = 0; i < root_count; ++i) {
     const char *root = roots[i];
@@ -306,21 +306,21 @@ int scan_vmp_files(const char *const *roots, int root_count, int max_depth, int 
     }
 
     out_result->stats.paths_checked += 1;
-    scan_log(verbose, "probe racine: %s", root);
+    scan_log(verbose, "probing root: %s", root);
 
     SceUID probe = sceIoDopen(root);
     if (probe < 0) {
       out_result->stats.access_errors += 1;
-      scan_log(verbose, "racine inaccessible dec=%d hex=0x%08X path=%s", (int)probe, (unsigned int)probe, root);
+      scan_log(verbose, "root inaccessible dec=%d hex=0x%08X path=%s", (int)probe, (unsigned int)probe, root);
       if (strstr(root, "pspemu/") != NULL) {
-        scan_log(verbose, "hint: acces a pspemu peut necessiter un SELF UNSAFE");
+        scan_log(verbose, "hint: access to pspemu may require an UNSAFE SELF");
       }
       continue;
     }
     sceIoDclose(probe);
 
     out_result->stats.paths_accessible += 1;
-    scan_log(verbose, "racine accessible: %s", root);
+    scan_log(verbose, "root accessible: %s", root);
     scan_directory_recursive(root, 0, max_depth, verbose, out_result);
   }
 
