@@ -40,8 +40,10 @@
 #define UI_GAME_LIST_VISIBLE 4
 #define UI_GAME_ROW_HEIGHT 28.0f
 #define UI_LOG_VISIBLE_LINES 3
-#define UI_LOG_EXPANDED_VISIBLE_LINES 8
+#define UI_LOG_EXPANDED_VISIBLE_LINES 7
 #define UI_SYNC_MODAL_VISIBLE_LINES 12
+#define UI_LOG_TOP_PADDING 18.0f
+#define UI_LOG_LINE_HEIGHT 18.0f
 #define UI_STATUS_LINE_LEN 192
 #define UI_EDITOR_BUFFER_LEN 512
 #define APP_RUNTIME_DATA_DIRECTORY "ux0:data/romm-vita-sync"
@@ -1258,7 +1260,7 @@ static void ui_draw_log_viewport(
     end = total;
   }
 
-  float line_y = y + 14.0f;
+  float line_y = y + UI_LOG_TOP_PADDING;
   for (int i = start; i < end; ++i) {
     const char *line = app_log_history_line(i);
     if (!has_text(line)) {
@@ -1268,7 +1270,7 @@ static void ui_draw_log_viewport(
     char clipped[UI_STATUS_LINE_LEN];
     ui_truncate_text(line, clipped, sizeof(clipped));
     ui_draw_text(x + 10.0f, line_y, ui_log_line_color(line), 0.66f, "%s", clipped);
-    line_y += 14.0f;
+    line_y += UI_LOG_LINE_HEIGHT;
   }
 }
 

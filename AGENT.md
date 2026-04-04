@@ -45,6 +45,12 @@ MkDocs documentation is the source of truth for project concepts and architectur
 
 Any change that affects documented behavior MUST update the corresponding MkDocs pages in the same commit.
 
+README scope policy:
+
+- `README.md` must remain high-level and non-technical.
+- Technical setup, commands, workflows, configuration details, and troubleshooting must be documented in MkDocs (`docs/`), not in `README.md`.
+- When adding or moving technical documentation, prefer updating existing MkDocs pages rather than expanding `README.md`.
+
 This includes changes to:
 
 - synchronization logic

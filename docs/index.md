@@ -93,6 +93,37 @@ This section summarizes the practical setup for both end users and developers.
 5. `cmake --build build --config Release`
 6. Install `build/romm_vita_sync.vpk` on Vita (for example via VitaShell FTP/USB)
 
+### Docker Build Environment (Optional)
+
+The repository now includes a Dockerfile compatible with the `gnuton/vitasdk-docker` workflow.
+
+Build the image (from repository root):
+
+`docker build -t gnuton/vitasdk-docker .`
+
+Run it with your project mounted in `/build/git`:
+
+Linux/macOS (bash):
+
+```bash
+cd your-vita-project
+docker run -v "$PWD:/build/git" -it --rm gnuton/vitasdk-docker
+```
+
+Windows PowerShell:
+
+```powershell
+cd C:\path\to\your-vita-project
+docker run -v "${PWD}:/build/git" -it --rm gnuton/vitasdk-docker
+```
+
+Windows CMD:
+
+```bat
+cd C:\path\to\your-vita-project
+docker run -v "%cd%:/build/git" -it --rm gnuton/vitasdk-docker
+```
+
 ### First Launch
 
 1. Launch the app on Vita
