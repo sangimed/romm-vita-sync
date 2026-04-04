@@ -78,51 +78,59 @@ This section summarizes the practical setup for both end users and developers.
 - Network access from Vita to your RomM server
 - Valid RomM credentials (`token` or `username` + `password`)
 
-### Developer Build Prerequisites
+### Developer Build Prerequisites (Host Method)
 
 - VitaSDK toolchain
 - CMake
 - Git with submodules support
+- `curl` (or `curl.exe` on Windows)
 
-### Build and Install
+### Upload Target Configuration (Vita FTP)
 
-1. Initialize submodules:
-2. `git submodule update --init --recursive`
-3. Configure and build:
-4. `cmake -S . -B build`
-5. `cmake --build build --config Release`
-6. Install `build/romm_vita_sync.vpk` on Vita (for example via VitaShell FTP/USB)
+The build/upload helpers read optional FTP settings from:
 
-### Docker Build Environment (Optional)
+`tools/build-and-upload-vpk.local.env`
 
-The repository now includes a Dockerfile compatible with the `gnuton/vitasdk-docker` workflow.
+Create it from the sample template:
 
-Build the image (from repository root):
+- Linux/macOS: `cp tools/build-and-upload-vpk.config.sample.env tools/build-and-upload-vpk.local.env`
+- Windows PowerShell: `Copy-Item tools/build-and-upload-vpk.config.sample.env tools/build-and-upload-vpk.local.env`
 
-`docker build -t gnuton/vitasdk-docker .`
+Supported keys:
 
-Run it with your project mounted in `/build/git`:
+- `FTP_HOST`: Vita IP address (for example `192.168.1.20`)
+- `FTP_PORT`: VitaShell FTP port (default `1337`)
+- `FTP_REMOTE_DIR`: remote destination directory (default `ux0:/homebrews`)
 
-Linux/macOS (bash):
+CLI arguments still override values from the local env file.
 
-```bash
-cd your-vita-project
-docker run -v "$PWD:/build/git" -it --rm gnuton/vitasdk-docker
-```
+### Recommended Build + Upload (Host Toolchain)
 
-Windows PowerShell:
+1. `git submodule update --init --recursive`
+2. Linux/macOS: `./tools/build-and-upload-vpk.sh`
+3. Windows PowerShell: `./tools/build-and-upload-vpk.ps1`
 
-```powershell
-cd C:\path\to\your-vita-project
-docker run -v "${PWD}:/build/git" -it --rm gnuton/vitasdk-docker
-```
+The FTP upload step uses an explicit timeout policy:
 
-Windows CMD:
+- connection timeout: `10s`
+- upload stall timeout: `10s` (if speed drops below `1 B/s`)
 
-```bat
-cd C:\path\to\your-vita-project
-docker run -v "%cd%:/build/git" -it --rm gnuton/vitasdk-docker
-```
+### Docker One-Command Alternative
+
+Use this method when VitaSDK is not installed on the host machine.
+
+Prerequisites:
+
+- Docker Engine / Docker Desktop installed
+- Docker daemon running
+
+Commands:
+
+1. `git submodule update --init --recursive`
+2. Linux/macOS: `./tools/docker-build-and-upload-vpk.sh`
+3. Windows PowerShell: `./tools/docker-build-and-upload-vpk.ps1`
+
+Both Docker wrappers run with `--rm`, so the container is automatically stopped and removed when the script exits (successful or failed).
 
 ### First Launch
 
@@ -203,12 +211,21 @@ Coverage:
 - in-app conversion path wiring (`VMP->SRM` for upload, `SRM->VMP` + signing for download)
 - real save transfer integration (`GET /api/saves`, `POST /api/saves`, `GET /api/saves/{id}/content`)
 
-### 1. Build And Install
+### 1. Build And Upload VPK
+
+Host toolchain method (recommended):
 
 1. `git submodule update --init --recursive`
-2. `cmake -S . -B build`
-3. `cmake --build build --config Release`
-4. Install `build/romm_vita_sync.vpk` on Vita (for example via VitaShell FTP/USB)
+2. Create `tools/build-and-upload-vpk.local.env` from `tools/build-and-upload-vpk.config.sample.env` and set `FTP_HOST` (Vita IP), optional `FTP_PORT`, and optional `FTP_REMOTE_DIR`
+3. Linux/macOS: `./tools/build-and-upload-vpk.sh`
+4. Windows PowerShell: `./tools/build-and-upload-vpk.ps1`
+
+Docker one-command alternative:
+
+1. Ensure Docker Engine/Desktop is installed and daemon is running
+2. `git submodule update --init --recursive`
+3. Linux/macOS: `./tools/docker-build-and-upload-vpk.sh`
+4. Windows PowerShell: `./tools/docker-build-and-upload-vpk.ps1`
 
 ### 2. First Launch Setup
 

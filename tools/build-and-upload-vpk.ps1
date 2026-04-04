@@ -14,6 +14,9 @@ $defaults = @{
     FtpPort = 1337
     FtpRemoteDir = "ux0:/homebrews"
 }
+$ftpConnectTimeoutSeconds = 10
+$ftpUploadStallTimeoutSeconds = 10
+$ftpUploadStallSpeedBytes = 1
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $buildDir = Join-Path $repoRoot "build"
@@ -117,9 +120,25 @@ try {
     $remoteUrl = "ftp://$resolvedFtpHost`:$resolvedFtpPort/$resolvedFtpRemoteDir/$($vpkFile.Name)"
     Write-Host "==> Upload: $($vpkFile.FullName)"
     Write-Host "==> Destination: $remoteUrl"
+    Write-Host "==> FTP timeout policy"
+    Write-Host "    - Connection timeout: $($ftpConnectTimeoutSeconds)s"
+    Write-Host "    - Upload stall timeout: $($ftpUploadStallTimeoutSeconds)s (speed < $ftpUploadStallSpeedBytes B/s)"
 
     # Use curl.exe to avoid the PowerShell curl alias.
-    curl.exe --ftp-method nocwd -T "$($vpkFile.FullName)" "$remoteUrl"
+    & curl.exe `
+        --ftp-method nocwd `
+        --connect-timeout $ftpConnectTimeoutSeconds `
+        --speed-time $ftpUploadStallTimeoutSeconds `
+        --speed-limit $ftpUploadStallSpeedBytes `
+        -T "$($vpkFile.FullName)" `
+        "$remoteUrl"
+
+    if ($LASTEXITCODE -ne 0) {
+        if ($LASTEXITCODE -eq 28) {
+            throw "FTP timeout reached (connection or upload stalled for 10 seconds)."
+        }
+        throw "FTP upload failed with curl exit code $LASTEXITCODE."
+    }
 
     Write-Host "==> Terminé"
 }
