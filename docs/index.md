@@ -597,6 +597,10 @@ Conversion is now wired in the app sync flow:
 - upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback
 - download path: remote `.SRM` is reconstructed to local `.VMP` and re-signed in-app
 
+## End-to-End Sync Sequence Diagram
+
+![RomM Vita Sync end-to-end sequence](assets/diagrams/romm-vita-sync-end-to-end-sync-flow.png)
+
 ## Contributing
 
 Contributions, ideas, and feedback are welcome.

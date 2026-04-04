@@ -22,6 +22,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install PlantUML
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y plantuml graphviz
+
+      - name: Render PlantUML diagrams
+        shell: bash
+        run: |
+          mapfile -t diagrams < <(find docs -type f -name '*.puml')
+          if [ "${#diagrams[@]}" -eq 0 ]; then
+            echo "No PlantUML files found under docs/"
+            exit 0
+          fi
+
+          plantuml -tpng "${diagrams[@]}"
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
