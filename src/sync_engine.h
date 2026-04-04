@@ -19,6 +19,13 @@ typedef SyncActionType (*SyncConflictResolverCallback)(
     void *user_data);
 
 typedef int64_t (*SyncNowCallback)(void);
+typedef void (*SyncProgressCallback)(
+    int completed_units,
+    int total_units,
+    int local_index,
+    int local_total,
+    const char *message,
+    void *user_data);
 
 typedef struct SyncEngineConfig {
   const char *device_id;
@@ -28,6 +35,8 @@ typedef struct SyncEngineConfig {
   SyncConflictResolverCallback resolve_conflict;
   void *resolve_conflict_user_data;
   SyncNowCallback now_callback;
+  SyncProgressCallback progress_callback;
+  void *progress_user_data;
 } SyncEngineConfig;
 
 void sync_engine_config_init(SyncEngineConfig *config);
@@ -35,6 +44,7 @@ void sync_engine_config_init(SyncEngineConfig *config);
 /*
  * Executes one deterministic manual synchronization pass.
  * local_items is the current local inventory.
+ * When provided, progress_callback receives real-time stage/item checkpoints.
  */
 int sync_engine_run(
     const SyncEngineConfig *config,

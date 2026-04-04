@@ -19,7 +19,9 @@ The long-term objective is cross-platform save synchronization across:
 
 The first milestone targets PS1 save synchronization using Adrenaline virtual memory cards.
 
-The first implementation targets a manual synchronization workflow executed from a dedicated homebrew application. Automatic background synchronization via system plugins is planned for a later stage.
+The first implementation targets a manual synchronization workflow executed from a dedicated homebrew application.
+An optional startup auto-sync path is also available in-app (`[Sync].auto_sync_on_startup = true`) and uses persistent on-screen progress feedback.
+Automatic trigger integration from system plugin events remains planned for a later stage.
 
 ## Project Status
 
@@ -37,7 +39,7 @@ Initial milestone includes:
 - Convert `.SRM` → `.VMP`
 - Compare local vs remote saves
 - Manual synchronization workflow
-- Synchronization is triggered manually from the application UI in this phase (automatic triggers planned later)
+- Synchronization is triggered manually from the application UI in this phase, with optional startup auto-sync (`auto_sync_on_startup`)
 - Automatic backup before overwrite
 - Zero destructive operations without confirmation
 
@@ -103,7 +105,7 @@ This section summarizes the practical setup for both end users and developers.
 1. Ensure Vita can reach the RomM URL
 2. In the game list, choose a detected PS1 game
 3. Return to `Synchronize Selected Game` and press `X`
-4. Follow progress and errors in the synchronization report flow and footer status line
+4. Follow progress in the sync modal (manual runs) or in the persistent `Sync Activity` panel (automatic startup runs)
 
 Notes:
 
@@ -129,7 +131,7 @@ Supported sections:
 
 - `[RomM]`: `url`, `token`, `username`, `password`, `verify_tls`, `timeout_seconds`
 - `[Device]`: `device_id`, `device_name`, `device_platform`, `client`, `client_version`
-- `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`
+- `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`, `auto_sync_on_startup`
 - `[Log]`: `level` (`error|warn|info|debug`), `scan_verbose` (`true|false`)
 
 Security notice:
@@ -150,7 +152,10 @@ Current in-app UI behavior:
 - Confirming keyboard input persists values immediately to `ux0:data/romm-vita-sync/settings.ini`.
 - The main screen keeps a visible primary `Synchronize Selected Game` action and a secondary `Rescan Local Saves` action.
 - The current sync target is selected from the detected PS1 game list and remains highlighted even when focus moves back to the sync button.
-- Status feedback stays visible in the footer, while full synchronization details still open in modal report screens.
+- Manual sync runs now open a blocking modal with a title, real progress bar, and live scrolling logs.
+- While a manual sync is running, the modal cannot be closed; once complete, it shows success/failure and can be closed manually.
+- A persistent `Sync Activity` panel in the main layout shows progress and tail logs for automatic startup sync and last run status.
+- Press `SQUARE` on the main screen to expand/collapse the persistent sync log dropdown.
 - The current UI uses a sober single-screen Vita layout with compact panels, controller navigation, and sharper text placement.
 
 The sync engine now treats server `409 Conflict` responses as synchronization conflicts (remote newer) rather than generic transfer errors, aligned with `romm-retroarch-sync` behavior.
@@ -191,8 +196,9 @@ Coverage:
 
 1. Move through the detected PS1 game list to choose the current sync target.
 2. Return to `Synchronize Selected Game` and press `X`.
-3. Confirm progress/steps/success/errors are visible in the synchronization report flow and reflected in the footer status line.
-4. On first successful authenticated sync, confirm `device_id` is persisted in `settings.ini`.
+3. Confirm manual sync shows a blocking progress modal with live logs and completion state.
+4. Confirm automatic startup sync (when enabled) updates the persistent `Sync Activity` panel without opening a modal.
+5. On first successful authenticated sync, confirm `device_id` is persisted in `settings.ini`.
 
 ### 5. Persistence Validation
 

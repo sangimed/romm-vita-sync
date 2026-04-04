@@ -48,6 +48,7 @@ typedef struct AppConfig {
   char sync_state_store_path[ROMM_MAX_PATH_LEN];
   char sync_backup_directory[ROMM_MAX_PATH_LEN];
   int sync_dry_run;
+  int sync_auto_on_startup;
 
   int log_level;
   int log_scan_verbose;

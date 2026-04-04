@@ -39,9 +39,9 @@
 
 #define UI_GAME_LIST_VISIBLE 4
 #define UI_GAME_ROW_HEIGHT 28.0f
-#define UI_LOG_VISIBLE_LINES 5
-#define UI_REPORT_VISIBLE_LINES 16
-#define UI_REPORT_MAX_LINES 192
+#define UI_LOG_VISIBLE_LINES 3
+#define UI_LOG_EXPANDED_VISIBLE_LINES 8
+#define UI_SYNC_MODAL_VISIBLE_LINES 12
 #define UI_STATUS_LINE_LEN 192
 #define UI_EDITOR_BUFFER_LEN 512
 #define APP_RUNTIME_DATA_DIRECTORY "ux0:data/romm-vita-sync"
@@ -86,10 +86,26 @@ typedef struct UiGameEntry {
   int save_count;
 } UiGameEntry;
 
-typedef struct UiReportBuffer {
-  char lines[UI_REPORT_MAX_LINES][UI_STATUS_LINE_LEN];
-  int count;
-} UiReportBuffer;
+typedef enum UiSyncTrigger {
+  UI_SYNC_TRIGGER_MANUAL = 0,
+  UI_SYNC_TRIGGER_AUTOMATIC = 1
+} UiSyncTrigger;
+
+typedef struct UiSyncFeedback {
+  int running;
+  int completed;
+  int success;
+  int sync_status;
+  int completed_units;
+  int total_units;
+  int modal_log_scroll;
+  int modal_auto_scroll;
+  int persistent_logs_expanded;
+  UiSyncTrigger trigger;
+  char title[64];
+  char message[UI_STATUS_LINE_LEN];
+  char context[UI_STATUS_LINE_LEN];
+} UiSyncFeedback;
 
 typedef struct UiAppState {
   AppConfig config;
@@ -109,6 +125,8 @@ typedef struct UiAppState {
   int active_game_index;
   int game_scroll;
   char status_line[UI_STATUS_LINE_LEN];
+  UiSyncFeedback sync_feedback;
+  int pending_auto_sync;
 } UiAppState;
 
 static UiAppState g_app_state;
@@ -152,6 +170,91 @@ static void ui_set_status(UiAppState *state, const char *format, ...) {
   va_start(args, format);
   vsnprintf(state->status_line, sizeof(state->status_line), format, args);
   va_end(args);
+}
+
+/*
+ * Clamps one integer into a closed [min_value, max_value] range.
+ */
+static int clamp_int(int value, int min_value, int max_value) {
+  if (value < min_value) {
+    return min_value;
+  }
+  if (value > max_value) {
+    return max_value;
+  }
+  return value;
+}
+
+/*
+ * Resets sync feedback state before a new manual or automatic run starts.
+ */
+static void ui_sync_feedback_reset(
+    UiSyncFeedback *feedback,
+    UiSyncTrigger trigger,
+    const char *title,
+    const char *context) {
+  if (feedback == NULL) {
+    return;
+  }
+
+  memset(feedback, 0, sizeof(*feedback));
+  feedback->running = 1;
+  feedback->trigger = trigger;
+  feedback->total_units = 1;
+  feedback->modal_auto_scroll = 1;
+  feedback->persistent_logs_expanded = 0;
+  snprintf(feedback->title, sizeof(feedback->title), "%s", has_text(title) ? title : "Synchronization");
+  snprintf(feedback->context, sizeof(feedback->context), "%s", has_text(context) ? context : "");
+  snprintf(feedback->message, sizeof(feedback->message), "Preparing synchronization...");
+}
+
+/*
+ * Updates the short sync feedback message shown near the progress bar.
+ */
+static void ui_sync_feedback_set_message(UiSyncFeedback *feedback, const char *message) {
+  if (feedback == NULL) {
+    return;
+  }
+
+  snprintf(
+      feedback->message,
+      sizeof(feedback->message),
+      "%s",
+      has_text(message) ? message : "");
+}
+
+/*
+ * Updates sync feedback progress counters with defensive clamping.
+ */
+static void ui_sync_feedback_set_progress(UiSyncFeedback *feedback, int completed_units, int total_units) {
+  if (feedback == NULL) {
+    return;
+  }
+
+  if (total_units <= 0) {
+    total_units = 1;
+  }
+
+  feedback->total_units = total_units;
+  feedback->completed_units = clamp_int(completed_units, 0, total_units);
+}
+
+/*
+ * Writes one sync log message through the app logger.
+ * This keeps sync logging transport independent from UI rendering.
+ */
+static void ui_sync_log_write(AppLogLevel level, const char *format, ...) {
+  if (format == NULL) {
+    return;
+  }
+
+  char message[256];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(message, sizeof(message), format, args);
+  va_end(args);
+
+  app_log_write(level, "sync-ui", "%s", message);
 }
 
 /*
@@ -622,7 +725,7 @@ static int ui_get_selection_anchor(const UiAppState *state, int index, float *ou
       return -1;
     }
 
-    *out_x = 48.0f + (864.0f * 0.5f);
+    *out_x = 48.0f + (516.0f * 0.5f);
     *out_y = 390.0f + (UI_GAME_ROW_HEIGHT * (float)game_index) + (UI_GAME_ROW_HEIGHT * 0.5f);
     return 0;
   }
@@ -1077,6 +1180,99 @@ static void ui_draw_panel(float x, float y, float w, float h, unsigned int fill,
 }
 
 /*
+ * Draws a compact progress bar using the current accent palette.
+ */
+static void ui_draw_progress_bar(float x, float y, float w, float h, float ratio) {
+  if ((w <= 0.0f) || (h <= 0.0f)) {
+    return;
+  }
+
+  if (ratio < 0.0f) {
+    ratio = 0.0f;
+  }
+  if (ratio > 1.0f) {
+    ratio = 1.0f;
+  }
+
+  ui_draw_panel(x, y, w, h, UI_COLOR_FIELD, UI_COLOR_PANEL_BORDER);
+  float fill_width = (w - 2.0f) * ratio;
+  if (fill_width < 0.0f) {
+    fill_width = 0.0f;
+  }
+
+  if (fill_width > 0.0f) {
+    vita2d_draw_rectangle(
+        ui_snap_to_pixel(x + 1.0f),
+        ui_snap_to_pixel(y + 1.0f),
+        ui_snap_to_pixel(fill_width),
+        ui_snap_to_pixel(h - 2.0f),
+        UI_COLOR_ACCENT);
+  }
+}
+
+/*
+ * Picks one text color for a rendered log line based on its level prefix.
+ */
+static unsigned int ui_log_line_color(const char *line) {
+  if (!has_text(line)) {
+    return UI_COLOR_TEXT_DIM;
+  }
+
+  if (strncmp(line, "[ERROR]", 7) == 0) {
+    return UI_COLOR_DANGER;
+  }
+  if (strncmp(line, "[WARN]", 6) == 0) {
+    return UI_COLOR_WARNING;
+  }
+  if (strncmp(line, "[INFO]", 6) == 0) {
+    return UI_COLOR_TEXT;
+  }
+  return UI_COLOR_TEXT_MUTED;
+}
+
+/*
+ * Draws one scrollable log viewport from global app_log history.
+ */
+static void ui_draw_log_viewport(
+    float x,
+    float y,
+    float w,
+    float h,
+    int start_index,
+    int visible_lines) {
+  ui_draw_panel(x, y, w, h, UI_COLOR_PANEL_ALT, UI_COLOR_PANEL_BORDER);
+
+  if (visible_lines <= 0) {
+    return;
+  }
+
+  int total = app_log_history_count();
+  int max_start = total - visible_lines;
+  if (max_start < 0) {
+    max_start = 0;
+  }
+
+  int start = clamp_int(start_index, 0, max_start);
+  int end = start + visible_lines;
+  if (end > total) {
+    end = total;
+  }
+
+  float line_y = y + 14.0f;
+  for (int i = start; i < end; ++i) {
+    const char *line = app_log_history_line(i);
+    if (!has_text(line)) {
+      continue;
+    }
+
+    char clipped[UI_STATUS_LINE_LEN];
+    ui_truncate_text(line, clipped, sizeof(clipped));
+    ui_draw_text(x + 10.0f, line_y, ui_log_line_color(line), 0.66f, "%s", clipped);
+    line_y += 14.0f;
+  }
+}
+
+/*
  * Draws one editable field row with label/value hierarchy.
  */
 static void ui_draw_field_row(float x, float y, float w, float h, int selected, const char *label, const char *value) {
@@ -1158,7 +1354,7 @@ static void ui_draw_game_row(
 static void ui_render_header(const UiAppState *state) {
   ui_draw_text(32.0f, 28.0f, UI_COLOR_TEXT_DIM, 0.78f, "RomM Vita Sync");
   ui_draw_text(32.0f, 54.0f, UI_COLOR_TEXT, 1.10f, "Save Synchronization");
-  ui_draw_text(32.0f, 70.0f, UI_COLOR_TEXT_MUTED, 0.80f, "Configure RoMM access, choose a PS1 game, then launch a manual sync.");
+  ui_draw_text(32.0f, 70.0f, UI_COLOR_TEXT_MUTED, 0.80f, "Configure RoMM access, choose a PS1 game, then run manual or startup auto sync.");
 
   ui_draw_text(736.0f, 28.0f, UI_COLOR_TEXT_DIM, 0.78f, "Status");
   ui_draw_text(
@@ -1277,7 +1473,7 @@ static void ui_render_game_panel(const UiAppState *state) {
     return;
   }
 
-  ui_draw_panel(32.0f, 354.0f, 896.0f, 132.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
+  ui_draw_panel(32.0f, 354.0f, 548.0f, 132.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
   ui_draw_text(48.0f, 378.0f, UI_COLOR_TEXT, 0.90f, "Detected PS1 Games");
 
   if (state->game_count <= 0) {
@@ -1291,7 +1487,7 @@ static void ui_render_game_panel(const UiAppState *state) {
     end = state->game_count;
   }
 
-  ui_draw_text(772.0f, 378.0f, UI_COLOR_TEXT_DIM, 0.76f, "Showing %d-%d of %d", start + 1, end, state->game_count);
+  ui_draw_text(404.0f, 378.0f, UI_COLOR_TEXT_DIM, 0.72f, "Showing %d-%d of %d", start + 1, end, state->game_count);
 
   float row_y = 390.0f;
   for (int i = start; i < end; ++i) {
@@ -1305,7 +1501,7 @@ static void ui_render_game_panel(const UiAppState *state) {
     ui_draw_game_row(
         48.0f,
         row_y,
-        864.0f,
+        516.0f,
         UI_GAME_ROW_HEIGHT,
         state->selected_index == (UI_SELECT_GAME_BASE + i),
         state->active_game_index == i,
@@ -1313,6 +1509,70 @@ static void ui_render_game_panel(const UiAppState *state) {
         game->save_count);
     row_y += UI_GAME_ROW_HEIGHT;
   }
+}
+
+/*
+ * Renders persistent sync progress and tail logs in the main layout.
+ * Expanded mode opens an anchored dropdown with additional recent log lines.
+ */
+static void ui_render_sync_activity_panel(const UiAppState *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  const UiSyncFeedback *feedback = &state->sync_feedback;
+  float ratio = 0.0f;
+  if (feedback->total_units > 0) {
+    ratio = (float)feedback->completed_units / (float)feedback->total_units;
+  }
+
+  const char *trigger_text = (feedback->trigger == UI_SYNC_TRIGGER_AUTOMATIC) ? "Auto" : "Manual";
+  const char *state_text = "Idle";
+  unsigned int state_color = UI_COLOR_TEXT_DIM;
+  if (feedback->running) {
+    state_text = "Running";
+    state_color = UI_COLOR_ACCENT;
+  } else if (feedback->completed) {
+    state_text = feedback->success ? "Completed" : "Failed";
+    state_color = feedback->success ? UI_COLOR_SUCCESS : UI_COLOR_DANGER;
+  }
+
+  ui_draw_panel(592.0f, 354.0f, 336.0f, 132.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
+  ui_draw_text(608.0f, 378.0f, UI_COLOR_TEXT, 0.88f, "Sync Activity");
+  ui_draw_text(608.0f, 396.0f, UI_COLOR_TEXT_MUTED, 0.68f, "%s | %s", trigger_text, state_text);
+  ui_draw_text(856.0f, 396.0f, state_color, 0.68f, "%d%%", (int)(ratio * 100.0f));
+
+  ui_draw_progress_bar(608.0f, 402.0f, 304.0f, 14.0f, ratio);
+
+  char message[UI_STATUS_LINE_LEN];
+  ui_truncate_text(feedback->message, message, sizeof(message));
+  ui_draw_text(608.0f, 428.0f, UI_COLOR_TEXT_MUTED, 0.66f, "%s", has_text(message) ? message : "No sync activity yet.");
+
+  int total_logs = app_log_history_count();
+  int tail_start = total_logs - UI_LOG_VISIBLE_LINES;
+  if (tail_start < 0) {
+    tail_start = 0;
+  }
+  ui_draw_log_viewport(608.0f, 432.0f, 304.0f, 48.0f, tail_start, UI_LOG_VISIBLE_LINES);
+  ui_draw_text(
+      608.0f,
+      480.0f,
+      UI_COLOR_TEXT_DIM,
+      0.62f,
+      feedback->persistent_logs_expanded ? "SQUARE hide logs" : "SQUARE show logs");
+
+  if (!feedback->persistent_logs_expanded) {
+    return;
+  }
+
+  int expanded_start = total_logs - UI_LOG_EXPANDED_VISIBLE_LINES;
+  if (expanded_start < 0) {
+    expanded_start = 0;
+  }
+
+  ui_draw_panel(592.0f, 166.0f, 336.0f, 180.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER_ACTIVE);
+  ui_draw_text(608.0f, 188.0f, UI_COLOR_TEXT, 0.76f, "Recent Sync Logs");
+  ui_draw_log_viewport(608.0f, 194.0f, 304.0f, 146.0f, expanded_start, UI_LOG_EXPANDED_VISIBLE_LINES);
 }
 
 /*
@@ -1328,7 +1588,7 @@ static void ui_render_footer(const UiAppState *state) {
 
   ui_draw_text(32.0f, 522.0f, UI_COLOR_TEXT_DIM, 0.76f, "Status");
   ui_draw_text(92.0f, 522.0f, UI_COLOR_STATUS, 0.80f, "%s", status);
-  ui_draw_text(560.0f, 522.0f, UI_COLOR_TEXT_MUTED, 0.74f, "D-Pad move   X apply   START quit");
+  ui_draw_text(498.0f, 522.0f, UI_COLOR_TEXT_MUTED, 0.72f, "D-Pad move   X apply   SQUARE logs   START quit");
 }
 
 /*
@@ -1344,6 +1604,7 @@ static void ui_render_main_screen(UiAppState *state) {
   ui_render_connection_panel(state);
   ui_render_sync_panel(state);
   ui_render_game_panel(state);
+  ui_render_sync_activity_panel(state);
   ui_render_footer(state);
   ui_end_frame();
 }
@@ -1483,107 +1744,217 @@ static int ui_collect_game_items(
 }
 
 /*
- * Clears the report line buffer before appending a new operation report.
+ * Appends a concise sync summary and action tail to the shared sync logger.
  */
-static void ui_report_clear(UiReportBuffer *buffer) {
-  if (buffer == NULL) {
+static void ui_sync_append_report_logs(const SyncRunReport *report) {
+  if (report == NULL) {
     return;
   }
 
-  memset(buffer, 0, sizeof(*buffer));
+  ui_sync_log_write(
+      APP_LOG_LEVEL_INFO,
+      "Sync summary: uploads=%d/%d downloads=%d/%d skipped=%d conflicts=%d errors=%d",
+      report->uploads_executed,
+      report->uploads_planned,
+      report->downloads_executed,
+      report->downloads_planned,
+      report->skipped,
+      report->conflicts_detected,
+      report->transfer_errors);
+
+  int render_count = report->action_count;
+  if (render_count > 20) {
+    render_count = 20;
+  }
+
+  for (int i = 0; i < render_count; ++i) {
+    const SyncActionRecord *action = &report->actions[i];
+    AppLogLevel level = (action->status_code < 0) ? APP_LOG_LEVEL_ERROR : APP_LOG_LEVEL_INFO;
+    ui_sync_log_write(
+        level,
+        "Action %02d: %s %s %s (%s)",
+        i + 1,
+        sync_slot_str(action->slot),
+        sync_action_type_str(action->action),
+        action->executed ? "executed" : "planned",
+        action->reason);
+  }
+
+  if (report->action_count > render_count) {
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "... %d additional action(s) omitted", report->action_count - render_count);
+  }
 }
 
 /*
- * Appends one formatted line to a report buffer when capacity allows.
+ * Renders the blocking manual-sync modal with progress and scrolling log area.
  */
-static void ui_report_add(UiReportBuffer *buffer, const char *format, ...) {
-  if ((buffer == NULL) || (format == NULL)) {
+static void ui_render_sync_modal(UiAppState *state) {
+  if (state == NULL) {
     return;
   }
 
-  if (buffer->count >= UI_REPORT_MAX_LINES) {
-    return;
+  UiSyncFeedback *feedback = &state->sync_feedback;
+  float ratio = 0.0f;
+  if (feedback->total_units > 0) {
+    ratio = (float)feedback->completed_units / (float)feedback->total_units;
   }
 
-  va_list args;
-  va_start(args, format);
-  vsnprintf(buffer->lines[buffer->count], sizeof(buffer->lines[buffer->count]), format, args);
-  va_end(args);
-  buffer->count += 1;
-}
-
-/*
- * Draws one report screen page with optional vertical scrolling.
- */
-static void ui_render_report_screen(const char *title, const UiReportBuffer *buffer, int scroll) {
   ui_begin_frame();
-  ui_draw_panel(32.0f, 24.0f, 896.0f, 496.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
-  ui_draw_text(52.0f, 56.0f, UI_COLOR_TEXT, 0.95f, "%s", has_text(title) ? title : "Report");
-
-  int total = (buffer != NULL) ? buffer->count : 0;
-  int start = scroll;
-  if (start < 0) {
-    start = 0;
-  }
-  if (start > total) {
-    start = total;
+  ui_draw_panel(96.0f, 30.0f, 768.0f, 484.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER_ACTIVE);
+  ui_draw_text(124.0f, 60.0f, UI_COLOR_TEXT, 0.96f, "%s", has_text(feedback->title) ? feedback->title : "Synchronization");
+  if (has_text(feedback->context)) {
+    ui_draw_text(124.0f, 82.0f, UI_COLOR_TEXT_MUTED, 0.74f, "%s", feedback->context);
   }
 
-  int end = start + UI_REPORT_VISIBLE_LINES;
-  if (end > total) {
-    end = total;
-  }
+  ui_draw_progress_bar(124.0f, 98.0f, 712.0f, 18.0f, ratio);
+  ui_draw_text(
+      124.0f,
+      134.0f,
+      UI_COLOR_TEXT_MUTED,
+      0.72f,
+      "%d%% (%d/%d)",
+      (int)(ratio * 100.0f),
+      feedback->completed_units,
+      feedback->total_units);
 
-  float y = 86.0f;
-  if (total <= 0) {
-    ui_draw_text(54.0f, 120.0f, UI_COLOR_TEXT_MUTED, 0.80f, "No details available.");
-  } else {
-    for (int i = start; i < end; ++i) {
-      char clipped[UI_STATUS_LINE_LEN];
-      ui_truncate_text(buffer->lines[i], clipped, sizeof(clipped));
-      ui_draw_text(54.0f, y, UI_COLOR_TEXT, 0.74f, "%s", clipped);
-      y += 24.0f;
-    }
-  }
-
-  if (total > UI_REPORT_VISIBLE_LINES) {
-    ui_draw_text(
-        744.0f,
-        502.0f,
-        UI_COLOR_TEXT_MUTED,
-        0.68f,
-        "UP/DOWN scroll %d-%d/%d",
-        start + 1,
-        end,
-        total);
-  }
-
-  ui_draw_text(54.0f, 502.0f, UI_COLOR_TEXT_MUTED, 0.68f, "O/X/START: return");
-  ui_end_frame();
-}
-
-/*
- * Presents a scrollable report until user confirms return to home screen.
- */
-static void ui_present_report(const char *title, const UiReportBuffer *buffer) {
-  int total = (buffer != NULL) ? buffer->count : 0;
-  int max_scroll = total - UI_REPORT_VISIBLE_LINES;
+  int total_logs = app_log_history_count();
+  int max_scroll = total_logs - UI_SYNC_MODAL_VISIBLE_LINES;
   if (max_scroll < 0) {
     max_scroll = 0;
   }
 
-  int scroll = 0;
+  if (feedback->running || feedback->modal_auto_scroll) {
+    feedback->modal_log_scroll = max_scroll;
+  }
+  feedback->modal_log_scroll = clamp_int(feedback->modal_log_scroll, 0, max_scroll);
+
+  ui_draw_text(124.0f, 160.0f, UI_COLOR_TEXT, 0.82f, "Live logs");
+  ui_draw_log_viewport(
+      124.0f,
+      166.0f,
+      712.0f,
+      230.0f,
+      feedback->modal_log_scroll,
+      UI_SYNC_MODAL_VISIBLE_LINES);
+
+  if (max_scroll > 0) {
+    int visible_end = feedback->modal_log_scroll + UI_SYNC_MODAL_VISIBLE_LINES;
+    if (visible_end > total_logs) {
+      visible_end = total_logs;
+    }
+    ui_draw_text(
+        124.0f,
+        416.0f,
+        UI_COLOR_TEXT_DIM,
+        0.64f,
+        "UP/DOWN scroll %d-%d/%d",
+        feedback->modal_log_scroll + 1,
+        visible_end,
+        total_logs);
+  }
+
+  unsigned int result_color = UI_COLOR_TEXT_MUTED;
+  if (feedback->running) {
+    result_color = UI_COLOR_ACCENT;
+  } else if (feedback->success) {
+    result_color = UI_COLOR_SUCCESS;
+  } else {
+    result_color = UI_COLOR_DANGER;
+  }
+
+  ui_draw_text(124.0f, 442.0f, result_color, 0.80f, "%s", has_text(feedback->message) ? feedback->message : "");
+  ui_draw_text(
+      124.0f,
+      486.0f,
+      UI_COLOR_TEXT_DIM,
+      0.70f,
+      feedback->running ? "Synchronization is running..." : "O/X/START: close");
+  ui_end_frame();
+}
+
+/*
+ * Pumps one UI frame while sync is running so logs/progress update live.
+ * Manual runs render a blocking modal, automatic runs keep the main layout visible.
+ */
+static void ui_sync_render_live(UiAppState *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  ui_pump_app_events();
+  if (state->sync_feedback.trigger == UI_SYNC_TRIGGER_MANUAL) {
+    ui_render_sync_modal(state);
+  } else {
+    ui_render_main_screen(state);
+  }
+}
+
+typedef struct UiSyncProgressBridge {
+  UiAppState *state;
+  int base_completed_units;
+  int overall_total_units;
+} UiSyncProgressBridge;
+
+/*
+ * Bridges sync_engine progress callbacks into UI progress + live redraw.
+ */
+static void ui_sync_engine_progress_callback(
+    int completed_units,
+    int total_units,
+    int local_index,
+    int local_total,
+    const char *message,
+    void *user_data) {
+  (void)local_index;
+  (void)local_total;
+  (void)total_units;
+
+  UiSyncProgressBridge *bridge = (UiSyncProgressBridge *)user_data;
+  if ((bridge == NULL) || (bridge->state == NULL)) {
+    return;
+  }
+
+  UiAppState *state = bridge->state;
+  UiSyncFeedback *feedback = &state->sync_feedback;
+  ui_sync_feedback_set_progress(
+      feedback,
+      bridge->base_completed_units + completed_units,
+      bridge->overall_total_units);
+  if (has_text(message)) {
+    ui_sync_feedback_set_message(feedback, message);
+  }
+  feedback->modal_auto_scroll = 1;
+  ui_sync_render_live(state);
+}
+
+/*
+ * Keeps the completed manual sync modal open until the user closes it.
+ */
+static void ui_present_completed_manual_sync(UiAppState *state) {
+  if (state == NULL) {
+    return;
+  }
+
   unsigned int previous_buttons = 0U;
   for (;;) {
     ui_pump_app_events();
-    ui_render_report_screen(title, buffer, scroll);
+    ui_render_sync_modal(state);
 
     unsigned int pressed = ui_poll_pressed(&previous_buttons);
-    if ((pressed & SCE_CTRL_UP) && (scroll > 0)) {
-      scroll -= 1;
+    if ((pressed & SCE_CTRL_UP) && (state->sync_feedback.modal_log_scroll > 0)) {
+      state->sync_feedback.modal_auto_scroll = 0;
+      state->sync_feedback.modal_log_scroll -= 1;
     }
-    if ((pressed & SCE_CTRL_DOWN) && (scroll < max_scroll)) {
-      scroll += 1;
+    if (pressed & SCE_CTRL_DOWN) {
+      int total_logs = app_log_history_count();
+      int max_scroll = total_logs - UI_SYNC_MODAL_VISIBLE_LINES;
+      if (max_scroll < 0) {
+        max_scroll = 0;
+      }
+      if (state->sync_feedback.modal_log_scroll < max_scroll) {
+        state->sync_feedback.modal_auto_scroll = 0;
+        state->sync_feedback.modal_log_scroll += 1;
+      }
     }
     if (pressed & (SCE_CTRL_CIRCLE | SCE_CTRL_CROSS | SCE_CTRL_START)) {
       return;
@@ -1594,57 +1965,159 @@ static void ui_present_report(const char *title, const UiReportBuffer *buffer) {
 }
 
 /*
- * Appends sync summary metrics and action lines to a report buffer.
+ * Runs one sync pipeline and routes feedback to modal or persistent area.
+ * Progress uses real steps: validate, register device, map rom IDs, engine run.
  */
-static void ui_append_sync_report(UiReportBuffer *buffer, const SyncRunReport *report) {
-  if ((buffer == NULL) || (report == NULL)) {
-    return;
+static int ui_run_sync_pipeline(
+    UiAppState *state,
+    SyncSaveDescriptor *work_items,
+    int work_item_count,
+    UiSyncTrigger trigger,
+    const char *title,
+    const char *context) {
+  if ((state == NULL) || (work_items == NULL) || (work_item_count < 0)) {
+    return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
   }
 
-  ui_report_add(buffer, "");
-  ui_report_add(buffer, "Sync summary");
-  ui_report_add(buffer, "  local saves        : %d", report->local_count);
-  ui_report_add(buffer, "  remote saves       : %d", report->remote_count);
-  ui_report_add(buffer, "  uploads planned    : %d", report->uploads_planned);
-  ui_report_add(buffer, "  downloads planned  : %d", report->downloads_planned);
-  ui_report_add(buffer, "  uploads executed   : %d", report->uploads_executed);
-  ui_report_add(buffer, "  downloads executed : %d", report->downloads_executed);
-  ui_report_add(buffer, "  conflicts          : %d", report->conflicts_detected);
-  ui_report_add(buffer, "  skipped            : %d", report->skipped);
-  ui_report_add(buffer, "  errors             : %d", report->transfer_errors);
+  memset(&state->sync_report, 0, sizeof(state->sync_report));
+  app_log_clear_history();
+  ui_sync_feedback_reset(&state->sync_feedback, trigger, title, context);
 
-  if (report->action_count <= 0) {
-    return;
+  int engine_units = work_item_count + 1;
+  if (engine_units < 1) {
+    engine_units = 1;
+  }
+  int total_units = 3 + engine_units;
+  ui_sync_feedback_set_progress(&state->sync_feedback, 0, total_units);
+  ui_sync_render_live(state);
+
+  ui_sync_log_write(APP_LOG_LEVEL_INFO, "Scanning local saves...");
+  int preview_count = work_item_count;
+  if (preview_count > 24) {
+    preview_count = 24;
+  }
+  for (int i = 0; i < preview_count; ++i) {
+    const SyncSaveDescriptor *item = &work_items[i];
+    const char *name = has_text(item->filename) ? item->filename : item->path;
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Save detected: %s", has_text(name) ? name : "(unknown)");
+  }
+  if (work_item_count > preview_count) {
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "... %d more local save(s) omitted", work_item_count - preview_count);
   }
 
-  ui_report_add(buffer, "");
-  ui_report_add(buffer, "Action log");
+  ui_sync_feedback_set_message(&state->sync_feedback, "Validating RomM configuration...");
+  ui_sync_render_live(state);
+  if (!app_config_has_server_url(&state->config)) {
+    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync failed: RomM server URL is missing");
+    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: RomM URL is missing");
+    state->sync_feedback.running = 0;
+    state->sync_feedback.completed = 1;
+    state->sync_feedback.success = 0;
+    state->sync_feedback.sync_status = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+    ui_sync_feedback_set_progress(&state->sync_feedback, total_units, total_units);
+    ui_sync_render_live(state);
+    return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+  }
+  if (!app_config_has_auth(&state->config)) {
+    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync failed: credentials are missing");
+    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: credentials are missing");
+    state->sync_feedback.running = 0;
+    state->sync_feedback.completed = 1;
+    state->sync_feedback.success = 0;
+    state->sync_feedback.sync_status = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+    ui_sync_feedback_set_progress(&state->sync_feedback, total_units, total_units);
+    ui_sync_render_live(state);
+    return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+  }
+  ui_sync_feedback_set_progress(&state->sync_feedback, 1, total_units);
+  ui_sync_log_write(APP_LOG_LEVEL_INFO, "Credentials validated");
+  ui_sync_render_live(state);
 
-  int render_count = report->action_count;
-  if (render_count > 24) {
-    render_count = 24;
+  ui_sync_feedback_set_message(&state->sync_feedback, "Ensuring device registration...");
+  ui_sync_render_live(state);
+  int wrote_config = ensure_device_registration(&state->config, &state->romm_client);
+  if (wrote_config) {
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Device registered: %s", state->config.device_id);
+  } else if (has_text(state->config.device_id)) {
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Using existing device ID: %s", state->config.device_id);
+  } else {
+    ui_sync_log_write(APP_LOG_LEVEL_WARN, "No device_id available; continuing anyway");
+  }
+  ui_sync_feedback_set_progress(&state->sync_feedback, 2, total_units);
+  ui_sync_render_live(state);
+
+  ui_sync_feedback_set_message(&state->sync_feedback, "Resolving RomM game mapping...");
+  ui_sync_render_live(state);
+  int mapped_count = romm_http_resolve_rom_ids(&state->config, work_items, work_item_count);
+  if (mapped_count < 0) {
+    ui_sync_log_write(
+        APP_LOG_LEVEL_ERROR,
+        "Sync failed: rom mapping error (%s)",
+        romm_client_status_str(mapped_count));
+    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: Rom mapping error");
+    state->sync_feedback.running = 0;
+    state->sync_feedback.completed = 1;
+    state->sync_feedback.success = 0;
+    state->sync_feedback.sync_status = mapped_count;
+    ui_sync_feedback_set_progress(&state->sync_feedback, total_units, total_units);
+    ui_sync_render_live(state);
+    return mapped_count;
+  }
+  ui_sync_log_write(APP_LOG_LEVEL_INFO, "Mapped %d/%d save(s)", mapped_count, work_item_count);
+  ui_sync_feedback_set_progress(&state->sync_feedback, 3, total_units);
+  ui_sync_render_live(state);
+
+  if (state->config.sync_dry_run) {
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Dry-run enabled: transfers will not execute");
   }
 
-  for (int i = 0; i < render_count; ++i) {
-    const SyncActionRecord *action = &report->actions[i];
-    ui_report_add(
-        buffer,
-        "[%02d] %s %s %s status=%d reason=%s",
-        i + 1,
-        sync_slot_str(action->slot),
-        sync_action_type_str(action->action),
-        action->executed ? "executed" : "planned",
-        action->status_code,
-        action->reason);
+  SyncEngineConfig config;
+  sync_engine_config_init(&config);
+  config.device_id = has_text(state->config.device_id) ? state->config.device_id : NULL;
+  config.state_store_path = has_text(state->config.sync_state_store_path) ? state->config.sync_state_store_path : NULL;
+  config.backup_directory = has_text(state->config.sync_backup_directory) ? state->config.sync_backup_directory : NULL;
+  config.dry_run = state->config.sync_dry_run;
+
+  UiSyncProgressBridge progress_bridge;
+  memset(&progress_bridge, 0, sizeof(progress_bridge));
+  progress_bridge.state = state;
+  progress_bridge.base_completed_units = 3;
+  progress_bridge.overall_total_units = total_units;
+  config.progress_callback = ui_sync_engine_progress_callback;
+  config.progress_user_data = &progress_bridge;
+
+  int sync_status = sync_engine_run(
+      &config,
+      work_items,
+      work_item_count,
+      &state->romm_client,
+      &state->sync_report);
+
+  state->sync_feedback.running = 0;
+  state->sync_feedback.completed = 1;
+  state->sync_feedback.sync_status = sync_status;
+  state->sync_feedback.success = (sync_status == SYNC_ENGINE_OK);
+  ui_sync_feedback_set_progress(&state->sync_feedback, total_units, total_units);
+
+  if (sync_status == SYNC_ENGINE_OK) {
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Sync completed");
+    ui_sync_append_report_logs(&state->sync_report);
+    ui_sync_feedback_set_message(&state->sync_feedback, "Sync completed successfully.");
+  } else {
+    ui_sync_log_write(
+        APP_LOG_LEVEL_ERROR,
+        "Sync failed: %s (%d)",
+        sync_engine_status_str(sync_status),
+        sync_status);
+    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed.");
   }
 
-  if (report->action_count > render_count) {
-    ui_report_add(buffer, "... %d more action(s) not shown", report->action_count - render_count);
-  }
+  ui_sync_render_live(state);
+  return sync_status;
 }
 
 /*
- * Runs synchronization for one selected game and renders a full report modal.
+ * Runs synchronization for one selected game using the manual modal feedback path.
  */
 static void ui_run_sync_for_game(UiAppState *state, int game_index) {
   if ((state == NULL) || (game_index < 0) || (game_index >= state->game_count)) {
@@ -1658,20 +2131,13 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
       state->sync_work_items,
       (int)(sizeof(state->sync_work_items) / sizeof(state->sync_work_items[0])));
 
-  UiReportBuffer report;
-  ui_report_clear(&report);
-  app_log_clear_history();
-
-  ui_report_add(&report, "Game sync report");
-  ui_report_add(&report, "Game ID : %s", game->game_id);
-  ui_report_add(&report, "Title   : %s", has_text(game->title) ? game->title : "(no title)");
-  ui_report_add(&report, "Saves   : %d", game_item_count);
-
   char confirm_msg[256];
-  snprintf(confirm_msg, sizeof(confirm_msg),
-           "Synchronize %s?\n%d save card(s) will be checked.",
-           has_text(game->title) ? game->title : game->game_id,
-           game_item_count);
+  snprintf(
+      confirm_msg,
+      sizeof(confirm_msg),
+      "Synchronize %s?\n%d save card(s) will be checked.",
+      has_text(game->title) ? game->title : game->game_id,
+      game_item_count);
   if (ui_dialog_confirm(confirm_msg) != 1) {
     ui_set_status(state, "Sync canceled for %s", game->game_id);
     return;
@@ -1679,94 +2145,27 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
 
   if (game_item_count <= 0) {
     ui_set_status(state, "No local save found for %s", game->game_id);
-    ui_report_add(&report, "");
-    ui_report_add(&report, "No local save found for this game.");
-    ui_present_report("Synchronization", &report);
     return;
   }
 
-  ui_render_busy_screen("Synchronizing game", game->game_id);
+  char context[UI_STATUS_LINE_LEN];
+  snprintf(
+      context,
+      sizeof(context),
+      "Game: %s (%d save card%s)",
+      game->game_id,
+      game_item_count,
+      (game_item_count == 1) ? "" : "s");
 
-  ui_report_add(&report, "");
-  ui_report_add(&report, "[1/4] Validating RomM configuration...");
-  if (!app_config_has_server_url(&state->config)) {
-    ui_report_add(&report, "ERROR: RomM server URL is empty.");
-    ui_set_status(state, "Sync canceled: RomM URL is missing");
-    ui_present_report("Synchronization", &report);
-    return;
-  }
-  if (!app_config_has_auth(&state->config)) {
-    ui_report_add(&report, "ERROR: username/password or token is required.");
-    ui_set_status(state, "Sync canceled: credentials are missing");
-    ui_present_report("Synchronization", &report);
-    return;
-  }
-  ui_report_add(&report, "OK: credentials are configured.");
-
-  ui_report_add(&report, "[2/4] Ensuring device registration...");
-  int wrote_config = ensure_device_registration(&state->config, &state->romm_client);
-  if (wrote_config) {
-    ui_report_add(&report, "OK: device_id persisted to settings.ini (%s)", state->config.device_id);
-  } else if (has_text(state->config.device_id)) {
-    ui_report_add(&report, "OK: device_id available (%s)", state->config.device_id);
-  } else {
-    ui_report_add(&report, "WARN: no device_id available, sync continues if endpoint allows it.");
-  }
-
-  ui_report_add(&report, "[3/4] Resolving RomM rom_id mapping...");
-  int mapped_count = romm_http_resolve_rom_ids(&state->config, state->sync_work_items, game_item_count);
-  if (mapped_count < 0) {
-    ui_report_add(
-        &report,
-        "ERROR: Rom mapping failed: %s (%d)",
-        romm_client_status_str(mapped_count),
-        mapped_count);
-    ui_set_status(state, "Sync canceled: Rom mapping failed (%s)", romm_client_status_str(mapped_count));
-    ui_present_report("Synchronization", &report);
-    return;
-  } else {
-    ui_report_add(&report, "OK: mapped %d/%d save(s).", mapped_count, game_item_count);
-  }
-
-  ui_report_add(&report, "[4/4] Running synchronization...");
-  if (state->config.sync_dry_run) {
-    ui_report_add(&report, "INFO: dry-run is enabled (no upload/download execution).");
-  }
-
-  SyncEngineConfig config;
-  sync_engine_config_init(&config);
-  config.device_id = has_text(state->config.device_id) ? state->config.device_id : NULL;
-  config.state_store_path = has_text(state->config.sync_state_store_path) ? state->config.sync_state_store_path : NULL;
-  config.backup_directory = has_text(state->config.sync_backup_directory) ? state->config.sync_backup_directory : NULL;
-  config.dry_run = state->config.sync_dry_run;
-
-  int sync_status = sync_engine_run(
-      &config,
+  int sync_status = ui_run_sync_pipeline(
+      state,
       state->sync_work_items,
       game_item_count,
-      &state->romm_client,
-      &state->sync_report);
-  if (sync_status < 0) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg),
-             "Sync failed for %s:\n%s (%d)",
-             game->game_id,
-             sync_engine_status_str(sync_status),
-             sync_status);
-    ui_dialog_error(err_msg);
-    ui_report_add(
-        &report,
-        "Synchronization failed: %s (%d)",
-        sync_engine_status_str(sync_status),
-        sync_status);
-    ui_set_status(
-        state,
-        "Sync failed for %s: %s",
-        game->game_id,
-        sync_engine_status_str(sync_status));
-  } else {
-    ui_report_add(&report, "Synchronization finished.");
-    ui_append_sync_report(&report, &state->sync_report);
+      UI_SYNC_TRIGGER_MANUAL,
+      "Manual Synchronization",
+      context);
+
+  if (sync_status == SYNC_ENGINE_OK) {
     ui_set_status(
         state,
         "Sync finished for %s (uploads=%d, downloads=%d, errors=%d)",
@@ -1774,13 +2173,15 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
         state->sync_report.uploads_executed,
         state->sync_report.downloads_executed,
         state->sync_report.transfer_errors);
+  } else {
+    ui_set_status(state, "Sync failed for %s", game->game_id);
   }
 
-  ui_present_report("Synchronization", &report);
+  ui_present_completed_manual_sync(state);
 }
 
 /*
- * Runs one synchronization pass for all detected local saves and renders one report modal.
+ * Runs one full local-inventory synchronization using the manual modal path.
  */
 static void ui_run_sync_all_saves(UiAppState *state) {
   if (state == NULL) {
@@ -1798,14 +2199,6 @@ static void ui_run_sync_all_saves(UiAppState *state) {
   }
   memcpy(state->sync_work_items, state->local_items, sizeof(state->sync_work_items[0]) * (size_t)work_item_count);
 
-  UiReportBuffer report;
-  ui_report_clear(&report);
-  app_log_clear_history();
-
-  ui_report_add(&report, "Full sync report");
-  ui_report_add(&report, "Games   : %d", state->game_count);
-  ui_report_add(&report, "Saves   : %d", work_item_count);
-
   char confirm_msg[256];
   snprintf(
       confirm_msg,
@@ -1818,95 +2211,92 @@ static void ui_run_sync_all_saves(UiAppState *state) {
     return;
   }
 
-  ui_render_busy_screen("Synchronizing all games", "All detected saves are being checked");
+  char context[UI_STATUS_LINE_LEN];
+  snprintf(
+      context,
+      sizeof(context),
+      "All games: %d save card%s across %d game(s)",
+      work_item_count,
+      (work_item_count == 1) ? "" : "s",
+      state->game_count);
 
-  ui_report_add(&report, "");
-  ui_report_add(&report, "[1/4] Validating RomM configuration...");
-  if (!app_config_has_server_url(&state->config)) {
-    ui_report_add(&report, "ERROR: RomM server URL is empty.");
-    ui_set_status(state, "Sync canceled: RomM URL is missing");
-    ui_present_report("Synchronization", &report);
-    return;
-  }
-  if (!app_config_has_auth(&state->config)) {
-    ui_report_add(&report, "ERROR: username/password or token is required.");
-    ui_set_status(state, "Sync canceled: credentials are missing");
-    ui_present_report("Synchronization", &report);
-    return;
-  }
-  ui_report_add(&report, "OK: credentials are configured.");
-
-  ui_report_add(&report, "[2/4] Ensuring device registration...");
-  int wrote_config = ensure_device_registration(&state->config, &state->romm_client);
-  if (wrote_config) {
-    ui_report_add(&report, "OK: device_id persisted to settings.ini (%s)", state->config.device_id);
-  } else if (has_text(state->config.device_id)) {
-    ui_report_add(&report, "OK: device_id available (%s)", state->config.device_id);
-  } else {
-    ui_report_add(&report, "WARN: no device_id available, sync continues if endpoint allows it.");
-  }
-
-  ui_report_add(&report, "[3/4] Resolving RomM rom_id mapping...");
-  int mapped_count = romm_http_resolve_rom_ids(&state->config, state->sync_work_items, work_item_count);
-  if (mapped_count < 0) {
-    ui_report_add(
-        &report,
-        "ERROR: Rom mapping failed: %s (%d)",
-        romm_client_status_str(mapped_count),
-        mapped_count);
-    ui_set_status(state, "Sync canceled: Rom mapping failed (%s)", romm_client_status_str(mapped_count));
-    ui_present_report("Synchronization", &report);
-    return;
-  } else {
-    ui_report_add(&report, "OK: mapped %d/%d save(s).", mapped_count, work_item_count);
-  }
-
-  ui_report_add(&report, "[4/4] Running synchronization...");
-  if (state->config.sync_dry_run) {
-    ui_report_add(&report, "INFO: dry-run is enabled (no upload/download execution).");
-  }
-
-  SyncEngineConfig config;
-  sync_engine_config_init(&config);
-  config.device_id = has_text(state->config.device_id) ? state->config.device_id : NULL;
-  config.state_store_path = has_text(state->config.sync_state_store_path) ? state->config.sync_state_store_path : NULL;
-  config.backup_directory = has_text(state->config.sync_backup_directory) ? state->config.sync_backup_directory : NULL;
-  config.dry_run = state->config.sync_dry_run;
-
-  int sync_status = sync_engine_run(
-      &config,
+  int sync_status = ui_run_sync_pipeline(
+      state,
       state->sync_work_items,
       work_item_count,
-      &state->romm_client,
-      &state->sync_report);
-  if (sync_status < 0) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg),
-             "Sync failed for all games:\n%s (%d)",
-             sync_engine_status_str(sync_status),
-             sync_status);
-    ui_dialog_error(err_msg);
-    ui_report_add(
-        &report,
-        "Synchronization failed: %s (%d)",
-        sync_engine_status_str(sync_status),
-        sync_status);
-    ui_set_status(
-        state,
-        "Sync failed for all games: %s",
-        sync_engine_status_str(sync_status));
-  } else {
-    ui_report_add(&report, "Synchronization finished.");
-    ui_append_sync_report(&report, &state->sync_report);
+      UI_SYNC_TRIGGER_MANUAL,
+      "Manual Synchronization",
+      context);
+
+  if (sync_status == SYNC_ENGINE_OK) {
     ui_set_status(
         state,
         "Sync finished for all games (uploads=%d, downloads=%d, errors=%d)",
         state->sync_report.uploads_executed,
         state->sync_report.downloads_executed,
         state->sync_report.transfer_errors);
+  } else {
+    ui_set_status(state, "Sync failed for all games");
   }
 
-  ui_present_report("Synchronization", &report);
+  ui_present_completed_manual_sync(state);
+}
+
+/*
+ * Runs one optional startup auto-sync using background feedback routing.
+ */
+static void ui_run_pending_auto_sync(UiAppState *state) {
+  if ((state == NULL) || !state->pending_auto_sync) {
+    return;
+  }
+
+  state->pending_auto_sync = 0;
+
+  if (state->local_count <= 0) {
+    ui_set_status(state, "Auto sync skipped: no local PS1 saves detected");
+    return;
+  }
+
+  if (!app_config_has_server_url(&state->config) || !app_config_has_auth(&state->config)) {
+    ui_set_status(state, "Auto sync skipped: configure RomM URL and credentials first");
+    return;
+  }
+
+  int work_item_count = state->local_count;
+  if (work_item_count > (int)(sizeof(state->sync_work_items) / sizeof(state->sync_work_items[0]))) {
+    work_item_count = (int)(sizeof(state->sync_work_items) / sizeof(state->sync_work_items[0]));
+  }
+  memcpy(state->sync_work_items, state->local_items, sizeof(state->sync_work_items[0]) * (size_t)work_item_count);
+
+  char context[UI_STATUS_LINE_LEN];
+  snprintf(
+      context,
+      sizeof(context),
+      "Startup auto sync: %d save card%s",
+      work_item_count,
+      (work_item_count == 1) ? "" : "s");
+
+  int sync_status = ui_run_sync_pipeline(
+      state,
+      state->sync_work_items,
+      work_item_count,
+      UI_SYNC_TRIGGER_AUTOMATIC,
+      "Automatic Synchronization",
+      context);
+
+  if (sync_status == SYNC_ENGINE_OK) {
+    ui_set_status(
+        state,
+        "Auto sync finished (uploads=%d, downloads=%d, errors=%d)",
+        state->sync_report.uploads_executed,
+        state->sync_report.downloads_executed,
+        state->sync_report.transfer_errors);
+  } else {
+    ui_set_status(state, "Auto sync failed");
+  }
+
+  ui_refresh_local_inventory(state);
+  ui_clamp_selection(state);
 }
 
 /*
@@ -2224,7 +2614,19 @@ static void ui_initialize_state(UiAppState *state) {
   state->romm_client.download_save = romm_http_download_save_callback;
   state->romm_client.register_device = romm_http_register_device_callback;
 
+  ui_sync_feedback_reset(&state->sync_feedback, UI_SYNC_TRIGGER_MANUAL, "Synchronization", "");
+  state->sync_feedback.running = 0;
+  state->sync_feedback.completed = 0;
+  state->sync_feedback.success = 0;
+  state->sync_feedback.total_units = 1;
+  state->sync_feedback.completed_units = 0;
+  ui_sync_feedback_set_message(&state->sync_feedback, "No sync activity yet.");
+
   ui_refresh_local_inventory(state);
+  state->pending_auto_sync = state->config.sync_auto_on_startup ? 1 : 0;
+  if (state->pending_auto_sync) {
+    ui_set_status(state, "Automatic startup sync is queued");
+  }
   state->selected_index = UI_SELECT_SERVER_URL;
 }
 
@@ -2296,6 +2698,7 @@ int main(int argc, char *argv[]) {
 
   unsigned int previous_buttons = 0U;
   for (;;) {
+    ui_run_pending_auto_sync(state);
     ui_pump_app_events();
     ui_clamp_selection(state);
     ui_update_game_scroll(state);
@@ -2328,6 +2731,9 @@ int main(int argc, char *argv[]) {
     }
     if (pressed & SCE_CTRL_RIGHT) {
       ui_move_selection_direction(state, UI_NAV_RIGHT);
+    }
+    if (pressed & SCE_CTRL_SQUARE) {
+      state->sync_feedback.persistent_logs_expanded = !state->sync_feedback.persistent_logs_expanded;
     }
     if (state->selected_index >= UI_SELECT_GAME_BASE) {
       state->active_game_index = state->selected_index - UI_SELECT_GAME_BASE;
