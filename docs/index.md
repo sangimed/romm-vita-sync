@@ -78,7 +78,13 @@ This section summarizes the practical setup for both end users and developers.
 - Network access from Vita to your RomM server
 - Valid RomM credentials (`token` or `username` + `password`)
 
-### Developer Build Prerequisites (Host Method)
+### Developer Build Prerequisites (Recommended: Docker)
+
+- Docker Engine / Docker Desktop installed
+- Docker daemon running
+- Git with submodules support
+
+### Host Toolchain Prerequisites (Alternative)
 
 - VitaSDK toolchain
 - CMake
@@ -104,33 +110,27 @@ Supported keys:
 
 CLI arguments still override values from the local env file.
 
-### Recommended Build + Upload (Host Toolchain)
-
-1. `git submodule update --init --recursive`
-2. Linux/macOS: `./tools/build-and-upload-vpk.sh`
-3. Windows PowerShell: `./tools/build-and-upload-vpk.ps1`
-
-The FTP upload step uses an explicit timeout policy:
-
-- connection timeout: `10s`
-- upload stall timeout: `10s` (if speed drops below `1 B/s`)
-
-### Docker One-Command Alternative
-
-Use this method when VitaSDK is not installed on the host machine.
-
-Prerequisites:
-
-- Docker Engine / Docker Desktop installed
-- Docker daemon running
-
-Commands:
+### Recommended Build + Upload (Docker One-Command)
 
 1. `git submodule update --init --recursive`
 2. Linux/macOS: `./tools/docker-build-and-upload-vpk.sh`
 3. Windows PowerShell: `./tools/docker-build-and-upload-vpk.ps1`
 
-Both Docker wrappers run with `--rm`, so the container is automatically stopped and removed when the script exits (successful or failed).
+The FTP upload step uses an explicit timeout policy:
+
+- connection timeout: `10s`
+- upload stall timeout: `10s` (if speed drops below `1 B/s`)
+- container lifecycle: `--rm` (container auto-stopped and removed when script exits)
+
+### Host Toolchain Alternative
+
+Use this method if you prefer a native VitaSDK setup on the host machine.
+
+Commands:
+
+1. `git submodule update --init --recursive`
+2. Linux/macOS: `./tools/build-and-upload-vpk.sh`
+3. Windows PowerShell: `./tools/build-and-upload-vpk.ps1`
 
 ### First Launch
 
@@ -213,19 +213,19 @@ Coverage:
 
 ### 1. Build And Upload VPK
 
-Host toolchain method (recommended):
+Docker one-command method (recommended):
 
 1. `git submodule update --init --recursive`
 2. Create `tools/build-and-upload-vpk.local.env` from `tools/build-and-upload-vpk.config.sample.env` and set `FTP_HOST` (Vita IP), optional `FTP_PORT`, and optional `FTP_REMOTE_DIR`
-3. Linux/macOS: `./tools/build-and-upload-vpk.sh`
-4. Windows PowerShell: `./tools/build-and-upload-vpk.ps1`
-
-Docker one-command alternative:
-
-1. Ensure Docker Engine/Desktop is installed and daemon is running
-2. `git submodule update --init --recursive`
 3. Linux/macOS: `./tools/docker-build-and-upload-vpk.sh`
 4. Windows PowerShell: `./tools/docker-build-and-upload-vpk.ps1`
+
+Host toolchain alternative:
+
+1. Ensure VitaSDK/CMake/curl are installed on the host
+2. `git submodule update --init --recursive`
+3. Linux/macOS: `./tools/build-and-upload-vpk.sh`
+4. Windows PowerShell: `./tools/build-and-upload-vpk.ps1`
 
 ### 2. First Launch Setup
 
