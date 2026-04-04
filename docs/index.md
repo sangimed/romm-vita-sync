@@ -549,11 +549,7 @@ Contributions, ideas, and feedback are welcome.
 
 Suggested areas:
 
-- PARAM.SFO parsing
-- VMP/SRM conversion
-- RomM save endpoints integration (`list/upload/download`)
 - UI improvements
-- save metadata mapping
 - emulator adapter support
 
 ## Disclaimer
