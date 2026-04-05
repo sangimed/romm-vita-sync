@@ -48,7 +48,7 @@ Current integration status:
 - real HTTP device registration is implemented (`POST /api/devices`)
 - upload/download conversion logic is integrated in `SyncEngine`
 - real HTTP save transfer callbacks are wired (`list/upload/download`)
-- local Vita saves are now mapped to RomM `rom_id` using `/api/roms` metadata heuristics
+- local Vita saves are now mapped to RomM `rom_id` by resolving the platform via `/api/platforms`, then querying `/api/roms` with `platform_ids`
 
 
 ## Execution Model (Version 1)
@@ -594,7 +594,12 @@ Initial goals:
 
 RomM device registration is now wired to the real HTTP endpoint (`POST /api/devices`).
 Save listing/upload/download are now wired to real HTTP callbacks in `main.c` (`/api/saves` endpoints).
-Local Vita items are resolved to server `rom_id` via `/api/roms` metadata before sync decisions.
+Local Vita items are resolved to server `rom_id` before sync decisions by:
+
+- resolving the configured platform through `/api/platforms`
+- loading the RomM catalog through paginated `/api/roms?platform_ids=...` requests
+- matching candidates by serial metadata first, then title (`fs_name_no_tags`, `name`, `fs_name_no_ext`), then filename patterns
+
 Conversion is now wired in the app sync flow:
 
 - upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback
@@ -602,7 +607,13 @@ Conversion is now wired in the app sync flow:
 
 ## End-to-End Sync Sequence Diagram
 
-![RomM Vita Sync end-to-end sequence](assets/diagrams/romm-vita-sync-end-to-end-sync-flow.png)
+Current Rom ID mapping flow:
+
+1. The app resolves the configured RomM platform through `/api/platforms`.
+2. It loads the paginated RomM catalog with `/api/roms?platform_ids=...`.
+3. Each local save is matched by serial metadata first.
+4. If serial matching is not unique, the matcher tries title-based candidates in this order: `fs_name_no_tags`, `name`, `fs_name_no_ext`.
+5. If title matching is still not unique, the matcher falls back to filename-pattern scoring.
 
 ## Contributing
 

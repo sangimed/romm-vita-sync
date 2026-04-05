@@ -1818,6 +1818,7 @@ static int parse_rom_catalog_entries(
       entry->rom_id = rom_id;
       extract_json_string_field_in_range(object_start, object_end, "name", entry->name, sizeof(entry->name));
       extract_json_string_field_in_range(object_start, object_end, "fs_name", entry->fs_name, sizeof(entry->fs_name));
+      extract_json_string_field_in_range(object_start, object_end, "fs_name_no_tags", entry->fs_name_no_tags, sizeof(entry->fs_name_no_tags));
       extract_json_string_field_in_range(object_start, object_end, "fs_name_no_ext", entry->fs_name_no_ext, sizeof(entry->fs_name_no_ext));
       extract_json_string_field_in_range(object_start, object_end, "platform_slug", entry->platform_slug, sizeof(entry->platform_slug));
       extract_serial_metadata(object_start, object_end, entry);
@@ -2137,7 +2138,7 @@ int romm_http_resolve_rom_ids(
       snprintf(
           path,
           sizeof(path),
-          "/api/roms?limit=%d&offset=%d&platform=%s&fields=id,name,fs_name,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id",
+          "/api/roms?limit=%d&offset=%d&platform=%s&fields=id,name,fs_name,fs_name_no_tags,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id",
           ROMM_HTTP_ROM_PAGE_LIMIT,
           offset,
           platform_filter);
@@ -2217,25 +2218,59 @@ int romm_http_resolve_rom_ids(
       continue;
     }
 
-    int resolved_rom_id = game_matcher_resolve_rom_id(local_item, catalog, catalog_count);
+    GameMatcherResolution resolution;
+    int resolved_rom_id = game_matcher_resolve_rom_id_with_details(
+        local_item,
+        catalog,
+        catalog_count,
+        &resolution);
     if (resolved_rom_id > 0) {
       local_item->rom_id = resolved_rom_id;
       resolved_count++;
-      app_log_write(
-          APP_LOG_LEVEL_DEBUG,
-          "http",
-          "rom_id mapped game=%s title=%s -> rom_id=%d",
-          local_item->game_id,
-          local_item->title,
-          resolved_rom_id);
+      if (resolution.score > 0) {
+        app_log_write(
+            APP_LOG_LEVEL_INFO,
+            "http",
+            "rom_id mapped game=%s title=%s -> rom_id=%d via %s/%s score=%d",
+            local_item->game_id,
+            local_item->title,
+            resolved_rom_id,
+            game_matcher_match_stage_str(resolution.stage),
+            game_matcher_match_field_str(resolution.field),
+            resolution.score);
+      } else {
+        app_log_write(
+            APP_LOG_LEVEL_INFO,
+            "http",
+            "rom_id mapped game=%s title=%s -> rom_id=%d via %s/%s",
+            local_item->game_id,
+            local_item->title,
+            resolved_rom_id,
+            game_matcher_match_stage_str(resolution.stage),
+            game_matcher_match_field_str(resolution.field));
+      }
     } else {
       if (resolved_rom_id == GAME_MATCHER_AMBIGUOUS) {
-        app_log_write(
-            APP_LOG_LEVEL_WARN,
-            "http",
-            "rom_id ambiguous game=%s title=%s",
-            local_item->game_id,
-            local_item->title);
+        if (resolution.score > 0) {
+          app_log_write(
+              APP_LOG_LEVEL_WARN,
+              "http",
+              "rom_id ambiguous game=%s title=%s at %s/%s score=%d",
+              local_item->game_id,
+              local_item->title,
+              game_matcher_match_stage_str(resolution.stage),
+              game_matcher_match_field_str(resolution.field),
+              resolution.score);
+        } else {
+          app_log_write(
+              APP_LOG_LEVEL_WARN,
+              "http",
+              "rom_id ambiguous game=%s title=%s at %s/%s",
+              local_item->game_id,
+              local_item->title,
+              game_matcher_match_stage_str(resolution.stage),
+              game_matcher_match_field_str(resolution.field));
+        }
       } else {
         app_log_write(
             APP_LOG_LEVEL_WARN,

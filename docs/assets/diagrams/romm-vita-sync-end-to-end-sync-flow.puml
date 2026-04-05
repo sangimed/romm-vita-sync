@@ -34,8 +34,12 @@ end
 group Rom ID mapping
   UI -> HTTP: romm_http_resolve_rom_ids(config, items)
 
+  HTTP -> API: GET /api/platforms
+  API --> HTTP: platform[]
+  HTTP -> HTTP: resolve configured platform_id
+
   loop paginated catalog
-    HTTP -> API: GET /api/roms?limit&offset&fields=...
+    HTTP -> API: GET /api/roms?limit&offset&platform_ids=...
     API --> HTTP: items[] + total
     HTTP -> HTTP: parse_rom_catalog_entries()\nextract_serial_metadata()
   end
@@ -44,12 +48,12 @@ group Rom ID mapping
     HTTP -> GM: game_matcher_resolve_rom_id(...)
     GM -> GM: Stage 1 serial/game_id
     alt no unique match
-      GM -> GM: Stage 2 title vs fs_name_no_ext
+      GM -> GM: Stage 2 title vs fs_name_no_tags/name/fs_name_no_ext
     end
     alt still no unique match
       GM -> GM: Stage 3 filename patterns
     end
-    GM --> HTTP: rom_id or no-match
+    GM --> HTTP: rom_id, ambiguous, or no-match
   end
 
   alt mapping error
