@@ -27,11 +27,15 @@
 #define ROMM_HTTP_MAX_UPLOAD_SIZE (2 * 1024 * 1024)
 #define ROMM_HTTP_MAX_FILENAME 128
 #define ROMM_HTTP_MAX_PLATFORM_SLUG 64
+#define ROMM_HTTP_FALLBACK_URL_BUFFER_SIZE (APP_CONFIG_MAX_URL_LEN + 256)
+#define ROMM_HTTP_SSL_TRANSPORT_ERROR 0x80431075u
 #define ROMM_HTTP_SAVE_EMULATOR "pcsx_rearmed"
-#define ROMM_HTTPS_VERIFY_FLAGS                                    \
-  (SCE_HTTPS_FLAG_SERVER_VERIFY | SCE_HTTPS_FLAG_CN_CHECK |        \
-   SCE_HTTPS_FLAG_NOT_AFTER_CHECK | SCE_HTTPS_FLAG_NOT_BEFORE_CHECK | \
-   SCE_HTTPS_FLAG_KNOWN_CA_CHECK)
+/*
+ * Keep verify-tls override compatible with retail firmware behavior.
+ * Some Vita builds reject multi-flag disable masks with 0x8043506B.
+ * Disabling SERVER_VERIFY is sufficient to skip certificate checks.
+ */
+#define ROMM_HTTPS_VERIFY_OVERRIDE_FLAG (SCE_HTTPS_FLAG_SERVER_VERIFY)
 
 typedef struct HttpRuntimeState {
   void *net_memory;
@@ -66,6 +70,22 @@ static int url_is_https(const char *url) {
   }
 
   return strncmp(url, "https://", 8) == 0;
+}
+
+/*
+ * Builds an HTTP URL from an HTTPS URL by swapping the scheme.
+ */
+static int build_http_fallback_url(const char *https_url, char *out_url, size_t out_url_size) {
+  if (!url_is_https(https_url) || (out_url == NULL) || (out_url_size == 0U)) {
+    return -1;
+  }
+
+  int written = snprintf(out_url, out_url_size, "http://%s", https_url + 8);
+  if ((written <= 0) || ((size_t)written >= out_url_size)) {
+    return -1;
+  }
+
+  return 0;
 }
 
 /*
@@ -1084,13 +1104,19 @@ static void extract_serial_metadata(
       "serials",
       "serial_list",
       "serial_number",
+      "serialNumber",
       "product_code",
+      "productCode",
       "disc_id",
-      "game_id"};
+      "discId",
+      "game_id",
+      "gameId"};
   const char *const list_keys[] = {
       "serials",
       "serial_list",
-      "product_codes"};
+      "serialNumbers",
+      "product_codes",
+      "productCodes"};
 
   for (size_t i = 0U; i < (sizeof(primary_keys) / sizeof(primary_keys[0])); ++i) {
     char value[GAME_MATCHER_MAX_SERIAL_LIST_LEN];
@@ -1134,8 +1160,8 @@ static void extract_serial_metadata(
 /*
  * Initializes Vita networking + HTTP stack for one HTTP transaction.
  */
-static int http_runtime_init(const char *url, HttpRuntimeState *state) {
-  if ((state == NULL) || !has_text(url)) {
+static int http_runtime_init(const AppConfig *config, const char *url, HttpRuntimeState *state) {
+  if ((config == NULL) || (state == NULL) || !has_text(url)) {
     return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
   }
 
@@ -1205,6 +1231,16 @@ static int http_runtime_init(const char *url, HttpRuntimeState *state) {
       goto fail;
     }
     state->ssl_inited = 1;
+
+    if (!config->romm_verify_tls) {
+      int disable_status = sceHttpsDisableOption(ROMM_HTTPS_VERIFY_OVERRIDE_FLAG);
+      if (disable_status >= 0) {
+        state->tls_verify_disabled = 1;
+        app_log_write(APP_LOG_LEVEL_WARN, "http", "TLS verification disabled for this request");
+      } else {
+        app_log_write(APP_LOG_LEVEL_WARN, "http", "Failed to disable TLS verification: 0x%08X", (unsigned int)disable_status);
+      }
+    }
   }
 
   return ROMM_CLIENT_OK;
@@ -1223,7 +1259,7 @@ static void http_runtime_term(HttpRuntimeState *state) {
   }
 
   if (state->tls_verify_disabled) {
-    int status = sceHttpsEnableOption(ROMM_HTTPS_VERIFY_FLAGS);
+    int status = sceHttpsEnableOption(ROMM_HTTPS_VERIFY_OVERRIDE_FLAG);
     if (status < 0) {
       app_log_write(APP_LOG_LEVEL_WARN, "http", "sceHttpsEnableOption failed: 0x%08X", (unsigned int)status);
     }
@@ -1306,7 +1342,7 @@ static int http_send_request(
   }
 
   HttpRuntimeState runtime_state;
-  int runtime_status = http_runtime_init(url, &runtime_state);
+  int runtime_status = http_runtime_init(config, url, &runtime_state);
   if (runtime_status < 0) {
     return runtime_status;
   }
@@ -1315,6 +1351,10 @@ static int http_send_request(
   int connection_id = -1;
   int request_id = -1;
   int result = ROMM_CLIENT_ERR_NETWORK;
+  int retry_over_http = 0;
+  int transport_error = 0;
+  char fallback_url[ROMM_HTTP_FALLBACK_URL_BUFFER_SIZE];
+  fallback_url[0] = '\0';
 
   unsigned int timeout_seconds = (config->romm_timeout_seconds > 0)
                                      ? (unsigned int)config->romm_timeout_seconds
@@ -1349,24 +1389,26 @@ static int http_send_request(
   sceHttpSetSendTimeOut(template_id, timeout_usec_u32);
   sceHttpSetRecvTimeOut(template_id, timeout_usec_u32);
 
-  if (url_is_https(url) && !config->romm_verify_tls) {
-    int disable_status = sceHttpsDisableOption(ROMM_HTTPS_VERIFY_FLAGS);
-    if (disable_status >= 0) {
-      runtime_state.tls_verify_disabled = 1;
-      app_log_write(APP_LOG_LEVEL_WARN, "http", "TLS verification disabled for this request");
-    } else {
-      app_log_write(APP_LOG_LEVEL_WARN, "http", "Failed to disable TLS verification: 0x%08X", (unsigned int)disable_status);
-    }
-  }
-
   connection_id = sceHttpCreateConnectionWithURL(template_id, url, 0);
   if (connection_id < 0) {
+    transport_error = connection_id;
+    if (!config->romm_verify_tls &&
+        ((unsigned int)transport_error == ROMM_HTTP_SSL_TRANSPORT_ERROR) &&
+        (build_http_fallback_url(url, fallback_url, sizeof(fallback_url)) == 0)) {
+      retry_over_http = 1;
+    }
     app_log_write(APP_LOG_LEVEL_ERROR, "http", "sceHttpCreateConnectionWithURL failed: 0x%08X", (unsigned int)connection_id);
     goto cleanup;
   }
 
   request_id = sceHttpCreateRequestWithURL(connection_id, method, url, (unsigned long long)payload_size);
   if (request_id < 0) {
+    transport_error = request_id;
+    if (!config->romm_verify_tls &&
+        ((unsigned int)transport_error == ROMM_HTTP_SSL_TRANSPORT_ERROR) &&
+        (build_http_fallback_url(url, fallback_url, sizeof(fallback_url)) == 0)) {
+      retry_over_http = 1;
+    }
     app_log_write(APP_LOG_LEVEL_ERROR, "http", "sceHttpCreateRequestWithURL failed: 0x%08X", (unsigned int)request_id);
     goto cleanup;
   }
@@ -1386,6 +1428,12 @@ static int http_send_request(
 
   int http_status = sceHttpSendRequest(request_id, payload, (unsigned int)payload_size);
   if (http_status < 0) {
+    transport_error = http_status;
+    if (!config->romm_verify_tls &&
+        ((unsigned int)transport_error == ROMM_HTTP_SSL_TRANSPORT_ERROR) &&
+        (build_http_fallback_url(url, fallback_url, sizeof(fallback_url)) == 0)) {
+      retry_over_http = 1;
+    }
     app_log_write(APP_LOG_LEVEL_ERROR, "http", "sceHttpSendRequest failed: 0x%08X", (unsigned int)http_status);
     goto cleanup;
   }
@@ -1458,6 +1506,26 @@ cleanup:
   }
 
   http_runtime_term(&runtime_state);
+
+  if (retry_over_http) {
+    app_log_write(
+        APP_LOG_LEVEL_WARN,
+        "http",
+        "Retrying request over HTTP after HTTPS SSL transport failure (verify_tls=false): %s",
+        fallback_url);
+    return http_send_request(
+        config,
+        method,
+        fallback_url,
+        content_type,
+        payload,
+        payload_size,
+        out_status_code,
+        out_body,
+        out_body_size,
+        response_file_path);
+  }
+
   return result;
 }
 
@@ -1628,12 +1696,22 @@ static int parse_rom_catalog_entries(
   char total_text[32];
   if (extract_json_scalar_field(json, "total", total_text, sizeof(total_text)) == 0) {
     parse_int_value(total_text, out_total);
+  } else if (extract_json_scalar_field(json, "count", total_text, sizeof(total_text)) == 0) {
+    parse_int_value(total_text, out_total);
   }
 
   const char *array_start = NULL;
   const char *array_end = NULL;
   if (find_object_array_range(json, "items", &array_start, &array_end) < 0) {
-    return 0;
+    if (find_object_array_range(json, "data", &array_start, &array_end) < 0) {
+      if (find_object_array_range(json, "results", &array_start, &array_end) < 0) {
+        if (find_object_array_range(json, "roms", &array_start, &array_end) < 0) {
+          if (find_object_array_range(json, NULL, &array_start, &array_end) < 0) {
+            return 0;
+          }
+        }
+      }
+    }
   }
 
   int count = 0;
@@ -1648,8 +1726,16 @@ static int parse_rom_catalog_entries(
 
     char id_text[32];
     int rom_id = -1;
+    int id_found = 0;
     if ((extract_json_scalar_field_in_range(object_start, object_end, "id", id_text, sizeof(id_text)) == 0) &&
-        (parse_int_value(id_text, &rom_id) == 0) &&
+        (parse_int_value(id_text, &rom_id) == 0)) {
+      id_found = 1;
+    } else if ((extract_json_string_field_in_range(object_start, object_end, "id", id_text, sizeof(id_text)) == 0) &&
+               (parse_int_value(id_text, &rom_id) == 0)) {
+      id_found = 1;
+    }
+
+    if (id_found &&
         (rom_id > 0)) {
       RomCatalogEntry *entry = &out_entries[count];
       memset(entry, 0, sizeof(*entry));
@@ -1896,7 +1982,27 @@ int romm_http_resolve_rom_ids(
       break;
     }
 
+    app_log_write(
+        APP_LOG_LEVEL_DEBUG,
+        "http",
+        "rom catalog page parsed offset=%d parsed=%d total_hint=%d",
+        offset,
+        parsed,
+        page_total);
+
     catalog_count += parsed;
+  }
+
+  app_log_write(
+      APP_LOG_LEVEL_INFO,
+      "http",
+      "rom catalog loaded entries=%d",
+      catalog_count);
+  if (catalog_count <= 0) {
+    app_log_write(
+        APP_LOG_LEVEL_WARN,
+        "http",
+        "rom catalog is empty or unsupported response format");
   }
 
   int resolved_count = 0;
@@ -1919,12 +2025,21 @@ int romm_http_resolve_rom_ids(
           local_item->title,
           resolved_rom_id);
     } else {
-      app_log_write(
-          APP_LOG_LEVEL_WARN,
-          "http",
-          "rom_id unresolved game=%s title=%s",
-          local_item->game_id,
-          local_item->title);
+      if (resolved_rom_id == GAME_MATCHER_AMBIGUOUS) {
+        app_log_write(
+            APP_LOG_LEVEL_WARN,
+            "http",
+            "rom_id ambiguous game=%s title=%s",
+            local_item->game_id,
+            local_item->title);
+      } else {
+        app_log_write(
+            APP_LOG_LEVEL_WARN,
+            "http",
+            "rom_id unresolved game=%s title=%s",
+            local_item->game_id,
+            local_item->title);
+      }
     }
   }
 

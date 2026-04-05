@@ -19,7 +19,9 @@ The long-term objective is cross-platform save synchronization across:
 
 The first milestone targets PS1 save synchronization using Adrenaline virtual memory cards.
 
-The first implementation targets a manual synchronization workflow executed from a dedicated homebrew application. Automatic background synchronization via system plugins is planned for a later stage.
+The first implementation targets a manual synchronization workflow executed from a dedicated homebrew application.
+An optional startup auto-sync path is also available in-app (`[Sync].auto_sync_on_startup = true`) and uses persistent on-screen progress feedback.
+Automatic trigger integration from system plugin events remains planned for a later stage.
 
 ## Project Status
 
@@ -37,7 +39,7 @@ Initial milestone includes:
 - Convert `.SRM` → `.VMP`
 - Compare local vs remote saves
 - Manual synchronization workflow
-- Synchronization is triggered manually from the application UI in this phase (automatic triggers planned later)
+- Synchronization is triggered manually from the application UI in this phase, with optional startup auto-sync (`auto_sync_on_startup`)
 - Automatic backup before overwrite
 - Zero destructive operations without confirmation
 
@@ -76,20 +78,59 @@ This section summarizes the practical setup for both end users and developers.
 - Network access from Vita to your RomM server
 - Valid RomM credentials (`token` or `username` + `password`)
 
-### Developer Build Prerequisites
+### Developer Build Prerequisites (Recommended: Docker)
+
+- Docker Engine / Docker Desktop installed
+- Docker daemon running
+- Git with submodules support
+
+### Host Toolchain Prerequisites (Alternative)
 
 - VitaSDK toolchain
 - CMake
 - Git with submodules support
+- `curl` (or `curl.exe` on Windows)
 
-### Build and Install
+### Upload Target Configuration (Vita FTP)
 
-1. Initialize submodules:
-2. `git submodule update --init --recursive`
-3. Configure and build:
-4. `cmake -S . -B build`
-5. `cmake --build build --config Release`
-6. Install `build/romm_vita_sync.vpk` on Vita (for example via VitaShell FTP/USB)
+The build/upload helpers read optional FTP settings from:
+
+`tools/build-and-upload-vpk.local.env`
+
+Create it from the sample template:
+
+- Linux/macOS: `cp tools/build-and-upload-vpk.config.sample.env tools/build-and-upload-vpk.local.env`
+- Windows PowerShell: `Copy-Item tools/build-and-upload-vpk.config.sample.env tools/build-and-upload-vpk.local.env`
+
+Supported keys:
+
+- `FTP_HOST`: Vita IP address (for example `192.168.1.20`)
+- `FTP_PORT`: VitaShell FTP port (default `1337`)
+- `FTP_REMOTE_DIR`: remote destination directory (default `ux0:/homebrews`)
+
+CLI arguments still override values from the local env file.
+
+### Recommended Build + Upload (Docker One-Command)
+
+1. `git submodule update --init --recursive`
+2. Linux/macOS: `./tools/docker-build-and-upload-vpk.sh`
+3. Windows PowerShell: `./tools/docker-build-and-upload-vpk.ps1`
+
+The FTP upload step uses an explicit timeout policy:
+
+- connection timeout: `10s`
+- upload stall timeout: `10s` (if speed drops below `1 B/s`)
+- container lifecycle: `--rm` (container auto-stopped and removed when script exits)
+
+### Host Toolchain Alternative
+
+Use this method if you prefer a native VitaSDK setup on the host machine.
+
+Commands:
+
+1. `git submodule update --init --recursive`
+2. Linux/macOS: `./tools/build-and-upload-vpk.sh`
+3. Windows PowerShell: `./tools/build-and-upload-vpk.ps1`
 
 ### First Launch
 
@@ -103,7 +144,7 @@ This section summarizes the practical setup for both end users and developers.
 1. Ensure Vita can reach the RomM URL
 2. In the game list, choose a detected PS1 game
 3. Return to `Synchronize Selected Game` and press `X`
-4. Follow progress and errors in the synchronization report flow and footer status line
+4. Follow progress in the sync modal (manual runs) or in the persistent `Sync Activity` panel (automatic startup runs)
 
 Notes:
 
@@ -129,8 +170,8 @@ Supported sections:
 
 - `[RomM]`: `url`, `token`, `username`, `password`, `verify_tls`, `timeout_seconds`
 - `[Device]`: `device_id`, `device_name`, `device_platform`, `client`, `client_version`
-- `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`
-- `[Log]`: `level` (`error|warn|info|debug`), `scan_verbose` (`true|false`)
+- `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`, `auto_sync_on_startup`
+- `[Log]`: `level` (`error|warn|info|debug`), `file_enabled` (`true|false`), `scan_verbose` (`true|false`)
 
 Security notice:
 
@@ -142,15 +183,21 @@ Credential rule:
 - either `token`, or `username` + `password`
 - if `[Device].device_id` is empty, startup calls the `RommClient` registration flow and persists the returned `device_id` into `settings.ini`
 - recommended logging for troubleshooting: `level=debug` and keep `scan_verbose=false` first; enable `scan_verbose=true` only when debugging scanner issues
+- file logging path is fixed to `ux0:data/romm-vita-sync/romm-vita-sync.log`
+- file logging rotation is fixed to 3 files max (`.log`, `.log.1`, `.log.2`), 10MB each (max 30MB total)
 
 Current in-app UI behavior:
 
 - The home screen exposes dedicated fields for the RomM `url`, `username`, and `password`.
+- The home screen includes a `File logging (10MB x3)` toggle with immediate save.
 - Editing those fields opens the official PS Vita system keyboard (`SceImeDialog`).
 - Confirming keyboard input persists values immediately to `ux0:data/romm-vita-sync/settings.ini`.
 - The main screen keeps a visible primary `Synchronize Selected Game` action and a secondary `Rescan Local Saves` action.
 - The current sync target is selected from the detected PS1 game list and remains highlighted even when focus moves back to the sync button.
-- Status feedback stays visible in the footer, while full synchronization details still open in modal report screens.
+- Manual sync runs now open a blocking modal with a title, real progress bar, and live scrolling logs.
+- While a manual sync is running, the modal cannot be closed; once complete, it shows success/failure and can be closed manually.
+- A persistent `Sync Activity` panel in the main layout shows progress and tail logs for automatic startup sync and last run status.
+- Press `SQUARE` on the main screen to expand/collapse the persistent sync log dropdown.
 - The current UI uses a sober single-screen Vita layout with compact panels, controller navigation, and sharper text placement.
 
 The sync engine now treats server `409 Conflict` responses as synchronization conflicts (remote newer) rather than generic transfer errors, aligned with `romm-retroarch-sync` behavior.
@@ -167,12 +214,21 @@ Coverage:
 - in-app conversion path wiring (`VMP->SRM` for upload, `SRM->VMP` + signing for download)
 - real save transfer integration (`GET /api/saves`, `POST /api/saves`, `GET /api/saves/{id}/content`)
 
-### 1. Build And Install
+### 1. Build And Upload VPK
+
+Docker one-command method (recommended):
 
 1. `git submodule update --init --recursive`
-2. `cmake -S . -B build`
-3. `cmake --build build --config Release`
-4. Install `build/romm_vita_sync.vpk` on Vita (for example via VitaShell FTP/USB)
+2. Create `tools/build-and-upload-vpk.local.env` from `tools/build-and-upload-vpk.config.sample.env` and set `FTP_HOST` (Vita IP), optional `FTP_PORT`, and optional `FTP_REMOTE_DIR`
+3. Linux/macOS: `./tools/docker-build-and-upload-vpk.sh`
+4. Windows PowerShell: `./tools/docker-build-and-upload-vpk.ps1`
+
+Host toolchain alternative:
+
+1. Ensure VitaSDK/CMake/curl are installed on the host
+2. `git submodule update --init --recursive`
+3. Linux/macOS: `./tools/build-and-upload-vpk.sh`
+4. Windows PowerShell: `./tools/build-and-upload-vpk.ps1`
 
 ### 2. First Launch Setup
 
@@ -191,8 +247,9 @@ Coverage:
 
 1. Move through the detected PS1 game list to choose the current sync target.
 2. Return to `Synchronize Selected Game` and press `X`.
-3. Confirm progress/steps/success/errors are visible in the synchronization report flow and reflected in the footer status line.
-4. On first successful authenticated sync, confirm `device_id` is persisted in `settings.ini`.
+3. Confirm manual sync shows a blocking progress modal with live logs and completion state.
+4. Confirm automatic startup sync (when enabled) updates the persistent `Sync Activity` panel without opening a modal.
+5. On first successful authenticated sync, confirm `device_id` is persisted in `settings.ini`.
 
 ### 5. Persistence Validation
 
@@ -542,6 +599,10 @@ Conversion is now wired in the app sync flow:
 
 - upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback
 - download path: remote `.SRM` is reconstructed to local `.VMP` and re-signed in-app
+
+## End-to-End Sync Sequence Diagram
+
+![RomM Vita Sync end-to-end sequence](assets/diagrams/romm-vita-sync-end-to-end-sync-flow.png)
 
 ## Contributing
 

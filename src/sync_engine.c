@@ -225,6 +225,37 @@ static void set_reason(SyncActionRecord *action, const char *format, ...) {
 }
 
 /*
+ * Emits one progress checkpoint to the optional sync progress callback.
+ * The callback receives completed/total units and a concise stage message.
+ */
+static void emit_progress(
+    const SyncEngineConfig *config,
+    int completed_units,
+    int total_units,
+    int local_index,
+    int local_total,
+    const char *format,
+    ...) {
+  if ((config == NULL) || (config->progress_callback == NULL) || (format == NULL)) {
+    return;
+  }
+
+  char message[ROMM_SYNC_MAX_REASON_LEN];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(message, sizeof(message), format, args);
+  va_end(args);
+
+  config->progress_callback(
+      completed_units,
+      total_units,
+      local_index,
+      local_total,
+      message,
+      config->progress_user_data);
+}
+
+/*
  * Compares local and remote content signatures using size and optional hash.
  */
 static int same_content_signature(const SyncSaveDescriptor *local_item, const SyncSaveDescriptor *remote_item) {
@@ -340,10 +371,18 @@ static int execute_upload(
     return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
   }
 
+  app_log_write(
+      APP_LOG_LEVEL_INFO,
+      "sync",
+      "uploading save: game=%s file=%s",
+      local_item->game_id,
+      has_text(action->filename) ? action->filename : local_item->filename);
+
   if (config->dry_run) {
     action->executed = 0;
     action->status_code = SYNC_ENGINE_OK;
     set_reason(action, "planned upload (dry-run)");
+    app_log_write(APP_LOG_LEVEL_INFO, "sync", "upload skipped (dry-run)");
     return SYNC_ENGINE_OK;
   }
 
@@ -355,6 +394,10 @@ static int execute_upload(
   conversion_temp_path[0] = '\0';
 
   if (has_text(local_item->path) && path_has_extension(local_item->path, ".vmp")) {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "sync",
+        "converting save format: .VMP -> .SRM before upload");
     int ensure_status = backup_manager_ensure_directory(SYNC_DEFAULT_CONVERSION_DIRECTORY);
     if (ensure_status != BACKUP_MANAGER_OK) {
       action->status_code = ensure_status;
@@ -429,6 +472,7 @@ static int execute_upload(
   action->executed = 1;
   report->uploads_executed += 1;
   set_reason(action, "uploaded");
+  app_log_write(APP_LOG_LEVEL_INFO, "sync", "upload complete: game=%s file=%s", local_item->game_id, action->filename);
 
   int64_t now = (config->now_callback != NULL) ? config->now_callback() : default_now_callback();
   SyncStateEntry state_entry;
@@ -462,6 +506,13 @@ static int execute_download(
     return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
   }
 
+  app_log_write(
+      APP_LOG_LEVEL_INFO,
+      "sync",
+      "downloading save: game=%s file=%s",
+      local_item->game_id,
+      has_text(action->filename) ? action->filename : local_item->filename);
+
   if (!has_text(local_item->path)) {
     action->status_code = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
     set_reason(action, "download destination path missing");
@@ -473,6 +524,7 @@ static int execute_download(
     action->executed = 0;
     action->status_code = SYNC_ENGINE_OK;
     set_reason(action, "planned download (dry-run)");
+    app_log_write(APP_LOG_LEVEL_INFO, "sync", "download skipped (dry-run)");
     return SYNC_ENGINE_OK;
   }
 
@@ -480,6 +532,7 @@ static int execute_download(
     const char *backup_directory = has_text(config->backup_directory)
                                        ? config->backup_directory
                                        : SYNC_DEFAULT_BACKUP_DIRECTORY;
+    app_log_write(APP_LOG_LEVEL_INFO, "sync", "creating backup before overwrite");
     int64_t now = (config->now_callback != NULL) ? config->now_callback() : default_now_callback();
     int backup_status = backup_manager_backup_file(local_item->path, backup_directory, now, NULL, 0U);
     if (backup_status != BACKUP_MANAGER_OK) {
@@ -496,6 +549,10 @@ static int execute_download(
   conversion_temp_path[0] = '\0';
 
   if (path_has_extension(local_item->path, ".vmp")) {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "sync",
+        "converting save format: .SRM -> .VMP after download");
     int ensure_status = backup_manager_ensure_directory(SYNC_DEFAULT_CONVERSION_DIRECTORY);
     if (ensure_status != BACKUP_MANAGER_OK) {
       action->status_code = ensure_status;
@@ -601,6 +658,7 @@ static int execute_download(
   action->executed = 1;
   report->downloads_executed += 1;
   set_reason(action, "downloaded");
+  app_log_write(APP_LOG_LEVEL_INFO, "sync", "download complete: game=%s file=%s", local_item->game_id, action->filename);
 
   int64_t last_upload = 0;
   if (previous_state_entry != NULL) {
@@ -665,6 +723,18 @@ int sync_engine_run(
   memset(out_report, 0, sizeof(*out_report));
   out_report->local_count = local_count;
   app_log_write(APP_LOG_LEVEL_DEBUG, "sync", "run begin local_count=%d dry_run=%d", local_count, config->dry_run);
+  int total_engine_units = local_count + 1;
+  if (total_engine_units < 1) {
+    total_engine_units = 1;
+  }
+  int completed_engine_units = 0;
+  emit_progress(
+      config,
+      completed_engine_units,
+      total_engine_units,
+      -1,
+      local_count,
+      "Listing remote saves...");
 
   SyncStateStore state_store;
   sync_state_store_init(&state_store);
@@ -674,6 +744,13 @@ int sync_engine_run(
     int load_status = sync_state_store_load(config->state_store_path, &state_store);
     if (load_status != SYNC_STATE_STORE_OK) {
       app_log_write(APP_LOG_LEVEL_ERROR, "sync", "state load failed: %s", sync_state_store_status_str(load_status));
+      emit_progress(
+          config,
+          completed_engine_units,
+          total_engine_units,
+          -1,
+          local_count,
+          "Sync failed: state loading failed");
       return SYNC_ENGINE_ERR_STATE_LOAD;
     }
   }
@@ -691,14 +768,32 @@ int sync_engine_run(
     sync_save_descriptor_init(&remote_items[i]);
   }
 
+  app_log_write(APP_LOG_LEVEL_INFO, "sync", "scanning remote saves...");
   int remote_count = romm_client_list_remote_saves(
       romm_client, remote_items, (int)(sizeof(remote_items) / sizeof(remote_items[0])));
   if (remote_count < 0) {
     app_log_write(APP_LOG_LEVEL_ERROR, "sync", "remote listing failed: %s (%d)", romm_client_status_str(remote_count), remote_count);
+    emit_progress(
+        config,
+        completed_engine_units,
+        total_engine_units,
+        -1,
+        local_count,
+        "Sync failed: remote listing error (%s)",
+        romm_client_status_str(remote_count));
     return SYNC_ENGINE_ERR_REMOTE_LIST;
   }
   out_report->remote_count = remote_count;
   app_log_write(APP_LOG_LEVEL_INFO, "sync", "remote listing returned %d items", remote_count);
+  completed_engine_units = 1;
+  emit_progress(
+      config,
+      completed_engine_units,
+      total_engine_units,
+      -1,
+      local_count,
+      "Remote saves loaded: %d",
+      remote_count);
 
   for (int i = 0; i < local_count; ++i) {
     const SyncSaveDescriptor *local_item = &local_items[i];
@@ -714,6 +809,24 @@ int sync_engine_run(
       filename = filename_fallback;
       snprintf(action->filename, sizeof(action->filename), "%s", filename_fallback);
     }
+    const char *display_filename = has_text(action->filename)
+                                       ? action->filename
+                                       : (has_text(filename) ? filename : "(unnamed)");
+
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "sync",
+        "matching save with remote entry: game=%s file=%s",
+        local_item->game_id,
+        display_filename);
+    emit_progress(
+        config,
+        completed_engine_units,
+        total_engine_units,
+        i,
+        local_count,
+        "Matching save with remote entry: %s",
+        display_filename);
 
     const SyncStateEntry *state_entry =
         sync_state_store_find_const(&state_store, local_item->game_id, filename, local_item->slot);
@@ -724,6 +837,15 @@ int sync_engine_run(
         action->action = SYNC_ACTION_SKIP;
         out_report->skipped += 1;
         set_reason(action, "skip unchanged upload candidate");
+        app_log_write(APP_LOG_LEVEL_INFO, "sync", "upload skipped: already up to date");
+        completed_engine_units = 2 + i;
+        emit_progress(
+            config,
+            completed_engine_units,
+            total_engine_units,
+            i,
+            local_count,
+            "Upload skipped: already up to date");
         continue;
       }
 
@@ -746,6 +868,16 @@ int sync_engine_run(
         set_reason(action, "server conflict (409): remote newer, download before upload");
         app_log_write(APP_LOG_LEVEL_WARN, "sync", "upload conflict game=%s file=%s", local_item->game_id, action->filename);
       }
+      completed_engine_units = 2 + i;
+      emit_progress(
+          config,
+          completed_engine_units,
+          total_engine_units,
+          i,
+          local_count,
+          "%s: %s",
+          display_filename,
+          action->reason);
       continue;
     }
 
@@ -758,6 +890,15 @@ int sync_engine_run(
       } else {
         set_reason(action, "skip remote save (device already current)");
       }
+      app_log_write(APP_LOG_LEVEL_INFO, "sync", "download skipped: already up to date");
+      completed_engine_units = 2 + i;
+      emit_progress(
+          config,
+          completed_engine_units,
+          total_engine_units,
+          i,
+          local_count,
+          "Download skipped: already up to date");
       continue;
     }
 
@@ -773,6 +914,16 @@ int sync_engine_run(
       } else {
         set_reason(action, "metadata differs but no deterministic conflict");
       }
+      completed_engine_units = 2 + i;
+      emit_progress(
+          config,
+          completed_engine_units,
+          total_engine_units,
+          i,
+          local_count,
+          "%s: %s",
+          display_filename,
+          action->reason);
       continue;
     }
 
@@ -781,6 +932,16 @@ int sync_engine_run(
       out_report->skipped += 1;
       set_reason(action, "skip same-origin remote save");
       app_log_write(APP_LOG_LEVEL_DEBUG, "sync", "skip same-origin game=%s file=%s", local_item->game_id, action->filename);
+      completed_engine_units = 2 + i;
+      emit_progress(
+          config,
+          completed_engine_units,
+          total_engine_units,
+          i,
+          local_count,
+          "%s: %s",
+          display_filename,
+          action->reason);
       continue;
     }
 
@@ -825,6 +986,16 @@ int sync_engine_run(
         set_reason(action, "server conflict (409): remote newer, download before upload");
         app_log_write(APP_LOG_LEVEL_WARN, "sync", "upload conflict game=%s file=%s", local_item->game_id, action->filename);
       }
+      completed_engine_units = 2 + i;
+      emit_progress(
+          config,
+          completed_engine_units,
+          total_engine_units,
+          i,
+          local_count,
+          "%s: %s",
+          display_filename,
+          action->reason);
       continue;
     }
 
@@ -841,17 +1012,44 @@ int sync_engine_run(
           &state_store,
           action,
           out_report);
+      completed_engine_units = 2 + i;
+      emit_progress(
+          config,
+          completed_engine_units,
+          total_engine_units,
+          i,
+          local_count,
+          "%s: %s",
+          display_filename,
+          action->reason);
       continue;
     }
 
     out_report->skipped += 1;
     set_reason(action, "manual confirmation required (conflict=%s)", sync_conflict_type_str(conflict));
+    completed_engine_units = 2 + i;
+    emit_progress(
+        config,
+        completed_engine_units,
+        total_engine_units,
+        i,
+        local_count,
+        "%s: %s",
+        display_filename,
+        action->reason);
   }
 
   if (!config->dry_run && has_text(config->state_store_path)) {
     int save_status = sync_state_store_save(config->state_store_path, &state_store);
     if (save_status != SYNC_STATE_STORE_OK) {
       app_log_write(APP_LOG_LEVEL_ERROR, "sync", "state save failed: %s", sync_state_store_status_str(save_status));
+      emit_progress(
+          config,
+          completed_engine_units,
+          total_engine_units,
+          -1,
+          local_count,
+          "Sync failed: state saving failed");
       return SYNC_ENGINE_ERR_STATE_SAVE;
     }
   }
@@ -864,6 +1062,13 @@ int sync_engine_run(
       out_report->conflicts_detected,
       out_report->skipped,
       out_report->transfer_errors);
+  emit_progress(
+      config,
+      total_engine_units,
+      total_engine_units,
+      -1,
+      local_count,
+      "Sync engine completed");
 
   return SYNC_ENGINE_OK;
 }

@@ -1,8 +1,12 @@
 # Documentation Policy
 
-Documentation is part of the implementation and must stay consistent with the codebase at all times.
+Documentation is part of the implementation and must remain consistent with the codebase at all times.
 
-Both function-level comments and project-level Markdown documentation must be updated whenever behavior changes.
+Both function-level comments and MkDocs project documentation must be updated whenever behavior changes.
+
+Any change that makes documentation inaccurate or incomplete MUST include a documentation update in the same commit.
+
+Outdated documentation is considered a bug.
 
 ---
 
@@ -31,15 +35,21 @@ Avoid:
 - vague descriptions
 - outdated documentation
 
-If a function changes behavior, its comment must be updated in the same change.
+If a function changes behavior, its comment must be updated immediately.
 
 ---
 
-# Markdown Documentation Update Policy
+# MkDocs Update Policy
 
-Markdown documentation must always reflect the current implementation.
+MkDocs documentation is the source of truth for project concepts and architecture.
 
-If a change modifies an already documented concept, the documentation must be updated in the same commit.
+Any change that affects documented behavior MUST update the corresponding MkDocs pages in the same commit.
+
+README scope policy:
+
+- `README.md` must remain high-level and non-technical.
+- Technical setup, commands, workflows, configuration details, and troubleshooting must be documented in MkDocs (`docs/`), not in `README.md`.
+- When adding or moving technical documentation, prefer updating existing MkDocs pages rather than expanding `README.md`.
 
 This includes changes to:
 
@@ -54,8 +64,13 @@ This includes changes to:
 - UI workflow
 - CLI behavior
 - RomM integration
+- supported platforms
+- storage locations
+- API interactions
 
-Outdated documentation is not acceptable.
+If documentation exists for a concept, it must never become stale.
+
+When in doubt: update MkDocs.
 
 ---
 
@@ -72,6 +87,8 @@ Functions related to save synchronization must explicitly document:
 
 These behaviors must never remain implicit.
 
+They must also remain aligned with the MkDocs synchronization documentation.
+
 ---
 
 # Contributor Rules
@@ -80,6 +97,7 @@ When adding or modifying code:
 
 1. write or update function comments if behavior is non-trivial
 2. keep comments aligned with implementation
-3. update Markdown documentation when a documented concept changes
+3. update MkDocs documentation when a documented concept changes
 4. never leave outdated documentation behind
 5. prioritize clarity over verbosity
+6. treat documentation drift as a defect to fix immediately

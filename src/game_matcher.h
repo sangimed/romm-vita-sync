@@ -6,6 +6,8 @@
 #define GAME_MATCHER_MAX_PLATFORM_SLUG_LEN 64
 #define GAME_MATCHER_MAX_ROM_LABEL_LEN 128
 #define GAME_MATCHER_MAX_SERIAL_LIST_LEN 256
+#define GAME_MATCHER_NO_MATCH 0
+#define GAME_MATCHER_AMBIGUOUS (-2)
 
 typedef struct GameMatcherRomCandidate {
   int rom_id;

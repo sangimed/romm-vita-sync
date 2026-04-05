@@ -4,9 +4,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#define GAME_MATCHER_NO_MATCH 0
-#define GAME_MATCHER_AMBIGUOUS (-2)
-
 /*
  * Returns non-zero when a string is non-null and non-empty.
  */
@@ -113,6 +110,10 @@ static int is_ps1_platform_slug(const char *platform_slug) {
     return 0;
   }
 
+  if (sync_string_ieq(normalized, "ps") ||
+      sync_string_ieq(normalized, "psone")) {
+    return 1;
+  }
   if (strstr(normalized, "psx") != NULL) {
     return 1;
   }
@@ -345,6 +346,7 @@ static int resolve_rom_id_by_title(
     }
 
     char normalized_catalog_name[GAME_MATCHER_MAX_ROM_LABEL_LEN];
+    char normalized_catalog_display_name[GAME_MATCHER_MAX_ROM_LABEL_LEN];
     if (has_text(candidate->fs_name_no_ext)) {
       normalize_identifier(
           candidate->fs_name_no_ext,
@@ -356,9 +358,36 @@ static int resolve_rom_id_by_title(
           normalized_catalog_name,
           sizeof(normalized_catalog_name));
     }
+    normalize_identifier(
+        candidate->name,
+        normalized_catalog_display_name,
+        sizeof(normalized_catalog_display_name));
 
+    int matched = 0;
     if (has_text(normalized_catalog_name) &&
         sync_string_ieq(normalized_local_title, normalized_catalog_name)) {
+      matched = 1;
+    }
+    if (!matched &&
+        has_text(normalized_catalog_display_name) &&
+        sync_string_ieq(normalized_local_title, normalized_catalog_display_name)) {
+      matched = 1;
+    }
+    if (!matched && (strlen(normalized_local_title) >= 8U)) {
+      if (has_text(normalized_catalog_name) &&
+          ((strstr(normalized_catalog_name, normalized_local_title) != NULL) ||
+           (strstr(normalized_local_title, normalized_catalog_name) != NULL))) {
+        matched = 1;
+      }
+      if (!matched &&
+          has_text(normalized_catalog_display_name) &&
+          ((strstr(normalized_catalog_display_name, normalized_local_title) != NULL) ||
+           (strstr(normalized_local_title, normalized_catalog_display_name) != NULL))) {
+        matched = 1;
+      }
+    }
+
+    if (matched) {
       register_unique_match(candidate->rom_id, &best_rom_id, &ambiguous);
     }
   }
@@ -378,40 +407,71 @@ static int resolve_rom_id_by_title(
 static int score_filename_pattern_match(
     const char *normalized_local_filename,
     const char *normalized_local_game_id,
+    const char *normalized_local_title,
     const GameMatcherRomCandidate *candidate) {
   if ((candidate == NULL) || (candidate->rom_id <= 0)) {
     return 0;
   }
 
   char normalized_catalog_name[GAME_MATCHER_MAX_ROM_LABEL_LEN];
+  char normalized_catalog_display_name[GAME_MATCHER_MAX_ROM_LABEL_LEN];
   if (has_text(candidate->fs_name_no_ext)) {
     normalize_identifier(candidate->fs_name_no_ext, normalized_catalog_name, sizeof(normalized_catalog_name));
   } else {
     normalize_filename_without_extension(candidate->fs_name, normalized_catalog_name, sizeof(normalized_catalog_name));
   }
+  normalize_identifier(candidate->name, normalized_catalog_display_name, sizeof(normalized_catalog_display_name));
 
-  if (!has_text(normalized_catalog_name)) {
+  if (!has_text(normalized_catalog_name) && !has_text(normalized_catalog_display_name)) {
     return 0;
   }
 
-  int score = 0;
-  if (has_text(normalized_local_filename) && (strlen(normalized_local_filename) >= 4U)) {
-    if (sync_string_ieq(normalized_local_filename, normalized_catalog_name)) {
-      score = 100;
-    } else if ((strstr(normalized_catalog_name, normalized_local_filename) != NULL) ||
-               (strstr(normalized_local_filename, normalized_catalog_name) != NULL)) {
-      score = 70;
-    }
-  }
+  const char *labels[2] = {
+      normalized_catalog_name,
+      normalized_catalog_display_name};
 
-  if (has_text(normalized_local_game_id) && (strlen(normalized_local_game_id) >= 4U)) {
-    if (sync_string_ieq(normalized_local_game_id, normalized_catalog_name)) {
-      if (score < 80) {
-        score = 80;
+  int score = 0;
+  for (size_t i = 0U; i < (sizeof(labels) / sizeof(labels[0])); ++i) {
+    const char *label = labels[i];
+    if (!has_text(label)) {
+      continue;
+    }
+
+    if (has_text(normalized_local_filename) && (strlen(normalized_local_filename) >= 4U)) {
+      if (sync_string_ieq(normalized_local_filename, label)) {
+        if (score < 100) {
+          score = 100;
+        }
+      } else if ((strstr(label, normalized_local_filename) != NULL) ||
+                 (strstr(normalized_local_filename, label) != NULL)) {
+        if (score < 70) {
+          score = 70;
+        }
       }
-    } else if (strstr(normalized_catalog_name, normalized_local_game_id) != NULL) {
-      if (score < 60) {
-        score = 60;
+    }
+
+    if (has_text(normalized_local_game_id) && (strlen(normalized_local_game_id) >= 4U)) {
+      if (sync_string_ieq(normalized_local_game_id, label)) {
+        if (score < 95) {
+          score = 95;
+        }
+      } else if (strstr(label, normalized_local_game_id) != NULL) {
+        if (score < 90) {
+          score = 90;
+        }
+      }
+    }
+
+    if (has_text(normalized_local_title) && (strlen(normalized_local_title) >= 8U)) {
+      if (sync_string_ieq(normalized_local_title, label)) {
+        if (score < 85) {
+          score = 85;
+        }
+      } else if ((strstr(label, normalized_local_title) != NULL) ||
+                 (strstr(normalized_local_title, label) != NULL)) {
+        if (score < 75) {
+          score = 75;
+        }
       }
     }
   }
@@ -435,8 +495,12 @@ static int resolve_rom_id_by_filename_patterns(
 
   char normalized_local_game_id[ROMM_GAME_ID_LEN];
   normalize_identifier(local_item->game_id, normalized_local_game_id, sizeof(normalized_local_game_id));
+  char normalized_local_title[ROMM_GAME_TITLE_LEN];
+  normalize_identifier(local_item->title, normalized_local_title, sizeof(normalized_local_title));
 
-  if (!has_text(normalized_local_filename) && !has_text(normalized_local_game_id)) {
+  if (!has_text(normalized_local_filename) &&
+      !has_text(normalized_local_game_id) &&
+      !has_text(normalized_local_title)) {
     return GAME_MATCHER_NO_MATCH;
   }
 
@@ -452,6 +516,7 @@ static int resolve_rom_id_by_filename_patterns(
     int score = score_filename_pattern_match(
         normalized_local_filename,
         normalized_local_game_id,
+        normalized_local_title,
         candidate);
     if (score <= 0) {
       continue;

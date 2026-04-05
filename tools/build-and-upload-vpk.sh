@@ -8,6 +8,9 @@ DEFAULT_FTP_HOST="192.168.1.20"
 DEFAULT_FTP_PORT="1337"
 DEFAULT_FTP_REMOTE_DIR="ux0:/homebrews"
 DEFAULT_CONFIGURATION="Release"
+FTP_CONNECT_TIMEOUT_SECONDS="10"
+FTP_UPLOAD_STALL_TIMEOUT_SECONDS="10"
+FTP_UPLOAD_STALL_SPEED_BYTES="1"
 
 FTP_HOST=""
 FTP_PORT=""
@@ -104,7 +107,7 @@ cmake --build "$BUILD_DIR" --config "$CONFIGURATION"
 
 vpk_file=$(ls -1t "$BUILD_DIR"/*.vpk 2>/dev/null | head -n 1 || true)
 if [ -z "$vpk_file" ]; then
-  echo "Aucun fichier .vpk trouve dans $BUILD_DIR" >&2
+  echo "No .vpk file found in $BUILD_DIR" >&2
   exit 1
 fi
 
@@ -113,7 +116,22 @@ remote_url="ftp://${FTP_HOST}:${FTP_PORT}/${FTP_REMOTE_DIR}/${vpk_name}"
 
 echo "==> Upload: $vpk_file"
 echo "==> Destination: $remote_url"
+echo "==> FTP timeout policy"
+echo "    - Connection timeout: ${FTP_CONNECT_TIMEOUT_SECONDS}s"
+echo "    - Upload stall timeout: ${FTP_UPLOAD_STALL_TIMEOUT_SECONDS}s (speed < ${FTP_UPLOAD_STALL_SPEED_BYTES} B/s)"
 
-curl --ftp-method nocwd -T "$vpk_file" "$remote_url"
+curl \
+  --ftp-method nocwd \
+  --connect-timeout "$FTP_CONNECT_TIMEOUT_SECONDS" \
+  --speed-time "$FTP_UPLOAD_STALL_TIMEOUT_SECONDS" \
+  --speed-limit "$FTP_UPLOAD_STALL_SPEED_BYTES" \
+  -T "$vpk_file" \
+  "$remote_url" || {
+    curl_exit=$?
+    if [ "$curl_exit" -eq 28 ]; then
+      echo "FTP timeout reached (connection or upload stalled for 10 seconds)." >&2
+    fi
+    exit "$curl_exit"
+  }
 
-echo "==> Termine"
+echo "==> Completed"
