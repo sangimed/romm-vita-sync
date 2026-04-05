@@ -4,7 +4,7 @@
 
 [RomM]
 ; Base URL of your RomM instance (without trailing slash preferred)
-url = https://romm.example.com
+url =
 ; Use either token OR username/password
 token =
 username =
