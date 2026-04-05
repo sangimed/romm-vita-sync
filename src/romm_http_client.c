@@ -28,10 +28,12 @@
 #define ROMM_HTTP_MAX_FILENAME 128
 #define ROMM_HTTP_MAX_PLATFORM_SLUG 64
 #define ROMM_HTTP_SAVE_EMULATOR "pcsx_rearmed"
-#define ROMM_HTTPS_VERIFY_FLAGS                                    \
-  (SCE_HTTPS_FLAG_SERVER_VERIFY | SCE_HTTPS_FLAG_CN_CHECK |        \
-   SCE_HTTPS_FLAG_NOT_AFTER_CHECK | SCE_HTTPS_FLAG_NOT_BEFORE_CHECK | \
-   SCE_HTTPS_FLAG_KNOWN_CA_CHECK)
+/*
+ * Keep verify-tls override compatible with retail firmware behavior.
+ * Some Vita builds reject multi-flag disable masks with 0x8043506B.
+ * Disabling SERVER_VERIFY is sufficient to skip certificate checks.
+ */
+#define ROMM_HTTPS_VERIFY_OVERRIDE_FLAG (SCE_HTTPS_FLAG_SERVER_VERIFY)
 
 typedef struct HttpRuntimeState {
   void *net_memory;
@@ -1223,7 +1225,7 @@ static void http_runtime_term(HttpRuntimeState *state) {
   }
 
   if (state->tls_verify_disabled) {
-    int status = sceHttpsEnableOption(ROMM_HTTPS_VERIFY_FLAGS);
+    int status = sceHttpsEnableOption(ROMM_HTTPS_VERIFY_OVERRIDE_FLAG);
     if (status < 0) {
       app_log_write(APP_LOG_LEVEL_WARN, "http", "sceHttpsEnableOption failed: 0x%08X", (unsigned int)status);
     }
@@ -1350,7 +1352,7 @@ static int http_send_request(
   sceHttpSetRecvTimeOut(template_id, timeout_usec_u32);
 
   if (url_is_https(url) && !config->romm_verify_tls) {
-    int disable_status = sceHttpsDisableOption(ROMM_HTTPS_VERIFY_FLAGS);
+    int disable_status = sceHttpsDisableOption(ROMM_HTTPS_VERIFY_OVERRIDE_FLAG);
     if (disable_status >= 0) {
       runtime_state.tls_verify_disabled = 1;
       app_log_write(APP_LOG_LEVEL_WARN, "http", "TLS verification disabled for this request");
