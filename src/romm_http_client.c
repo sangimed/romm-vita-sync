@@ -21,9 +21,11 @@
 #define ROMM_HTTP_POOL_SIZE (256 * 1024)
 #define ROMM_SSL_POOL_SIZE (256 * 1024)
 #define ROMM_HTTP_MAX_BODY_SIZE (128 * 1024)
+#define ROMM_HTTP_PLATFORM_BODY_SIZE (1024 * 1024)
 #define ROMM_HTTP_SMALL_BODY_SIZE 4096
 #define ROMM_HTTP_MAX_ROMS 4096
 #define ROMM_HTTP_PAGE_LIMIT 200
+#define ROMM_HTTP_ROM_PAGE_LIMIT 10
 #define ROMM_HTTP_MAX_UPLOAD_SIZE (2 * 1024 * 1024)
 #define ROMM_HTTP_MAX_FILENAME 128
 #define ROMM_HTTP_MAX_PLATFORM_SLUG 64
@@ -1901,21 +1903,29 @@ static int resolve_platform_id(
     return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
   }
 
-  char body[ROMM_HTTP_MAX_BODY_SIZE];
+  char *body = (char *)malloc(ROMM_HTTP_PLATFORM_BODY_SIZE);
+  if (body == NULL) {
+    return ROMM_CLIENT_ERR_NETWORK;
+  }
+
   int status_code = 0;
-  int transport_status = http_get_text(config, url, &status_code, body, sizeof(body));
+  int transport_status = http_get_text(config, url, &status_code, body, ROMM_HTTP_PLATFORM_BODY_SIZE);
   if (transport_status < 0) {
+    free(body);
     return transport_status;
   }
   if ((status_code == 401) || (status_code == 403)) {
+    free(body);
     return ROMM_CLIENT_ERR_AUTH;
   }
   if (status_code != 200) {
     app_log_write(APP_LOG_LEVEL_WARN, "http", "platform lookup failed status=%d", status_code);
+    free(body);
     return ROMM_CLIENT_ERR_NETWORK;
   }
 
   int parse_status = parse_platform_id_from_list(body, platform_slug, out_platform_id);
+  free(body);
   if (parse_status < 0) {
     app_log_write(APP_LOG_LEVEL_WARN, "http", "platform lookup returned unsupported response format");
     return ROMM_CLIENT_ERR_NETWORK;
@@ -2113,14 +2123,14 @@ int romm_http_resolve_rom_ids(
     free(catalog);
     return platform_status;
   }
-  for (int offset = 0; (offset < total) && (catalog_count < ROMM_HTTP_MAX_ROMS); offset += ROMM_HTTP_PAGE_LIMIT) {
+  for (int offset = 0; (offset < total) && (catalog_count < ROMM_HTTP_MAX_ROMS); offset += ROMM_HTTP_ROM_PAGE_LIMIT) {
     char path[384];
     if (platform_id > 0) {
       snprintf(
           path,
           sizeof(path),
           "/api/roms?limit=%d&offset=%d&platform_ids=%d",
-          ROMM_HTTP_PAGE_LIMIT,
+          ROMM_HTTP_ROM_PAGE_LIMIT,
           offset,
           platform_id);
     } else {
@@ -2128,7 +2138,7 @@ int romm_http_resolve_rom_ids(
           path,
           sizeof(path),
           "/api/roms?limit=%d&offset=%d&platform=%s&fields=id,name,fs_name,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id",
-          ROMM_HTTP_PAGE_LIMIT,
+          ROMM_HTTP_ROM_PAGE_LIMIT,
           offset,
           platform_filter);
     }
