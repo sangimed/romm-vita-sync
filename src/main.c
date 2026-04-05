@@ -2065,7 +2065,7 @@ static int ui_run_sync_pipeline(
     return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
   }
   ui_sync_feedback_set_progress(&state->sync_feedback, 1, total_units);
-  ui_sync_log_write(APP_LOG_LEVEL_INFO, "Credentials validated");
+  ui_sync_log_write(APP_LOG_LEVEL_INFO, "Credentials present in configuration");
   ui_sync_render_live(state);
 
   ui_sync_feedback_set_message(&state->sync_feedback, "Ensuring device registration...");

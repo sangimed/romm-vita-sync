@@ -1829,6 +1829,117 @@ static int parse_rom_catalog_entries(
 }
 
 /*
+ * Resolves a RomM platform numeric identifier from /api/platforms by slug or fs_slug.
+ * Returns 0 when found, 1 when not found, or -1 on parse failure.
+ */
+static int parse_platform_id_from_list(
+    const char *json,
+    const char *platform_slug,
+    int *out_platform_id) {
+  if ((json == NULL) || !has_text(platform_slug) || (out_platform_id == NULL)) {
+    return -1;
+  }
+
+  *out_platform_id = 0;
+
+  const char *array_start = NULL;
+  const char *array_end = NULL;
+  if (find_object_array_range(json, NULL, &array_start, &array_end) < 0) {
+    if (find_object_array_range(json, "items", &array_start, &array_end) < 0) {
+      if (find_object_array_range(json, "data", &array_start, &array_end) < 0) {
+        return -1;
+      }
+    }
+  }
+
+  const char *cursor = array_start + 1;
+  while (cursor < array_end) {
+    const char *object_start = NULL;
+    const char *object_end = NULL;
+    const char *next_cursor = NULL;
+    if (next_object_in_array(cursor, array_end, &object_start, &object_end, &next_cursor) < 0) {
+      break;
+    }
+
+    int platform_id = 0;
+    char slug[GAME_MATCHER_MAX_PLATFORM_SLUG_LEN];
+    char fs_slug[GAME_MATCHER_MAX_PLATFORM_SLUG_LEN];
+    slug[0] = '\0';
+    fs_slug[0] = '\0';
+
+    if ((extract_json_int_field_in_range(object_start, object_end, "id", &platform_id) == 0) &&
+        ((extract_json_string_field_in_range(object_start, object_end, "slug", slug, sizeof(slug)) == 0) ||
+         (extract_json_string_field_in_range(object_start, object_end, "fs_slug", fs_slug, sizeof(fs_slug)) == 0))) {
+      if (sync_string_ieq(slug, platform_slug) || sync_string_ieq(fs_slug, platform_slug)) {
+        *out_platform_id = platform_id;
+        return 0;
+      }
+    }
+
+    cursor = next_cursor;
+  }
+
+  return 1;
+}
+
+/*
+ * Looks up the numeric RomM platform id used by current API versions.
+ * Returns ROMM_CLIENT_OK on success, with out_platform_id set to 0 when no match exists.
+ */
+static int resolve_platform_id(
+    const AppConfig *config,
+    const char *platform_slug,
+    int *out_platform_id) {
+  if ((config == NULL) || !has_text(platform_slug) || (out_platform_id == NULL)) {
+    return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
+  }
+
+  *out_platform_id = 0;
+
+  char url[APP_CONFIG_MAX_URL_LEN + 32];
+  if (build_api_url(config->romm_url, "/api/platforms", url, sizeof(url)) < 0) {
+    return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
+  }
+
+  char body[ROMM_HTTP_MAX_BODY_SIZE];
+  int status_code = 0;
+  int transport_status = http_get_text(config, url, &status_code, body, sizeof(body));
+  if (transport_status < 0) {
+    return transport_status;
+  }
+  if ((status_code == 401) || (status_code == 403)) {
+    return ROMM_CLIENT_ERR_AUTH;
+  }
+  if (status_code != 200) {
+    app_log_write(APP_LOG_LEVEL_WARN, "http", "platform lookup failed status=%d", status_code);
+    return ROMM_CLIENT_ERR_NETWORK;
+  }
+
+  int parse_status = parse_platform_id_from_list(body, platform_slug, out_platform_id);
+  if (parse_status < 0) {
+    app_log_write(APP_LOG_LEVEL_WARN, "http", "platform lookup returned unsupported response format");
+    return ROMM_CLIENT_ERR_NETWORK;
+  }
+
+  if (*out_platform_id > 0) {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "http",
+        "resolved platform slug=%s -> platform_id=%d",
+        platform_slug,
+        *out_platform_id);
+  } else {
+    app_log_write(
+        APP_LOG_LEVEL_WARN,
+        "http",
+        "platform slug=%s not found via /api/platforms; falling back to legacy rom query",
+        platform_slug);
+  }
+
+  return ROMM_CLIENT_OK;
+}
+
+/*
  * Parses one /api/saves page into descriptors.
  */
 static int parse_remote_save_entries(
@@ -1995,15 +2106,32 @@ int romm_http_resolve_rom_ids(
   int catalog_count = 0;
   int total = INT_MAX;
   const char *platform_filter = romm_catalog_platform_filter(config);
+  int platform_id = 0;
+  int platform_status = resolve_platform_id(config, platform_filter, &platform_id);
+  if (platform_status < 0) {
+    free(body);
+    free(catalog);
+    return platform_status;
+  }
   for (int offset = 0; (offset < total) && (catalog_count < ROMM_HTTP_MAX_ROMS); offset += ROMM_HTTP_PAGE_LIMIT) {
     char path[384];
-    snprintf(
-        path,
-        sizeof(path),
-        "/api/roms?limit=%d&offset=%d&platform=%s&fields=id,name,fs_name,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id",
-        ROMM_HTTP_PAGE_LIMIT,
-        offset,
-        platform_filter);
+    if (platform_id > 0) {
+      snprintf(
+          path,
+          sizeof(path),
+          "/api/roms?limit=%d&offset=%d&platform_ids=%d",
+          ROMM_HTTP_PAGE_LIMIT,
+          offset,
+          platform_id);
+    } else {
+      snprintf(
+          path,
+          sizeof(path),
+          "/api/roms?limit=%d&offset=%d&platform=%s&fields=id,name,fs_name,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id",
+          ROMM_HTTP_PAGE_LIMIT,
+          offset,
+          platform_filter);
+    }
 
     char url[APP_CONFIG_MAX_URL_LEN + sizeof(path)];
     if (build_api_url(config->romm_url, path, url, sizeof(url)) < 0) {
