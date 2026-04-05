@@ -27,6 +27,8 @@
 #define ROMM_HTTP_MAX_UPLOAD_SIZE (2 * 1024 * 1024)
 #define ROMM_HTTP_MAX_FILENAME 128
 #define ROMM_HTTP_MAX_PLATFORM_SLUG 64
+#define ROMM_HTTP_FALLBACK_URL_BUFFER_SIZE (APP_CONFIG_MAX_URL_LEN + 256)
+#define ROMM_HTTP_SSL_TRANSPORT_ERROR 0x80431075u
 #define ROMM_HTTP_DEFAULT_PLATFORM_FILTER "psx"
 #define ROMM_HTTP_DEFAULT_SAVE_EMULATOR "pcsx_rearmed"
 /*
@@ -69,6 +71,46 @@ static int url_is_https(const char *url) {
   }
 
   return strncmp(url, "https://", 8) == 0;
+}
+
+/*
+ * Builds an HTTP URL from an HTTPS URL by swapping the scheme.
+ */
+static int build_http_fallback_url(const char *https_url, char *out_url, size_t out_url_size) {
+  if (!url_is_https(https_url) || (out_url == NULL) || (out_url_size == 0U)) {
+    return -1;
+  }
+
+  int written = snprintf(out_url, out_url_size, "http://%s", https_url + 8);
+  if ((written <= 0) || ((size_t)written >= out_url_size)) {
+    return -1;
+  }
+
+  return 0;
+}
+
+/*
+ * Logs additional SSL details when Vita reports a transport-level HTTPS failure.
+ */
+static void log_ssl_error_details(int id) {
+  if (id < 0) {
+    return;
+  }
+
+  int ssl_error = 0;
+  unsigned int ssl_detail = 0U;
+  int status = sceHttpsGetSslError(id, &ssl_error, &ssl_detail);
+  if (status < 0) {
+    app_log_write(APP_LOG_LEVEL_WARN, "http", "sceHttpsGetSslError failed: 0x%08X", (unsigned int)status);
+    return;
+  }
+
+  app_log_write(
+      APP_LOG_LEVEL_WARN,
+      "http",
+      "SSL detail err=0x%08X detail=0x%08X",
+      (unsigned int)ssl_error,
+      ssl_detail);
 }
 
 /*
@@ -1380,6 +1422,10 @@ static int http_send_request(
   int connection_id = -1;
   int request_id = -1;
   int result = ROMM_CLIENT_ERR_NETWORK;
+  int retry_over_http = 0;
+  int transport_error = 0;
+  char fallback_url[ROMM_HTTP_FALLBACK_URL_BUFFER_SIZE];
+  fallback_url[0] = '\0';
 
   unsigned int timeout_seconds = (config->romm_timeout_seconds > 0)
                                      ? (unsigned int)config->romm_timeout_seconds
@@ -1416,12 +1462,24 @@ static int http_send_request(
 
   connection_id = sceHttpCreateConnectionWithURL(template_id, url, 0);
   if (connection_id < 0) {
+    transport_error = connection_id;
+    if (!config->romm_verify_tls &&
+        ((unsigned int)transport_error == ROMM_HTTP_SSL_TRANSPORT_ERROR) &&
+        (build_http_fallback_url(url, fallback_url, sizeof(fallback_url)) == 0)) {
+      retry_over_http = 1;
+    }
     app_log_write(APP_LOG_LEVEL_ERROR, "http", "sceHttpCreateConnectionWithURL failed: 0x%08X", (unsigned int)connection_id);
     goto cleanup;
   }
 
   request_id = sceHttpCreateRequestWithURL(connection_id, method, url, (unsigned long long)payload_size);
   if (request_id < 0) {
+    transport_error = request_id;
+    if (!config->romm_verify_tls &&
+        ((unsigned int)transport_error == ROMM_HTTP_SSL_TRANSPORT_ERROR) &&
+        (build_http_fallback_url(url, fallback_url, sizeof(fallback_url)) == 0)) {
+      retry_over_http = 1;
+    }
     app_log_write(APP_LOG_LEVEL_ERROR, "http", "sceHttpCreateRequestWithURL failed: 0x%08X", (unsigned int)request_id);
     goto cleanup;
   }
@@ -1441,6 +1499,15 @@ static int http_send_request(
 
   int http_status = sceHttpSendRequest(request_id, payload, (unsigned int)payload_size);
   if (http_status < 0) {
+    transport_error = http_status;
+    if ((unsigned int)transport_error == ROMM_HTTP_SSL_TRANSPORT_ERROR) {
+      log_ssl_error_details(request_id);
+    }
+    if (!config->romm_verify_tls &&
+        ((unsigned int)transport_error == ROMM_HTTP_SSL_TRANSPORT_ERROR) &&
+        (build_http_fallback_url(url, fallback_url, sizeof(fallback_url)) == 0)) {
+      retry_over_http = 1;
+    }
     app_log_write(APP_LOG_LEVEL_ERROR, "http", "sceHttpSendRequest failed: 0x%08X", (unsigned int)http_status);
     goto cleanup;
   }
@@ -1513,6 +1580,25 @@ cleanup:
   }
 
   http_runtime_term(&runtime_state);
+
+  if (retry_over_http) {
+    app_log_write(
+        APP_LOG_LEVEL_WARN,
+        "http",
+        "Retrying request over HTTP after HTTPS SSL transport failure (verify_tls=false): %s",
+        fallback_url);
+    return http_send_request(
+        config,
+        method,
+        fallback_url,
+        content_type,
+        payload,
+        payload_size,
+        out_status_code,
+        out_body,
+        out_body_size,
+        response_file_path);
+  }
 
   return result;
 }
