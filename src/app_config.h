@@ -17,6 +17,8 @@
 #define APP_CONFIG_MAX_USERNAME_LEN 96
 #define APP_CONFIG_MAX_PASSWORD_LEN 160
 #define APP_CONFIG_MAX_TOKEN_LEN 256
+#define APP_CONFIG_MAX_PLATFORM_FILTER_LEN 32
+#define APP_CONFIG_MAX_EMULATOR_LEN 64
 #define APP_CONFIG_MAX_DEVICE_NAME_LEN 64
 #define APP_CONFIG_MAX_DEVICE_PLATFORM_LEN 32
 #define APP_CONFIG_MAX_CLIENT_NAME_LEN 64
@@ -36,6 +38,8 @@ typedef struct AppConfig {
   char romm_username[APP_CONFIG_MAX_USERNAME_LEN];
   char romm_password[APP_CONFIG_MAX_PASSWORD_LEN];
   char romm_token[APP_CONFIG_MAX_TOKEN_LEN];
+  char romm_platform_filter[APP_CONFIG_MAX_PLATFORM_FILTER_LEN];
+  char romm_save_emulator[APP_CONFIG_MAX_EMULATOR_LEN];
   int romm_verify_tls;
   int romm_timeout_seconds;
 

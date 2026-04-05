@@ -27,9 +27,8 @@
 #define ROMM_HTTP_MAX_UPLOAD_SIZE (2 * 1024 * 1024)
 #define ROMM_HTTP_MAX_FILENAME 128
 #define ROMM_HTTP_MAX_PLATFORM_SLUG 64
-#define ROMM_HTTP_FALLBACK_URL_BUFFER_SIZE (APP_CONFIG_MAX_URL_LEN + 256)
-#define ROMM_HTTP_SSL_TRANSPORT_ERROR 0x80431075u
-#define ROMM_HTTP_SAVE_EMULATOR "pcsx_rearmed"
+#define ROMM_HTTP_DEFAULT_PLATFORM_FILTER "psx"
+#define ROMM_HTTP_DEFAULT_SAVE_EMULATOR "pcsx_rearmed"
 /*
  * Keep verify-tls override compatible with retail firmware behavior.
  * Some Vita builds reject multi-flag disable masks with 0x8043506B.
@@ -70,22 +69,6 @@ static int url_is_https(const char *url) {
   }
 
   return strncmp(url, "https://", 8) == 0;
-}
-
-/*
- * Builds an HTTP URL from an HTTPS URL by swapping the scheme.
- */
-static int build_http_fallback_url(const char *https_url, char *out_url, size_t out_url_size) {
-  if (!url_is_https(https_url) || (out_url == NULL) || (out_url_size == 0U)) {
-    return -1;
-  }
-
-  int written = snprintf(out_url, out_url_size, "http://%s", https_url + 8);
-  if ((written <= 0) || ((size_t)written >= out_url_size)) {
-    return -1;
-  }
-
-  return 0;
 }
 
 /*
@@ -345,6 +328,26 @@ static int parse_int_value(const char *text, int *out_value) {
 
   *out_value = (int)value;
   return 0;
+}
+
+/*
+ * Returns configured RomM platform filter used for catalog lookups.
+ */
+static const char *romm_catalog_platform_filter(const AppConfig *config) {
+  if ((config != NULL) && has_text(config->romm_platform_filter)) {
+    return config->romm_platform_filter;
+  }
+  return ROMM_HTTP_DEFAULT_PLATFORM_FILTER;
+}
+
+/*
+ * Returns configured emulator slug used for /api/saves endpoints.
+ */
+static const char *romm_save_emulator(const AppConfig *config) {
+  if ((config != NULL) && has_text(config->romm_save_emulator)) {
+    return config->romm_save_emulator;
+  }
+  return ROMM_HTTP_DEFAULT_SAVE_EMULATOR;
 }
 
 /*
@@ -931,6 +934,32 @@ static int extract_json_scalar_field_in_range(
 }
 
 /*
+ * Extracts an integer field from a [start,end) range, supporting scalar or string payloads.
+ */
+static int extract_json_int_field_in_range(
+    const char *start,
+    const char *end,
+    const char *field_name,
+    int *out_value) {
+  if ((start == NULL) || (end == NULL) || (out_value == NULL) || !has_text(field_name)) {
+    return -1;
+  }
+
+  char scalar[64];
+  if ((extract_json_scalar_field_in_range(start, end, field_name, scalar, sizeof(scalar)) == 0) &&
+      (parse_int_value(scalar, out_value) == 0)) {
+    return 0;
+  }
+
+  if ((extract_json_string_field_in_range(start, end, field_name, scalar, sizeof(scalar)) == 0) &&
+      (parse_int_value(scalar, out_value) == 0)) {
+    return 0;
+  }
+
+  return -1;
+}
+
+/*
  * Appends one value to a pipe-delimited list while avoiding duplicates.
  */
 static int append_pipe_list_unique(char *io_list, size_t io_list_size, const char *value) {
@@ -1351,10 +1380,6 @@ static int http_send_request(
   int connection_id = -1;
   int request_id = -1;
   int result = ROMM_CLIENT_ERR_NETWORK;
-  int retry_over_http = 0;
-  int transport_error = 0;
-  char fallback_url[ROMM_HTTP_FALLBACK_URL_BUFFER_SIZE];
-  fallback_url[0] = '\0';
 
   unsigned int timeout_seconds = (config->romm_timeout_seconds > 0)
                                      ? (unsigned int)config->romm_timeout_seconds
@@ -1391,24 +1416,12 @@ static int http_send_request(
 
   connection_id = sceHttpCreateConnectionWithURL(template_id, url, 0);
   if (connection_id < 0) {
-    transport_error = connection_id;
-    if (!config->romm_verify_tls &&
-        ((unsigned int)transport_error == ROMM_HTTP_SSL_TRANSPORT_ERROR) &&
-        (build_http_fallback_url(url, fallback_url, sizeof(fallback_url)) == 0)) {
-      retry_over_http = 1;
-    }
     app_log_write(APP_LOG_LEVEL_ERROR, "http", "sceHttpCreateConnectionWithURL failed: 0x%08X", (unsigned int)connection_id);
     goto cleanup;
   }
 
   request_id = sceHttpCreateRequestWithURL(connection_id, method, url, (unsigned long long)payload_size);
   if (request_id < 0) {
-    transport_error = request_id;
-    if (!config->romm_verify_tls &&
-        ((unsigned int)transport_error == ROMM_HTTP_SSL_TRANSPORT_ERROR) &&
-        (build_http_fallback_url(url, fallback_url, sizeof(fallback_url)) == 0)) {
-      retry_over_http = 1;
-    }
     app_log_write(APP_LOG_LEVEL_ERROR, "http", "sceHttpCreateRequestWithURL failed: 0x%08X", (unsigned int)request_id);
     goto cleanup;
   }
@@ -1428,12 +1441,6 @@ static int http_send_request(
 
   int http_status = sceHttpSendRequest(request_id, payload, (unsigned int)payload_size);
   if (http_status < 0) {
-    transport_error = http_status;
-    if (!config->romm_verify_tls &&
-        ((unsigned int)transport_error == ROMM_HTTP_SSL_TRANSPORT_ERROR) &&
-        (build_http_fallback_url(url, fallback_url, sizeof(fallback_url)) == 0)) {
-      retry_over_http = 1;
-    }
     app_log_write(APP_LOG_LEVEL_ERROR, "http", "sceHttpSendRequest failed: 0x%08X", (unsigned int)http_status);
     goto cleanup;
   }
@@ -1506,25 +1513,6 @@ cleanup:
   }
 
   http_runtime_term(&runtime_state);
-
-  if (retry_over_http) {
-    app_log_write(
-        APP_LOG_LEVEL_WARN,
-        "http",
-        "Retrying request over HTTP after HTTPS SSL transport failure (verify_tls=false): %s",
-        fallback_url);
-    return http_send_request(
-        config,
-        method,
-        fallback_url,
-        content_type,
-        payload,
-        payload_size,
-        out_status_code,
-        out_body,
-        out_body_size,
-        response_file_path);
-  }
 
   return result;
 }
@@ -1794,12 +1782,10 @@ static int parse_remote_save_entries(
     sync_save_descriptor_init(item);
 
     char scalar[64];
-    if ((extract_json_scalar_field_in_range(object_start, object_end, "id", scalar, sizeof(scalar)) == 0) &&
-        (parse_int_value(scalar, &item->remote_id) < 0)) {
+    if (extract_json_int_field_in_range(object_start, object_end, "id", &item->remote_id) < 0) {
       item->remote_id = -1;
     }
-    if ((extract_json_scalar_field_in_range(object_start, object_end, "rom_id", scalar, sizeof(scalar)) == 0) &&
-        (parse_int_value(scalar, &item->rom_id) < 0)) {
+    if (extract_json_int_field_in_range(object_start, object_end, "rom_id", &item->rom_id) < 0) {
       item->rom_id = -1;
     }
     if ((extract_json_scalar_field_in_range(object_start, object_end, "file_size_bytes", scalar, sizeof(scalar)) == 0) ||
@@ -1887,15 +1873,6 @@ static int find_existing_remote_index(
     }
   }
 
-  for (int i = 0; i < count; ++i) {
-    const SyncSaveDescriptor *entry = &items[i];
-    if (has_text(entry->filename) && has_text(candidate->filename) &&
-        sync_string_ieq(entry->filename, candidate->filename) &&
-        (entry->slot == candidate->slot)) {
-      return i;
-    }
-  }
-
   return -1;
 }
 
@@ -1931,14 +1908,16 @@ int romm_http_resolve_rom_ids(
 
   int catalog_count = 0;
   int total = INT_MAX;
+  const char *platform_filter = romm_catalog_platform_filter(config);
   for (int offset = 0; (offset < total) && (catalog_count < ROMM_HTTP_MAX_ROMS); offset += ROMM_HTTP_PAGE_LIMIT) {
-    char path[320];
+    char path[384];
     snprintf(
         path,
         sizeof(path),
-        "/api/roms?limit=%d&offset=%d&fields=id,name,fs_name,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id",
+        "/api/roms?limit=%d&offset=%d&platform=%s&fields=id,name,fs_name,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id",
         ROMM_HTTP_PAGE_LIMIT,
-        offset);
+        offset,
+        platform_filter);
 
     char url[APP_CONFIG_MAX_URL_LEN + sizeof(path)];
     if (build_api_url(config->romm_url, path, url, sizeof(url)) < 0) {
@@ -1996,8 +1975,9 @@ int romm_http_resolve_rom_ids(
   app_log_write(
       APP_LOG_LEVEL_INFO,
       "http",
-      "rom catalog loaded entries=%d",
-      catalog_count);
+      "rom catalog loaded entries=%d platform=%s",
+      catalog_count,
+      platform_filter);
   if (catalog_count <= 0) {
     app_log_write(
         APP_LOG_LEVEL_WARN,
@@ -2078,15 +2058,16 @@ int romm_http_list_remote_saves_callback(
 
   int count = 0;
   int total = INT_MAX;
+  const char *emulator = romm_save_emulator(config);
   for (int offset = 0; (offset < total); offset += ROMM_HTTP_PAGE_LIMIT) {
-    char path[192];
+    char path[256];
     snprintf(
         path,
         sizeof(path),
         "/api/saves?limit=%d&offset=%d&emulator=%s",
         ROMM_HTTP_PAGE_LIMIT,
         offset,
-        ROMM_HTTP_SAVE_EMULATOR);
+        emulator);
 
     char url[APP_CONFIG_MAX_URL_LEN + sizeof(path)];
     if (build_api_url(config->romm_url, path, url, sizeof(url)) < 0) {
@@ -2188,15 +2169,16 @@ int romm_http_upload_save_callback(
     return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
   }
 
+  const char *emulator = romm_save_emulator(config);
   const char *slot_query = slot_to_query_value(local_item->slot);
-  char path[320];
+  char path[384];
   if (has_text(config->device_id) && has_text(slot_query)) {
     snprintf(
         path,
         sizeof(path),
         "/api/saves?rom_id=%d&emulator=%s&device_id=%s&slot=%s",
         rom_id,
-        ROMM_HTTP_SAVE_EMULATOR,
+        emulator,
         config->device_id,
         slot_query);
   } else if (has_text(config->device_id)) {
@@ -2205,7 +2187,7 @@ int romm_http_upload_save_callback(
         sizeof(path),
         "/api/saves?rom_id=%d&emulator=%s&device_id=%s",
         rom_id,
-        ROMM_HTTP_SAVE_EMULATOR,
+        emulator,
         config->device_id);
   } else if (has_text(slot_query)) {
     snprintf(
@@ -2213,7 +2195,7 @@ int romm_http_upload_save_callback(
         sizeof(path),
         "/api/saves?rom_id=%d&emulator=%s&slot=%s",
         rom_id,
-        ROMM_HTTP_SAVE_EMULATOR,
+        emulator,
         slot_query);
   } else {
     snprintf(
@@ -2221,7 +2203,7 @@ int romm_http_upload_save_callback(
         sizeof(path),
         "/api/saves?rom_id=%d&emulator=%s",
         rom_id,
-        ROMM_HTTP_SAVE_EMULATOR);
+        emulator);
   }
 
   char url[APP_CONFIG_MAX_URL_LEN + sizeof(path)];

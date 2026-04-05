@@ -736,6 +736,29 @@ int sync_engine_run(
       local_count,
       "Listing remote saves...");
 
+  for (int i = 0; i < local_count; ++i) {
+    const SyncSaveDescriptor *local_item = &local_items[i];
+    if (local_item->rom_id > 0) {
+      continue;
+    }
+
+    app_log_write(
+        APP_LOG_LEVEL_ERROR,
+        "sync",
+        "sync aborted: unresolved rom_id game=%s file=%s",
+        local_item->game_id,
+        local_item->filename);
+    emit_progress(
+        config,
+        completed_engine_units,
+        total_engine_units,
+        i,
+        local_count,
+        "Sync failed: unresolved rom_id for %s",
+        has_text(local_item->game_id) ? local_item->game_id : "(unknown)");
+    return SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID;
+  }
+
   SyncStateStore state_store;
   sync_state_store_init(&state_store);
 
@@ -1088,6 +1111,8 @@ const char *sync_engine_status_str(int status) {
       return "state loading failed";
     case SYNC_ENGINE_ERR_STATE_SAVE:
       return "state saving failed";
+    case SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID:
+      return "unresolved rom_id";
     default:
       return "unknown error";
   }

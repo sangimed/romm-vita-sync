@@ -46,21 +46,6 @@ static int filename_matches(const SyncSaveDescriptor *local_item, const SyncSave
 }
 
 /*
- * Matches items by game identifier when both descriptors provide one.
- */
-static int game_id_matches(const SyncSaveDescriptor *local_item, const SyncSaveDescriptor *remote_item) {
-  if ((local_item == NULL) || (remote_item == NULL)) {
-    return 0;
-  }
-
-  if (!has_text(local_item->game_id) || !has_text(remote_item->game_id)) {
-    return 0;
-  }
-
-  return sync_string_ieq(local_item->game_id, remote_item->game_id);
-}
-
-/*
  * Matches items by RomM ROM identifier when both sides provide one.
  */
 static int rom_id_matches(const SyncSaveDescriptor *local_item, const SyncSaveDescriptor *remote_item) {
@@ -126,14 +111,14 @@ static int is_ps1_platform_slug(const char *platform_slug) {
 }
 
 /*
- * Accepts explicit PS1 slugs, and tolerates missing platform values.
+ * Accepts only explicit PS1 platform slugs.
  */
 static int candidate_is_ps1_eligible(const GameMatcherRomCandidate *candidate) {
   if (candidate == NULL) {
     return 0;
   }
   if (!has_text(candidate->platform_slug)) {
-    return 1;
+    return 0;
   }
   return is_ps1_platform_slug(candidate->platform_slug);
 }
@@ -544,8 +529,8 @@ static int resolve_rom_id_by_filename_patterns(
 }
 
 /*
- * Finds the best remote candidate using stable priority rules:
- * exact rom+slot+filename, then rom+slot, then legacy game-id rules.
+ * Finds the best remote candidate using stable identity rules:
+ * exact rom+slot+filename, then rom+slot compatibility.
  */
 int game_matcher_find_remote_index(
     const SyncSaveDescriptor *local_item,
@@ -569,41 +554,6 @@ int game_matcher_find_remote_index(
   for (int i = 0; i < remote_count; ++i) {
     const SyncSaveDescriptor *candidate = &remote_items[i];
     if (rom_id_matches(local_item, candidate) && slot_is_compatible(local_item->slot, candidate->slot)) {
-      return i;
-    }
-  }
-
-  for (int i = 0; i < remote_count; ++i) {
-    const SyncSaveDescriptor *candidate = &remote_items[i];
-    if (game_id_matches(local_item, candidate) &&
-        slot_is_known(local_item->slot) &&
-        slot_is_known(candidate->slot) &&
-        (local_item->slot == candidate->slot) &&
-        filename_matches(local_item, candidate)) {
-      return i;
-    }
-  }
-
-  for (int i = 0; i < remote_count; ++i) {
-    const SyncSaveDescriptor *candidate = &remote_items[i];
-    if (game_id_matches(local_item, candidate) && slot_is_compatible(local_item->slot, candidate->slot)) {
-      return i;
-    }
-  }
-
-  for (int i = 0; i < remote_count; ++i) {
-    const SyncSaveDescriptor *candidate = &remote_items[i];
-    if (filename_matches(local_item, candidate) &&
-        slot_is_known(local_item->slot) &&
-        slot_is_known(candidate->slot) &&
-        (local_item->slot == candidate->slot)) {
-      return i;
-    }
-  }
-
-  for (int i = 0; i < remote_count; ++i) {
-    const SyncSaveDescriptor *candidate = &remote_items[i];
-    if (filename_matches(local_item, candidate)) {
       return i;
     }
   }

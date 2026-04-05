@@ -2099,6 +2099,35 @@ static int ui_run_sync_pipeline(
     return mapped_count;
   }
   ui_sync_log_write(APP_LOG_LEVEL_INFO, "Mapped %d/%d save(s)", mapped_count, work_item_count);
+  int unresolved_count = 0;
+  for (int i = 0; i < work_item_count; ++i) {
+    const SyncSaveDescriptor *item = &work_items[i];
+    if (item->rom_id > 0) {
+      continue;
+    }
+
+    unresolved_count++;
+    ui_sync_log_write(
+        APP_LOG_LEVEL_WARN,
+        "rom_id unresolved: game=%s title=%s file=%s",
+        has_text(item->game_id) ? item->game_id : "(unknown)",
+        has_text(item->title) ? item->title : "(unknown)",
+        has_text(item->filename) ? item->filename : "(unknown)");
+  }
+  if (unresolved_count > 0) {
+    ui_sync_log_write(
+        APP_LOG_LEVEL_ERROR,
+        "Sync aborted: %d save(s) have no rom_id after mapping",
+        unresolved_count);
+    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: unresolved RomM mapping");
+    state->sync_feedback.running = 0;
+    state->sync_feedback.completed = 1;
+    state->sync_feedback.success = 0;
+    state->sync_feedback.sync_status = SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID;
+    ui_sync_feedback_set_progress(&state->sync_feedback, total_units, total_units);
+    ui_sync_render_live(state);
+    return SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID;
+  }
   ui_sync_feedback_set_progress(&state->sync_feedback, 3, total_units);
   ui_sync_render_live(state);
 

@@ -9,6 +9,8 @@ url = https://romm.example.com
 token =
 username =
 password =
+platform = psx
+emulator = pcsx_rearmed
 verify_tls = true
 timeout_seconds = 30
 

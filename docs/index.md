@@ -168,7 +168,7 @@ Reference template (optional, for manual editing/debug):
 
 Supported sections:
 
-- `[RomM]`: `url`, `token`, `username`, `password`, `verify_tls`, `timeout_seconds`
+- `[RomM]`: `url`, `token`, `username`, `password`, `platform`, `emulator`, `verify_tls`, `timeout_seconds`
 - `[Device]`: `device_id`, `device_name`, `device_platform`, `client`, `client_version`
 - `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`, `auto_sync_on_startup`
 - `[Log]`: `level` (`error|warn|info|debug`), `file_enabled` (`true|false`), `scan_verbose` (`true|false`)
