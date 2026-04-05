@@ -54,4 +54,10 @@ const char *app_log_history_line(int index);
  */
 const char *app_log_level_str(AppLogLevel level);
 
+/*
+ * Enables/disables file logging and sets the destination path.
+ * When disabled, in-memory history logging is unchanged.
+ */
+void app_log_set_file_output(int enabled, const char *log_path);
+
 #endif

@@ -32,5 +32,8 @@ auto_sync_on_startup = false
 [Log]
 ; error | warn | info | debug
 level = debug
+; When enabled, logs are written to ux0:data/romm-vita-sync/romm-vita-sync.log
+; with rotation (3 files max, 10MB each).
+file_enabled = false
 ; Scanner logs can be very chatty, keep disabled unless needed
 scan_verbose = false

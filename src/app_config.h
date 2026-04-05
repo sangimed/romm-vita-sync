@@ -51,6 +51,7 @@ typedef struct AppConfig {
   int sync_auto_on_startup;
 
   int log_level;
+  int log_file_enabled;
   int log_scan_verbose;
 } AppConfig;
 
@@ -61,7 +62,7 @@ void app_config_init_defaults(AppConfig *config);
 
 /*
  * Loads settings from an ini-like file.
- * Supported sections: [RomM], [Device], [Sync].
+ * Supported sections: [RomM], [Device], [Sync], [Log].
  */
 int app_config_load(const char *path, AppConfig *out_config);
 

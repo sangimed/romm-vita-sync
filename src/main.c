@@ -29,10 +29,11 @@
 #define UI_SELECT_SERVER_URL 0
 #define UI_SELECT_USERNAME 1
 #define UI_SELECT_PASSWORD 2
-#define UI_SELECT_SYNC_PRIMARY 3
-#define UI_SELECT_SYNC_ALL 4
-#define UI_SELECT_RESCAN 5
-#define UI_SELECT_GAME_BASE 6
+#define UI_SELECT_FILE_LOGGING 3
+#define UI_SELECT_SYNC_PRIMARY 4
+#define UI_SELECT_SYNC_ALL 5
+#define UI_SELECT_RESCAN 6
+#define UI_SELECT_GAME_BASE 7
 
 #define UI_SCREEN_WIDTH 960.0f
 #define UI_SCREEN_HEIGHT 544.0f
@@ -47,6 +48,7 @@
 #define UI_STATUS_LINE_LEN 192
 #define UI_EDITOR_BUFFER_LEN 512
 #define APP_RUNTIME_DATA_DIRECTORY "ux0:data/romm-vita-sync"
+#define APP_RUNTIME_LOG_FILE_PATH "ux0:data/romm-vita-sync/romm-vita-sync.log"
 
 #define UI_COLOR_BACKGROUND RGBA8(11, 15, 22, 255)
 #define UI_COLOR_BACKGROUND_ALT RGBA8(16, 22, 32, 255)
@@ -158,6 +160,20 @@ static AppLogLevel app_log_level_from_config(int config_level) {
     return APP_LOG_LEVEL_DEBUG;
   }
   return APP_LOG_LEVEL_INFO;
+}
+
+/*
+ * Applies logging preferences (level + optional file logging) from config.
+ */
+static void ui_apply_logging_preferences(const AppConfig *config) {
+  if (config == NULL) {
+    app_log_set_level(APP_LOG_LEVEL_INFO);
+    app_log_set_file_output(0, APP_RUNTIME_LOG_FILE_PATH);
+    return;
+  }
+
+  app_log_set_level(app_log_level_from_config(config->log_level));
+  app_log_set_file_output(config->log_file_enabled, APP_RUNTIME_LOG_FILE_PATH);
 }
 
 /*
@@ -705,6 +721,11 @@ static int ui_get_selection_anchor(const UiAppState *state, int index, float *ou
     *out_y = 262.0f + (44.0f * 0.5f);
     return 0;
   }
+  if (index == UI_SELECT_FILE_LOGGING) {
+    *out_x = 48.0f + (398.0f * 0.5f);
+    *out_y = 316.0f + (28.0f * 0.5f);
+    return 0;
+  }
   if (index == UI_SELECT_SYNC_PRIMARY) {
     *out_x = 494.0f + (418.0f * 0.5f);
     *out_y = 252.0f + (28.0f * 0.5f);
@@ -988,7 +1009,7 @@ static int ui_save_config(UiAppState *state, const char *success_message) {
   } else {
     ui_set_status(state, "Settings saved to %s", APP_CONFIG_DEFAULT_PATH);
   }
-  app_log_set_level(app_log_level_from_config(state->config.log_level));
+  ui_apply_logging_preferences(&state->config);
   app_log_write(APP_LOG_LEVEL_INFO, "ui", "settings saved to %s", APP_CONFIG_DEFAULT_PATH);
   return APP_CONFIG_OK;
 }
@@ -1281,14 +1302,18 @@ static void ui_draw_field_row(float x, float y, float w, float h, int selected, 
   unsigned int fill = selected ? UI_COLOR_FIELD_ACTIVE : UI_COLOR_FIELD;
   unsigned int border = selected ? UI_COLOR_PANEL_BORDER_ACTIVE : UI_COLOR_PANEL_BORDER;
   unsigned int value_color = has_text(value) ? UI_COLOR_TEXT : UI_COLOR_TEXT_DIM;
+  float label_scale = (h < 36.0f) ? 0.68f : 0.78f;
+  float value_scale = (h < 36.0f) ? 0.80f : 0.92f;
+  float label_y = y + ((h < 36.0f) ? 11.0f : 17.0f);
+  float value_y = y + ((h < 36.0f) ? 24.0f : 39.0f);
 
   ui_draw_panel(x, y, w, h, fill, border);
   if (selected) {
     vita2d_draw_rectangle(ui_snap_to_pixel(x), ui_snap_to_pixel(y), 4.0f, ui_snap_to_pixel(h), UI_COLOR_ACCENT);
   }
 
-  ui_draw_text(x + 16.0f, y + 17.0f, UI_COLOR_TEXT_DIM, 0.78f, "%s", label);
-  ui_draw_text(x + 16.0f, y + 39.0f, value_color, 0.92f, "%s", value);
+  ui_draw_text(x + 16.0f, label_y, UI_COLOR_TEXT_DIM, label_scale, "%s", label);
+  ui_draw_text(x + 16.0f, value_y, value_color, value_scale, "%s", value);
 }
 
 /*
@@ -1379,19 +1404,27 @@ static void ui_render_connection_panel(const UiAppState *state) {
   char url_display[96];
   char user_display[96];
   char pass_display[96];
+  char file_log_display[24];
   ui_format_field_display(state->config.romm_url, 0, url_display, sizeof(url_display));
   ui_format_field_display(state->config.romm_username, 0, user_display, sizeof(user_display));
   ui_format_field_display(state->config.romm_password, 1, pass_display, sizeof(pass_display));
+  snprintf(file_log_display, sizeof(file_log_display), "%s", state->config.log_file_enabled ? "Enabled" : "Disabled");
 
   ui_draw_panel(32.0f, 88.0f, 430.0f, 258.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
   ui_draw_text(48.0f, 118.0f, UI_COLOR_TEXT, 0.96f, "Connection");
-  ui_draw_text(48.0f, 140.0f, UI_COLOR_TEXT_MUTED, 0.78f, "X: edit selected field (auto-save).");
+  ui_draw_text(48.0f, 140.0f, UI_COLOR_TEXT_MUTED, 0.78f, "X: edit/toggle selected field (auto-save).");
 
   ui_draw_field_row(48.0f, 154.0f, 398.0f, 44.0f, state->selected_index == UI_SELECT_SERVER_URL, "RoMM server address", url_display);
   ui_draw_field_row(48.0f, 208.0f, 398.0f, 44.0f, state->selected_index == UI_SELECT_USERNAME, "RoMM username", user_display);
   ui_draw_field_row(48.0f, 262.0f, 398.0f, 44.0f, state->selected_index == UI_SELECT_PASSWORD, "RoMM password", pass_display);
-
-  ui_draw_text(48.0f, 332.0f, UI_COLOR_WARNING, 0.76f, "Credentials are local plain text.");
+  ui_draw_field_row(
+      48.0f,
+      316.0f,
+      398.0f,
+      28.0f,
+      state->selected_index == UI_SELECT_FILE_LOGGING,
+      "File logging (10MB x3)",
+      file_log_display);
 }
 
 /*
@@ -2508,6 +2541,23 @@ static void ui_activate_selection(UiAppState *state) {
     return;
   }
 
+  if (state->selected_index == UI_SELECT_FILE_LOGGING) {
+    state->config.log_file_enabled = state->config.log_file_enabled ? 0 : 1;
+    const char *message = state->config.log_file_enabled
+                              ? "File logging enabled"
+                              : "File logging disabled";
+    int save_status = ui_save_config(state, message);
+    if (save_status == APP_CONFIG_OK) {
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "ui",
+          "file logging %s (%s)",
+          state->config.log_file_enabled ? "enabled" : "disabled",
+          APP_RUNTIME_LOG_FILE_PATH);
+    }
+    return;
+  }
+
   if (state->selected_index == UI_SELECT_SYNC_PRIMARY) {
     if (ui_active_game(state) == NULL) {
       ui_set_status(state, "No PS1 game is selected");
@@ -2588,6 +2638,7 @@ static void ui_initialize_state(UiAppState *state) {
         state->config_status);
     app_config_init_defaults(&state->config);
   }
+  ui_apply_logging_preferences(&state->config);
 
   if (state->config_status == APP_CONFIG_ERR_NOT_FOUND) {
     app_log_write(APP_LOG_LEVEL_WARN, "main", "settings.ini not found, using defaults");
@@ -2609,7 +2660,6 @@ static void ui_initialize_state(UiAppState *state) {
         backup_manager_status_str(runtime_directory_status));
   }
 
-  app_log_set_level(app_log_level_from_config(state->config.log_level));
   state->romm_client.context = &state->config;
   state->romm_client.list_remote_saves = romm_http_list_remote_saves_callback;
   state->romm_client.upload_save = romm_http_upload_save_callback;

@@ -171,7 +171,7 @@ Supported sections:
 - `[RomM]`: `url`, `token`, `username`, `password`, `verify_tls`, `timeout_seconds`
 - `[Device]`: `device_id`, `device_name`, `device_platform`, `client`, `client_version`
 - `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`, `auto_sync_on_startup`
-- `[Log]`: `level` (`error|warn|info|debug`), `scan_verbose` (`true|false`)
+- `[Log]`: `level` (`error|warn|info|debug`), `file_enabled` (`true|false`), `scan_verbose` (`true|false`)
 
 Security notice:
 
@@ -183,10 +183,13 @@ Credential rule:
 - either `token`, or `username` + `password`
 - if `[Device].device_id` is empty, startup calls the `RommClient` registration flow and persists the returned `device_id` into `settings.ini`
 - recommended logging for troubleshooting: `level=debug` and keep `scan_verbose=false` first; enable `scan_verbose=true` only when debugging scanner issues
+- file logging path is fixed to `ux0:data/romm-vita-sync/romm-vita-sync.log`
+- file logging rotation is fixed to 3 files max (`.log`, `.log.1`, `.log.2`), 10MB each (max 30MB total)
 
 Current in-app UI behavior:
 
 - The home screen exposes dedicated fields for the RomM `url`, `username`, and `password`.
+- The home screen includes a `File logging (10MB x3)` toggle with immediate save.
 - Editing those fields opens the official PS Vita system keyboard (`SceImeDialog`).
 - Confirming keyboard input persists values immediately to `ux0:data/romm-vita-sync/settings.ini`.
 - The main screen keeps a visible primary `Synchronize Selected Game` action and a secondary `Rescan Local Saves` action.

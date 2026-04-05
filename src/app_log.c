@@ -3,11 +3,176 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 static AppLogLevel g_log_level = APP_LOG_LEVEL_INFO;
 static char g_log_history[APP_LOG_HISTORY_CAPACITY][320];
 static int g_log_history_start = 0;
 static int g_log_history_count = 0;
+static int g_file_output_enabled = 0;
+static char g_file_output_path[256];
+
+#define APP_LOG_FILE_MAX_SIZE_BYTES (10U * 1024U * 1024U)
+#define APP_LOG_FILE_MAX_FILES 3
+
+/*
+ * Returns non-zero when text is non-null and non-empty.
+ */
+static int has_text(const char *text) {
+  return (text != NULL) && (text[0] != '\0');
+}
+
+/*
+ * Safely copies one optional string into a fixed-size destination.
+ */
+static void safe_copy(char *destination, size_t destination_size, const char *source) {
+  if ((destination == NULL) || (destination_size == 0U)) {
+    return;
+  }
+
+  if (source == NULL) {
+    destination[0] = '\0';
+    return;
+  }
+
+  snprintf(destination, destination_size, "%s", source);
+}
+
+/*
+ * Builds one dated timestamp suitable for log file output.
+ */
+static void build_timestamp(char *out, size_t out_size) {
+  if ((out == NULL) || (out_size == 0U)) {
+    return;
+  }
+
+  time_t now = time(NULL);
+  if (now <= 0) {
+    snprintf(out, out_size, "0000-00-00 00:00:00");
+    return;
+  }
+
+  struct tm *local = localtime(&now);
+  if (local == NULL) {
+    snprintf(out, out_size, "0000-00-00 00:00:00");
+    return;
+  }
+
+  snprintf(
+      out,
+      out_size,
+      "%04d-%02d-%02d %02d:%02d:%02d",
+      local->tm_year + 1900,
+      local->tm_mon + 1,
+      local->tm_mday,
+      local->tm_hour,
+      local->tm_min,
+      local->tm_sec);
+}
+
+/*
+ * Returns one file size in bytes, or -1 when file is not readable.
+ */
+static long file_size_bytes(const char *path) {
+  if (!has_text(path)) {
+    return -1;
+  }
+
+  FILE *file = fopen(path, "rb");
+  if (file == NULL) {
+    return -1;
+  }
+
+  if (fseek(file, 0L, SEEK_END) != 0) {
+    fclose(file);
+    return -1;
+  }
+
+  long size = ftell(file);
+  fclose(file);
+  return size;
+}
+
+/*
+ * Resolves one rotated log path from base path and index.
+ * Index 0 means the active log file.
+ */
+static void build_rotated_path(const char *base_path, int index, char *out_path, size_t out_size) {
+  if ((out_path == NULL) || (out_size == 0U)) {
+    return;
+  }
+
+  if (!has_text(base_path)) {
+    out_path[0] = '\0';
+    return;
+  }
+
+  if (index <= 0) {
+    safe_copy(out_path, out_size, base_path);
+    return;
+  }
+
+  snprintf(out_path, out_size, "%s.%d", base_path, index);
+}
+
+/*
+ * Rotates log files when active file reached size limit.
+ * Keeps at most APP_LOG_FILE_MAX_FILES files in total.
+ */
+static void rotate_log_files_if_needed(size_t incoming_line_bytes) {
+  if (!g_file_output_enabled || !has_text(g_file_output_path)) {
+    return;
+  }
+
+  long size = file_size_bytes(g_file_output_path);
+  if (size < 0) {
+    return;
+  }
+
+  if ((unsigned long long)size + (unsigned long long)incoming_line_bytes <= APP_LOG_FILE_MAX_SIZE_BYTES) {
+    return;
+  }
+
+  char source[320];
+  char target[320];
+
+  for (int index = APP_LOG_FILE_MAX_FILES; index < 32; ++index) {
+    build_rotated_path(g_file_output_path, index, target, sizeof(target));
+    remove(target);
+  }
+
+  build_rotated_path(g_file_output_path, APP_LOG_FILE_MAX_FILES - 1, target, sizeof(target));
+  remove(target);
+
+  for (int index = APP_LOG_FILE_MAX_FILES - 2; index >= 0; --index) {
+    build_rotated_path(g_file_output_path, index, source, sizeof(source));
+    build_rotated_path(g_file_output_path, index + 1, target, sizeof(target));
+    remove(target);
+    rename(source, target);
+  }
+}
+
+/*
+ * Appends one line to the file log when enabled.
+ */
+static void append_file_line(const char *line) {
+  if (!g_file_output_enabled || !has_text(g_file_output_path) || !has_text(line)) {
+    return;
+  }
+
+  size_t line_len = strlen(line);
+  rotate_log_files_if_needed(line_len + 1U);
+
+  FILE *file = fopen(g_file_output_path, "ab");
+  if (file == NULL) {
+    return;
+  }
+
+  fwrite(line, 1U, line_len, file);
+  fputc('\n', file);
+  fflush(file);
+  fclose(file);
+}
 
 /*
  * Appends one rendered log line to the in-memory ring buffer.
@@ -43,6 +208,14 @@ const char *app_log_level_str(AppLogLevel level) {
     default:
       return "INFO";
   }
+}
+
+/*
+ * Enables/disables file logging and sets the destination path.
+ */
+void app_log_set_file_output(int enabled, const char *log_path) {
+  g_file_output_enabled = enabled ? 1 : 0;
+  safe_copy(g_file_output_path, sizeof(g_file_output_path), log_path);
 }
 
 /*
@@ -125,4 +298,11 @@ void app_log_write(AppLogLevel level, const char *tag, const char *format, ...) 
   }
 
   append_history_line(rendered);
+
+  char timestamp[32];
+  build_timestamp(timestamp, sizeof(timestamp));
+
+  char file_line[420];
+  snprintf(file_line, sizeof(file_line), "[%s] %s", timestamp, rendered);
+  append_file_line(file_line);
 }
