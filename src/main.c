@@ -10,6 +10,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include <vita2d.h>
 
@@ -18,6 +19,7 @@
 #include "app_config.h"
 #include "app_log.h"
 #include "backup_manager.h"
+#include "conflict_resolver.h"
 #include "ps1_paths.h"
 #include "romm_client.h"
 #include "romm_http_client.h"
@@ -1930,6 +1932,12 @@ typedef struct UiSyncProgressBridge {
   int overall_total_units;
 } UiSyncProgressBridge;
 
+typedef struct UiSyncConflictResolutionContext {
+  UiAppState *state;
+  UiSyncTrigger trigger;
+  int dry_run;
+} UiSyncConflictResolutionContext;
+
 /*
  * Bridges sync_engine progress callbacks into UI progress + live redraw.
  */
@@ -1960,6 +1968,295 @@ static void ui_sync_engine_progress_callback(
   }
   feedback->modal_auto_scroll = 1;
   ui_sync_render_live(state);
+}
+
+/*
+ * Formats a Unix timestamp for conflict prompts using local device time when available.
+ */
+static void ui_format_sync_timestamp(int64_t timestamp_unix, char *out_text, size_t out_size) {
+  if ((out_text == NULL) || (out_size == 0U)) {
+    return;
+  }
+
+  if (timestamp_unix <= 0) {
+    snprintf(out_text, out_size, "unknown");
+    return;
+  }
+
+  time_t raw = (time_t)timestamp_unix;
+  struct tm *local = localtime(&raw);
+  if (local == NULL) {
+    snprintf(out_text, out_size, "%lld", (long long)timestamp_unix);
+    return;
+  }
+
+  snprintf(
+      out_text,
+      out_size,
+      "%04d-%02d-%02d %02d:%02d:%02d",
+      local->tm_year + 1900,
+      local->tm_mon + 1,
+      local->tm_mday,
+      local->tm_hour,
+      local->tm_min,
+      local->tm_sec);
+}
+
+/*
+ * Returns a short user-facing explanation for one conflict kind.
+ */
+static const char *ui_sync_conflict_summary(SyncConflictType conflict) {
+  switch (conflict) {
+    case SYNC_CONFLICT_LOCAL_NEWER:
+      return "Local save is newer than the remote save.";
+    case SYNC_CONFLICT_REMOTE_NEWER:
+      return "Remote save is newer than the local save.";
+    case SYNC_CONFLICT_SAME_TIMESTAMP_DIFFERENT_CONTENT:
+      return "Local and remote saves share the same timestamp but differ in content.";
+    case SYNC_CONFLICT_SAME_ORIGIN_DEVICE:
+      return "Remote save already belongs to this device.";
+    case SYNC_CONFLICT_NONE:
+    default:
+      return "No conflict detected.";
+  }
+}
+
+/*
+ * Returns a short user-facing phrase for a recommended sync action.
+ */
+static const char *ui_sync_action_phrase(SyncActionType action) {
+  switch (action) {
+    case SYNC_ACTION_UPLOAD:
+      return "upload the local save to RomM";
+    case SYNC_ACTION_DOWNLOAD:
+      return "download the remote save to this Vita";
+    case SYNC_ACTION_SKIP:
+    case SYNC_ACTION_NONE:
+    default:
+      return "skip this save for now";
+  }
+}
+
+/*
+ * Builds one concise multi-line conflict prompt message for the system dialog.
+ */
+static void ui_build_conflict_prompt_message(
+    char *out_message,
+    size_t out_size,
+    const SyncSaveDescriptor *local_item,
+    const SyncSaveDescriptor *remote_item,
+    SyncConflictType conflict,
+    SyncActionType action,
+    int dry_run,
+    const char *question) {
+  if ((out_message == NULL) || (out_size == 0U)) {
+    return;
+  }
+
+  char local_timestamp[64];
+  char remote_timestamp[64];
+  ui_format_sync_timestamp(local_item != NULL ? local_item->timestamp_unix : 0, local_timestamp, sizeof(local_timestamp));
+  ui_format_sync_timestamp(remote_item != NULL ? remote_item->timestamp_unix : 0, remote_timestamp, sizeof(remote_timestamp));
+
+  const char *title = (local_item != NULL) && has_text(local_item->title)
+                          ? local_item->title
+                          : (((local_item != NULL) && has_text(local_item->game_id)) ? local_item->game_id : "(unknown)");
+  const char *filename = (local_item != NULL) && has_text(local_item->filename)
+                             ? local_item->filename
+                             : (((remote_item != NULL) && has_text(remote_item->filename)) ? remote_item->filename : "(unknown)");
+  const char *question_text = has_text(question) ? question : "Apply the recommended action?";
+
+  char title_display[96];
+  char filename_display[80];
+  char summary_display[96];
+  char action_display[96];
+  char question_display[128];
+  ui_truncate_text(title, title_display, sizeof(title_display));
+  ui_truncate_text(filename, filename_display, sizeof(filename_display));
+  ui_truncate_text(ui_sync_conflict_summary(conflict), summary_display, sizeof(summary_display));
+  ui_truncate_text(ui_sync_action_phrase(action), action_display, sizeof(action_display));
+  ui_truncate_text(question_text, question_display, sizeof(question_display));
+
+  snprintf(
+      out_message,
+      out_size,
+      "Conflict for %s\n"
+      "File: %s (%s)\n\n"
+      "Local : %s | %llu B\n"
+      "Remote: %s | %llu B\n\n"
+      "%s\n"
+      "Recommended action: %s.\n\n"
+      "%s%s",
+      title_display,
+      filename_display,
+      (local_item != NULL) ? sync_slot_str(local_item->slot) : "unknown",
+      local_timestamp,
+      (unsigned long long)((local_item != NULL) ? local_item->size_bytes : 0U),
+      remote_timestamp,
+      (unsigned long long)((remote_item != NULL) ? remote_item->size_bytes : 0U),
+      summary_display,
+      action_display,
+      dry_run ? "Dry-run: approving this will only plan the action.\n\n" : "",
+      question_display);
+}
+
+/*
+ * Resolves one conflict through blocking UI prompts during manual sync.
+ * Auto-sync keeps conflicts deferred to avoid startup prompt storms.
+ */
+static SyncActionType ui_sync_resolve_conflict_callback(
+    SyncActionRecord *candidate_action,
+    const SyncSaveDescriptor *local_item,
+    const SyncSaveDescriptor *remote_item,
+    void *user_data) {
+  UiSyncConflictResolutionContext *context = (UiSyncConflictResolutionContext *)user_data;
+  SyncConflictType conflict =
+      (candidate_action != NULL) ? candidate_action->conflict : conflict_resolver_detect(local_item, remote_item, NULL);
+  SyncActionType recommended_action = conflict_resolver_default_action(conflict);
+  const char *filename = (candidate_action != NULL) && has_text(candidate_action->filename)
+                             ? candidate_action->filename
+                             : (((local_item != NULL) && has_text(local_item->filename)) ? local_item->filename : "(unknown)");
+
+  if (recommended_action == SYNC_ACTION_NONE) {
+    recommended_action = SYNC_ACTION_SKIP;
+  }
+
+  if ((context == NULL) || (context->state == NULL)) {
+    return recommended_action;
+  }
+
+  UiAppState *state = context->state;
+  if (context->trigger == UI_SYNC_TRIGGER_AUTOMATIC) {
+    if (candidate_action != NULL) {
+      snprintf(
+          candidate_action->reason,
+          sizeof(candidate_action->reason),
+          "auto sync deferred: review conflict manually (recommended=%s, conflict=%s)",
+          sync_action_type_str(recommended_action),
+          sync_conflict_type_str(conflict));
+    }
+    ui_sync_log_write(
+        APP_LOG_LEVEL_WARN,
+        "Auto sync deferred conflict review: file=%s conflict=%s recommended=%s",
+        filename,
+        sync_conflict_type_str(conflict),
+        sync_action_type_str(recommended_action));
+    return SYNC_ACTION_SKIP;
+  }
+
+  ui_sync_feedback_set_message(&state->sync_feedback, "Waiting for conflict confirmation...");
+  ui_sync_render_live(state);
+
+  ui_sync_log_write(
+      APP_LOG_LEVEL_WARN,
+      "Conflict review required: file=%s conflict=%s recommended=%s",
+      filename,
+      sync_conflict_type_str(conflict),
+      sync_action_type_str(recommended_action));
+
+  char prompt[UI_DIALOG_MSG_MAX_LEN];
+  int response = 0;
+
+  if (conflict == SYNC_CONFLICT_SAME_TIMESTAMP_DIFFERENT_CONTENT) {
+    ui_build_conflict_prompt_message(
+        prompt,
+        sizeof(prompt),
+        local_item,
+        remote_item,
+        conflict,
+        SYNC_ACTION_UPLOAD,
+        context->dry_run,
+        "Upload the local save to RomM?");
+    response = ui_dialog_confirm(prompt);
+    if (response < 0) {
+      if (candidate_action != NULL) {
+        snprintf(candidate_action->reason, sizeof(candidate_action->reason), "conflict dialog failed during upload choice");
+      }
+      ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Conflict dialog failed for file=%s", filename);
+      return SYNC_ACTION_SKIP;
+    }
+    if (response == 1) {
+      ui_sync_log_write(
+          APP_LOG_LEVEL_INFO,
+          "%s approved: file=%s action=upload",
+          context->dry_run ? "Dry-run conflict plan" : "Conflict action",
+          filename);
+      return SYNC_ACTION_UPLOAD;
+    }
+
+    ui_build_conflict_prompt_message(
+        prompt,
+        sizeof(prompt),
+        local_item,
+        remote_item,
+        conflict,
+        SYNC_ACTION_DOWNLOAD,
+        context->dry_run,
+        "Download the remote save to this Vita?\nDecline to skip this save.");
+    response = ui_dialog_confirm(prompt);
+    if (response < 0) {
+      if (candidate_action != NULL) {
+        snprintf(candidate_action->reason, sizeof(candidate_action->reason), "conflict dialog failed during download choice");
+      }
+      ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Conflict dialog failed for file=%s", filename);
+      return SYNC_ACTION_SKIP;
+    }
+    if (response == 1) {
+      ui_sync_log_write(
+          APP_LOG_LEVEL_INFO,
+          "%s approved: file=%s action=download",
+          context->dry_run ? "Dry-run conflict plan" : "Conflict action",
+          filename);
+      return SYNC_ACTION_DOWNLOAD;
+    }
+
+    if (candidate_action != NULL) {
+      snprintf(
+          candidate_action->reason,
+          sizeof(candidate_action->reason),
+          "user skipped after reviewing same-content conflict");
+    }
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Conflict skipped by user: file=%s", filename);
+    return SYNC_ACTION_SKIP;
+  }
+
+  ui_build_conflict_prompt_message(
+      prompt,
+      sizeof(prompt),
+      local_item,
+      remote_item,
+      conflict,
+      recommended_action,
+      context->dry_run,
+      "Apply the recommended action?");
+  response = ui_dialog_confirm(prompt);
+  if (response < 0) {
+    if (candidate_action != NULL) {
+      snprintf(candidate_action->reason, sizeof(candidate_action->reason), "conflict dialog failed");
+    }
+    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Conflict dialog failed for file=%s", filename);
+    return SYNC_ACTION_SKIP;
+  }
+
+  if (response == 1) {
+    ui_sync_log_write(
+        APP_LOG_LEVEL_INFO,
+        "%s approved: file=%s action=%s",
+        context->dry_run ? "Dry-run conflict plan" : "Conflict action",
+        filename,
+        sync_action_type_str(recommended_action));
+    return recommended_action;
+  }
+
+  if (candidate_action != NULL) {
+    snprintf(
+        candidate_action->reason,
+        sizeof(candidate_action->reason),
+        "user skipped after reviewing conflict=%s",
+        sync_conflict_type_str(conflict));
+  }
+  ui_sync_log_write(APP_LOG_LEVEL_INFO, "Conflict skipped by user: file=%s", filename);
+  return SYNC_ACTION_SKIP;
 }
 
 /*
@@ -2147,6 +2444,15 @@ static int ui_run_sync_pipeline(
   progress_bridge.state = state;
   progress_bridge.base_completed_units = 3;
   progress_bridge.overall_total_units = total_units;
+
+  UiSyncConflictResolutionContext conflict_context;
+  memset(&conflict_context, 0, sizeof(conflict_context));
+  conflict_context.state = state;
+  conflict_context.trigger = trigger;
+  conflict_context.dry_run = state->config.sync_dry_run;
+
+  config.resolve_conflict = ui_sync_resolve_conflict_callback;
+  config.resolve_conflict_user_data = &conflict_context;
   config.progress_callback = ui_sync_engine_progress_callback;
   config.progress_user_data = &progress_bridge;
 

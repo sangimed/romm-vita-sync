@@ -372,20 +372,32 @@ static int execute_upload(
     return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
   }
 
+  if (config->dry_run) {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "sync",
+        "dry-run plan: would upload save: game=%s file=%s",
+        local_item->game_id,
+        has_text(action->filename) ? action->filename : local_item->filename);
+    action->executed = 0;
+    action->status_code = SYNC_ENGINE_OK;
+    if (action->conflict != SYNC_CONFLICT_NONE) {
+      set_reason(
+          action,
+          "planned upload (dry-run; approved conflict=%s)",
+          sync_conflict_type_str(action->conflict));
+    } else {
+      set_reason(action, "planned upload (dry-run)");
+    }
+    return SYNC_ENGINE_OK;
+  }
+
   app_log_write(
       APP_LOG_LEVEL_INFO,
       "sync",
       "uploading save: game=%s file=%s",
       local_item->game_id,
       has_text(action->filename) ? action->filename : local_item->filename);
-
-  if (config->dry_run) {
-    action->executed = 0;
-    action->status_code = SYNC_ENGINE_OK;
-    set_reason(action, "planned upload (dry-run)");
-    app_log_write(APP_LOG_LEVEL_INFO, "sync", "upload skipped (dry-run)");
-    return SYNC_ENGINE_OK;
-  }
 
   SyncSaveDescriptor upload_item;
   memcpy(&upload_item, local_item, sizeof(upload_item));
@@ -472,7 +484,11 @@ static int execute_upload(
 
   action->executed = 1;
   report->uploads_executed += 1;
-  set_reason(action, "uploaded");
+  if (action->conflict != SYNC_CONFLICT_NONE) {
+    set_reason(action, "uploaded after conflict review (%s)", sync_conflict_type_str(action->conflict));
+  } else {
+    set_reason(action, "uploaded");
+  }
   app_log_write(APP_LOG_LEVEL_INFO, "sync", "upload complete: game=%s file=%s", local_item->game_id, action->filename);
 
   int64_t now = (config->now_callback != NULL) ? config->now_callback() : default_now_callback();
@@ -507,13 +523,6 @@ static int execute_download(
     return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
   }
 
-  app_log_write(
-      APP_LOG_LEVEL_INFO,
-      "sync",
-      "downloading save: game=%s file=%s",
-      local_item->game_id,
-      has_text(action->filename) ? action->filename : local_item->filename);
-
   if (!has_text(local_item->path)) {
     action->status_code = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
     set_reason(action, "download destination path missing");
@@ -522,12 +531,31 @@ static int execute_download(
   }
 
   if (config->dry_run) {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "sync",
+        "dry-run plan: would download save: game=%s file=%s",
+        local_item->game_id,
+        has_text(action->filename) ? action->filename : local_item->filename);
     action->executed = 0;
     action->status_code = SYNC_ENGINE_OK;
-    set_reason(action, "planned download (dry-run)");
-    app_log_write(APP_LOG_LEVEL_INFO, "sync", "download skipped (dry-run)");
+    if (action->conflict != SYNC_CONFLICT_NONE) {
+      set_reason(
+          action,
+          "planned download (dry-run; approved conflict=%s)",
+          sync_conflict_type_str(action->conflict));
+    } else {
+      set_reason(action, "planned download (dry-run)");
+    }
     return SYNC_ENGINE_OK;
   }
+
+  app_log_write(
+      APP_LOG_LEVEL_INFO,
+      "sync",
+      "downloading save: game=%s file=%s",
+      local_item->game_id,
+      has_text(action->filename) ? action->filename : local_item->filename);
 
   if (file_exists(local_item->path)) {
     const char *backup_directory = has_text(config->backup_directory)
@@ -658,7 +686,11 @@ static int execute_download(
 
   action->executed = 1;
   report->downloads_executed += 1;
-  set_reason(action, "downloaded");
+  if (action->conflict != SYNC_CONFLICT_NONE) {
+    set_reason(action, "downloaded after conflict review (%s)", sync_conflict_type_str(action->conflict));
+  } else {
+    set_reason(action, "downloaded");
+  }
   app_log_write(APP_LOG_LEVEL_INFO, "sync", "download complete: game=%s file=%s", local_item->game_id, action->filename);
 
   int64_t last_upload = 0;
@@ -1078,7 +1110,15 @@ int sync_engine_run(
     }
 
     out_report->skipped += 1;
-    set_reason(action, "manual confirmation required (conflict=%s)", sync_conflict_type_str(conflict));
+    if (!has_text(action->reason)) {
+      if (conflict_resolver_requires_confirmation(conflict) && (config->resolve_conflict != NULL)) {
+        set_reason(action, "skip selected during conflict review (conflict=%s)", sync_conflict_type_str(conflict));
+      } else if (conflict_resolver_requires_confirmation(conflict)) {
+        set_reason(action, "manual confirmation required (conflict=%s)", sync_conflict_type_str(conflict));
+      } else {
+        set_reason(action, "skipped (conflict=%s)", sync_conflict_type_str(conflict));
+      }
+    }
     completed_engine_units = 2 + i;
     emit_progress(
         config,
