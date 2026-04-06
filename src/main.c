@@ -2168,12 +2168,18 @@ static int ui_run_sync_pipeline(
     ui_sync_append_report_logs(&state->sync_report);
     ui_sync_feedback_set_message(&state->sync_feedback, "Sync completed successfully.");
   } else {
+    char failure_message[96];
+    snprintf(
+        failure_message,
+        sizeof(failure_message),
+        "Sync failed: %s.",
+        sync_engine_status_str(sync_status));
     ui_sync_log_write(
         APP_LOG_LEVEL_ERROR,
         "Sync failed: %s (%d)",
         sync_engine_status_str(sync_status),
         sync_status);
-    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed.");
+    ui_sync_feedback_set_message(&state->sync_feedback, failure_message);
   }
 
   ui_sync_render_live(state);

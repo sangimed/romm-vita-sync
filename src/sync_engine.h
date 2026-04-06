@@ -12,6 +12,7 @@
 #define SYNC_ENGINE_ERR_STATE_LOAD -3
 #define SYNC_ENGINE_ERR_STATE_SAVE -4
 #define SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID -5
+#define SYNC_ENGINE_ERR_OUT_OF_MEMORY -6
 
 typedef SyncActionType (*SyncConflictResolverCallback)(
     const SyncActionRecord *candidate_action,

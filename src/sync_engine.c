@@ -1,6 +1,7 @@
 #include "sync_engine.h"
 
 #include <ctype.h>
+#include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -728,6 +729,9 @@ int sync_engine_run(
     total_engine_units = 1;
   }
   int completed_engine_units = 0;
+  int status = SYNC_ENGINE_OK;
+  SyncStateStore *state_store = NULL;
+  SyncSaveDescriptor *remote_items = NULL;
   emit_progress(
       config,
       completed_engine_units,
@@ -759,12 +763,23 @@ int sync_engine_run(
     return SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID;
   }
 
-  SyncStateStore state_store;
-  sync_state_store_init(&state_store);
+  state_store = (SyncStateStore *)malloc(sizeof(*state_store));
+  if (state_store == NULL) {
+    app_log_write(APP_LOG_LEVEL_ERROR, "sync", "out of memory allocating state store");
+    emit_progress(
+        config,
+        completed_engine_units,
+        total_engine_units,
+        -1,
+        local_count,
+        "Sync failed: insufficient memory");
+    return SYNC_ENGINE_ERR_OUT_OF_MEMORY;
+  }
+  sync_state_store_init(state_store);
 
   if (has_text(config->state_store_path)) {
     app_log_write(APP_LOG_LEVEL_DEBUG, "sync", "loading state store: %s", config->state_store_path);
-    int load_status = sync_state_store_load(config->state_store_path, &state_store);
+    int load_status = sync_state_store_load(config->state_store_path, state_store);
     if (load_status != SYNC_STATE_STORE_OK) {
       app_log_write(APP_LOG_LEVEL_ERROR, "sync", "state load failed: %s", sync_state_store_status_str(load_status));
       emit_progress(
@@ -774,26 +789,39 @@ int sync_engine_run(
           -1,
           local_count,
           "Sync failed: state loading failed");
-      return SYNC_ENGINE_ERR_STATE_LOAD;
+      status = SYNC_ENGINE_ERR_STATE_LOAD;
+      goto cleanup;
     }
   }
 
-  if (has_text(config->device_id) && !has_text(state_store.device_id)) {
-    sync_state_store_set_device_id(&state_store, config->device_id);
+  if (has_text(config->device_id) && !has_text(state_store->device_id)) {
+    sync_state_store_set_device_id(state_store, config->device_id);
   }
 
   const char *active_device_id = has_text(config->device_id)
                                      ? config->device_id
-                                     : state_store.device_id;
+                                     : state_store->device_id;
 
-  SyncSaveDescriptor remote_items[ROMM_SYNC_MAX_ITEMS];
+  remote_items = (SyncSaveDescriptor *)malloc(sizeof(*remote_items) * (size_t)ROMM_SYNC_MAX_ITEMS);
+  if (remote_items == NULL) {
+    app_log_write(APP_LOG_LEVEL_ERROR, "sync", "out of memory allocating remote item buffer");
+    emit_progress(
+        config,
+        completed_engine_units,
+        total_engine_units,
+        -1,
+        local_count,
+        "Sync failed: insufficient memory");
+    status = SYNC_ENGINE_ERR_OUT_OF_MEMORY;
+    goto cleanup;
+  }
   for (int i = 0; i < ROMM_SYNC_MAX_ITEMS; ++i) {
     sync_save_descriptor_init(&remote_items[i]);
   }
 
   app_log_write(APP_LOG_LEVEL_INFO, "sync", "scanning remote saves...");
   int remote_count = romm_client_list_remote_saves(
-      romm_client, remote_items, (int)(sizeof(remote_items) / sizeof(remote_items[0])));
+      romm_client, remote_items, ROMM_SYNC_MAX_ITEMS);
   if (remote_count < 0) {
     app_log_write(APP_LOG_LEVEL_ERROR, "sync", "remote listing failed: %s (%d)", romm_client_status_str(remote_count), remote_count);
     emit_progress(
@@ -804,7 +832,8 @@ int sync_engine_run(
         local_count,
         "Sync failed: remote listing error (%s)",
         romm_client_status_str(remote_count));
-    return SYNC_ENGINE_ERR_REMOTE_LIST;
+    status = SYNC_ENGINE_ERR_REMOTE_LIST;
+    goto cleanup;
   }
   out_report->remote_count = remote_count;
   app_log_write(APP_LOG_LEVEL_INFO, "sync", "remote listing returned %d items", remote_count);
@@ -852,7 +881,7 @@ int sync_engine_run(
         display_filename);
 
     const SyncStateEntry *state_entry =
-        sync_state_store_find_const(&state_store, local_item->game_id, filename, local_item->slot);
+        sync_state_store_find_const(state_store, local_item->game_id, filename, local_item->slot);
 
     int remote_index = game_matcher_find_remote_index(local_item, remote_items, remote_count);
     if (remote_index < 0) {
@@ -882,7 +911,7 @@ int sync_engine_run(
           local_item->game_id,
           action->filename,
           sync_slot_str(local_item->slot));
-      int upload_status = execute_upload(config, romm_client, active_device_id, local_item, &state_store, action, out_report);
+      int upload_status = execute_upload(config, romm_client, active_device_id, local_item, state_store, action, out_report);
       if (upload_status == ROMM_CLIENT_ERR_CONFLICT) {
         action->action = SYNC_ACTION_SKIP;
         action->conflict = SYNC_CONFLICT_REMOTE_NEWER;
@@ -1001,7 +1030,7 @@ int sync_engine_run(
       out_report->uploads_planned += 1;
       set_reason(action, "upload selected for conflict=%s", sync_conflict_type_str(conflict));
       app_log_write(APP_LOG_LEVEL_INFO, "sync", "decision=upload game=%s file=%s", local_item->game_id, action->filename);
-      int upload_status = execute_upload(config, romm_client, active_device_id, local_item, &state_store, action, out_report);
+      int upload_status = execute_upload(config, romm_client, active_device_id, local_item, state_store, action, out_report);
       if (upload_status == ROMM_CLIENT_ERR_CONFLICT) {
         action->action = SYNC_ACTION_SKIP;
         action->conflict = SYNC_CONFLICT_REMOTE_NEWER;
@@ -1032,7 +1061,7 @@ int sync_engine_run(
           local_item,
           remote_item,
           state_entry,
-          &state_store,
+          state_store,
           action,
           out_report);
       completed_engine_units = 2 + i;
@@ -1063,7 +1092,7 @@ int sync_engine_run(
   }
 
   if (!config->dry_run && has_text(config->state_store_path)) {
-    int save_status = sync_state_store_save(config->state_store_path, &state_store);
+    int save_status = sync_state_store_save(config->state_store_path, state_store);
     if (save_status != SYNC_STATE_STORE_OK) {
       app_log_write(APP_LOG_LEVEL_ERROR, "sync", "state save failed: %s", sync_state_store_status_str(save_status));
       emit_progress(
@@ -1073,7 +1102,8 @@ int sync_engine_run(
           -1,
           local_count,
           "Sync failed: state saving failed");
-      return SYNC_ENGINE_ERR_STATE_SAVE;
+      status = SYNC_ENGINE_ERR_STATE_SAVE;
+      goto cleanup;
     }
   }
   app_log_write(
@@ -1093,7 +1123,10 @@ int sync_engine_run(
       local_count,
       "Sync engine completed");
 
-  return SYNC_ENGINE_OK;
+cleanup:
+  free(remote_items);
+  free(state_store);
+  return status;
 }
 
 /*
@@ -1113,6 +1146,8 @@ const char *sync_engine_status_str(int status) {
       return "state saving failed";
     case SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID:
       return "unresolved rom_id";
+    case SYNC_ENGINE_ERR_OUT_OF_MEMORY:
+      return "out of memory";
     default:
       return "unknown error";
   }
