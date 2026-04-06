@@ -48,7 +48,7 @@ Current integration status:
 - real HTTP device registration is implemented (`POST /api/devices`)
 - upload/download conversion logic is integrated in `SyncEngine`
 - real HTTP save transfer callbacks are wired (`list/upload/download`)
-- local Vita saves are now mapped to RomM `rom_id` by resolving the platform via `/api/platforms`, then querying `/api/roms` with `platform_ids`
+- local Vita saves are now mapped to RomM `rom_id` by resolving the platform via `/api/platforms`, then querying `/api/roms` with targeted `search_term` requests only
 
 
 ## Execution Model (Version 1)
@@ -597,8 +597,9 @@ Save listing/upload/download are now wired to real HTTP callbacks in `main.c` (`
 Local Vita items are resolved to server `rom_id` before sync decisions by:
 
 - resolving the configured platform through `/api/platforms`
-- loading the RomM catalog through paginated `/api/roms?platform_ids=...` requests
+- trying a targeted RomM lookup first through `/api/roms?platform_ids=...&search_term=...`
 - matching candidates by serial metadata first, then title (`fs_name_no_tags`, `name`, `fs_name_no_ext`), then filename patterns
+- surfacing an explicit user-facing warning when the targeted lookup returns no candidate
 
 Conversion is now wired in the app sync flow:
 
@@ -610,10 +611,11 @@ Conversion is now wired in the app sync flow:
 Current Rom ID mapping flow:
 
 1. The app resolves the configured RomM platform through `/api/platforms`.
-2. It loads the paginated RomM catalog with `/api/roms?platform_ids=...`.
+2. It first narrows candidates with `/api/roms?platform_ids=...&search_term=...`.
 3. Each local save is matched by serial metadata first.
 4. If serial matching is not unique, the matcher tries title-based candidates in this order: `fs_name_no_tags`, `name`, `fs_name_no_ext`.
-5. If title matching is still not unique, the matcher falls back to filename-pattern scoring.
+5. If title matching is still not unique, the matcher falls back to filename-pattern scoring inside the targeted candidate set.
+6. If the targeted lookup returns no candidate, the UI reports that explicitly instead of loading the full platform catalog.
 
 ## Contributing
 

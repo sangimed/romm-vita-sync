@@ -101,3 +101,32 @@ When adding or modifying code:
 4. never leave outdated documentation behind
 5. prioritize clarity over verbosity
 6. treat documentation drift as a defect to fix immediately
+
+---
+
+# Build Policy
+
+The agent MUST NOT build or package the VPK.
+
+Building the VPK is a manual user responsibility and is intentionally excluded from automated workflows.
+
+Specifically, the agent must NOT:
+
+- run VPK build commands
+- trigger packaging scripts
+- invoke VitaSDK packaging steps
+- modify build artifacts
+- upload generated `.vpk` files
+- attempt deployment to a PS Vita device
+
+The agent may:
+
+- modify source code
+- update documentation
+- adjust build configuration files when necessary
+- improve compilation reliability
+- fix build errors reported by the user
+
+But the agent must never execute the final packaging step.
+
+If testing requires a VPK build, the agent must stop before packaging and let the user perform it manually.

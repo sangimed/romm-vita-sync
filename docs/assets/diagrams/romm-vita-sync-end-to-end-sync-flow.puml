@@ -38,22 +38,23 @@ group Rom ID mapping
   API --> HTTP: platform[]
   HTTP -> HTTP: resolve configured platform_id
 
-  loop paginated catalog
-    HTTP -> API: GET /api/roms?limit&offset&platform_ids=...
-    API --> HTTP: items[] + total
-    HTTP -> HTTP: parse_rom_catalog_entries()\nextract_serial_metadata()
-  end
-
   loop each local item without rom_id
-    HTTP -> GM: game_matcher_resolve_rom_id(...)
-    GM -> GM: Stage 1 serial/game_id
-    alt no unique match
-      GM -> GM: Stage 2 title vs fs_name_no_tags/name/fs_name_no_ext
+    HTTP -> API: GET /api/roms?limit&offset&platform_ids=...&search_term=...
+    API --> HTTP: matching items[] + total
+    HTTP -> HTTP: parse targeted candidates
+    alt no targeted candidates
+      HTTP --> UI: unresolved mapping reason
+    else targeted candidates found
+      HTTP -> GM: game_matcher_resolve_rom_id(...)
+      GM -> GM: Stage 1 serial/game_id
+      alt no unique match
+        GM -> GM: Stage 2 title vs fs_name_no_tags/name/fs_name_no_ext
+      end
+      alt still no unique match
+        GM -> GM: Stage 3 filename patterns
+      end
+      GM --> HTTP: rom_id, ambiguous, or no-match
     end
-    alt still no unique match
-      GM -> GM: Stage 3 filename patterns
-    end
-    GM --> HTTP: rom_id, ambiguous, or no-match
   end
 
   alt mapping error
