@@ -311,8 +311,6 @@ static void apply_key_value(
       safe_copy(config->romm_username, sizeof(config->romm_username), value);
     } else if (string_ieq(key, "password")) {
       safe_copy(config->romm_password, sizeof(config->romm_password), value);
-    } else if (string_ieq(key, "token") || string_ieq(key, "access_token")) {
-      safe_copy(config->romm_token, sizeof(config->romm_token), value);
     } else if (string_ieq(key, "platform") || string_ieq(key, "platform_filter") || string_ieq(key, "roms_platform")) {
       safe_copy(config->romm_platform_filter, sizeof(config->romm_platform_filter), value);
     } else if (string_ieq(key, "emulator") || string_ieq(key, "save_emulator")) {
@@ -347,6 +345,9 @@ static void apply_key_value(
       safe_copy(config->sync_backup_directory, sizeof(config->sync_backup_directory), value);
     } else if (string_ieq(key, "dry_run")) {
       config->sync_dry_run = parse_bool_value(value, config->sync_dry_run);
+    } else if (string_ieq(key, "auto_apply_conflicts") || string_ieq(key, "auto_resolve_conflicts")) {
+      config->sync_auto_apply_conflicts =
+          parse_bool_value(value, config->sync_auto_apply_conflicts);
     } else if (string_ieq(key, "auto_sync_on_startup") || string_ieq(key, "auto_sync")) {
       config->sync_auto_on_startup = parse_bool_value(value, config->sync_auto_on_startup);
     }
@@ -390,6 +391,7 @@ void app_config_init_defaults(AppConfig *config) {
   safe_copy(config->sync_state_store_path, sizeof(config->sync_state_store_path), APP_CONFIG_DEFAULT_STATE_STORE_PATH);
   safe_copy(config->sync_backup_directory, sizeof(config->sync_backup_directory), APP_CONFIG_DEFAULT_BACKUP_DIRECTORY);
   config->sync_dry_run = 1;
+  config->sync_auto_apply_conflicts = 0;
   config->sync_auto_on_startup = 0;
 
   config->log_level = APP_CONFIG_LOG_LEVEL_DEBUG;
@@ -507,9 +509,6 @@ int app_config_save(const char *path, const AppConfig *config) {
   if ((status == APP_CONFIG_OK) && (fprintf(file, "url = %s\n", config->romm_url) < 0)) {
     status = APP_CONFIG_ERR_WRITE;
   }
-  if ((status == APP_CONFIG_OK) && (fprintf(file, "token = %s\n", config->romm_token) < 0)) {
-    status = APP_CONFIG_ERR_WRITE;
-  }
   if ((status == APP_CONFIG_OK) && (fprintf(file, "username = %s\n", config->romm_username) < 0)) {
     status = APP_CONFIG_ERR_WRITE;
   }
@@ -560,6 +559,13 @@ int app_config_save(const char *path, const AppConfig *config) {
   if ((status == APP_CONFIG_OK) && (fprintf(file, "dry_run = %s\n", config->sync_dry_run ? "true" : "false") < 0)) {
     status = APP_CONFIG_ERR_WRITE;
   }
+  if ((status == APP_CONFIG_OK) &&
+      (fprintf(
+           file,
+           "auto_apply_conflicts = %s\n",
+           config->sync_auto_apply_conflicts ? "true" : "false") < 0)) {
+    status = APP_CONFIG_ERR_WRITE;
+  }
   if ((status == APP_CONFIG_OK) && (fprintf(file, "auto_sync_on_startup = %s\n", config->sync_auto_on_startup ? "true" : "false") < 0)) {
     status = APP_CONFIG_ERR_WRITE;
   }
@@ -596,15 +602,11 @@ int app_config_has_server_url(const AppConfig *config) {
 }
 
 /*
- * Returns non-zero when credentials are configured.
+ * Returns non-zero when username/password authentication is configured.
  */
 int app_config_has_auth(const AppConfig *config) {
   if (config == NULL) {
     return 0;
-  }
-
-  if (has_text(config->romm_token)) {
-    return 1;
   }
 
   return has_text(config->romm_username) && has_text(config->romm_password);

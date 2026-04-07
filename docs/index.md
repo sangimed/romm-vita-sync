@@ -82,7 +82,7 @@ This section summarizes the practical setup for both end users and developers.
 - VitaShell (or equivalent method to install VPK files)
 - Adrenaline installed (for PS1 save support)
 - Network access from Vita to your RomM server
-- Valid RomM credentials (`token` or `username` + `password`)
+- Valid RomM username/password credentials
 
 ### Developer Build Prerequisites (Recommended: Docker)
 
@@ -142,31 +142,34 @@ Commands:
 
 1. Launch the app on Vita
 2. The app automatically creates `ux0:data/romm-vita-sync/`
-3. Select the connection fields and enter RomM `url`, `username`, and `password`
-4. Confirm each field saves immediately after closing the system keyboard
+3. Select the connection fields and enter the RomM `url`, `username`, and `password`
+4. Optionally toggle `Dry-run mode` before the first sync
+5. Confirm each field saves immediately after closing the system keyboard
 
 ### First Sync
 
 1. Ensure Vita can reach the RomM URL
 2. In the game list, choose a detected PS1 game
 3. Return to `Synchronize Selected Game` and press `X`
-4. Follow progress in the sync modal (manual runs) or in the persistent `Sync Activity` panel (automatic startup runs)
+4. Follow progress in the sync modal for manual runs; automatic startup sync updates the header state and `Synchronize` panel status without opening a modal
 
 Notes:
 
-- Credentials are currently stored in plain text (no encryption) in `settings.ini`.
-- Default `dry_run = true`; set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
+- The RomM URL, username, and password are currently stored in plain text (no encryption) in `settings.ini`.
+- Default `dry_run = true`; you can disable it directly from the home screen or set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
+- Default `auto_apply_conflicts = false`; you can enable it from the home screen or set `[Sync].auto_apply_conflicts = true` in `settings.ini` to apply recommended conflict actions automatically.
+- When `auto_apply_conflicts = false`, manual conflict review shows which Vita button currently confirms the action (`X` or `O`, depending on the system enter-button setting). Declining the prompt skips that save, except for same-timestamp conflicts where the app offers upload first and then a download fallback.
 
 ## Configuration (`settings.ini`)
 
-Credentials and sync runtime options are read from:
+Connection and sync runtime options are read from:
 
 `ux0:data/romm-vita-sync/settings.ini`
 
 Format is INI-style (conventional in C/C++ desktop and embedded projects).
 
 The app now creates `ux0:data/romm-vita-sync/` automatically on startup.
-You can configure credentials directly in the in-app UI; manual file creation is not required.
+You can configure the URL, username, password, dry-run mode, and conflict auto-apply mode directly in the in-app UI; manual file creation is not required.
 
 Reference template (optional, for manual editing/debug):
 
@@ -174,37 +177,42 @@ Reference template (optional, for manual editing/debug):
 
 Supported sections:
 
-- `[RomM]`: `url`, `token`, `username`, `password`, `platform`, `emulator`, `verify_tls`, `timeout_seconds`
+- `[RomM]`: `url`, `username`, `password`, `platform`, `emulator`, `verify_tls`, `timeout_seconds`
 - `[Device]`: `device_id`, `device_name`, `device_platform`, `client`, `client_version`
-- `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`, `auto_sync_on_startup`
+- `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`, `auto_apply_conflicts`, `auto_sync_on_startup`
 - `[Log]`: `level` (`error|warn|info|debug`), `file_enabled` (`true|false`), `scan_verbose` (`true|false`)
 
 Security notice:
 
-- RomM credentials are currently stored locally in `settings.ini` **without encryption** (plain text).
+- The RomM URL, username, and password are currently stored locally in `settings.ini` **without encryption** (plain text).
 - This is intentional for the current milestone and will be hardened in a later iteration.
 
-Credential rule:
+Authentication rule:
 
-- either `token`, or `username` + `password`
+- `username` and `password` are required for all authenticated RomM requests
 - if `[Device].device_id` is empty, startup calls the `RommClient` registration flow and persists the returned `device_id` into `settings.ini`
 - recommended logging for troubleshooting: `level=debug` and keep `scan_verbose=false` first; enable `scan_verbose=true` only when debugging scanner issues
-- file logging path is fixed to `ux0:data/romm-vita-sync/romm-vita-sync.log`
-- file logging rotation is fixed to 3 files max (`.log`, `.log.1`, `.log.2`), 10MB each (max 30MB total)
+- file logging remains available only through `settings.ini`; the home screen no longer exposes a dedicated file logging row
+- when enabled manually, file logging path is fixed to `ux0:data/romm-vita-sync/romm-vita-sync.log` with 3 rotated files max (`.log`, `.log.1`, `.log.2`), 10MB each
 
 Current in-app UI behavior:
 
 - The home screen exposes dedicated fields for the RomM `url`, `username`, and `password`.
-- The home screen includes a `File logging (10MB x3)` toggle with immediate save.
+- The home screen includes a `Dry-run mode` toggle with immediate save.
+- The home screen includes an `Auto-apply conflicts` toggle with immediate save.
 - Editing those fields opens the official PS Vita system keyboard (`SceImeDialog`).
 - Confirming keyboard input persists values immediately to `ux0:data/romm-vita-sync/settings.ini`.
-- The main screen keeps a visible primary `Synchronize Selected Game` action and a secondary `Rescan Local Saves` action.
+- The main screen keeps a visible primary `Synchronize Selected Game` action plus secondary `Synchronize All Saves` and `Rescan Local Saves` actions.
 - The current sync target is selected from the detected PS1 game list and remains highlighted even when focus moves back to the sync button.
-- Manual sync runs now open a blocking modal with a title, real progress bar, and live scrolling logs.
+- The main screen uses three larger panels (`Connection`, `Synchronize`, `Detected PS1 Games`) instead of a separate sync-activity side panel.
+- Connection values wrap inside their rows, and long single-line labels such as game-list entries and footer status text ellipsize to stay inside their bounds.
+- Manual sync runs now open a blocking modal with a wider layout, wrapped text, a real progress bar, and live scrolling logs.
 - While a manual sync is running, the modal cannot be closed; once complete, it shows success/failure and can be closed manually.
-- A persistent `Sync Activity` panel in the main layout shows progress and tail logs for automatic startup sync and last run status.
-- Press `SQUARE` on the main screen to expand/collapse the persistent sync log dropdown.
-- The current UI uses a sober single-screen Vita layout with compact panels, controller navigation, and sharper text placement.
+- Manual sync logs support held `UP/DOWN` scrolling after the viewport leaves auto-follow mode, and they can also be dragged with the front touchscreen.
+- When `Auto-apply conflicts` is enabled, recommended conflict actions execute without opening a confirmation dialog, including during startup auto-sync.
+- When `Auto-apply conflicts` is disabled, manual conflict dialogs show the active Vita confirm/decline button mapping and state whether declining skips the save or opens the alternate action prompt.
+- Automatic startup sync keeps using the same sync pipeline, but its live state is now reflected through the header status and `Synchronize` panel messaging on the home screen.
+- The current UI uses a sober single-screen Vita layout with wider panels, clearer spacing, controller navigation, and sharper text placement.
 
 The sync engine now treats server `409 Conflict` responses as synchronization conflicts (remote newer) rather than generic transfer errors, aligned with `romm-retroarch-sync` behavior.
 
@@ -242,11 +250,13 @@ Host toolchain alternative:
 2. Confirm the app creates `ux0:data/romm-vita-sync/`.
 3. Select each connection field and enter the RomM `url`, `username`, and `password`.
 4. Confirm that each field saves immediately after closing the system keyboard.
+5. Toggle `Dry-run mode` directly from the home screen if you want to execute real transfers immediately.
+6. Toggle `Auto-apply conflicts` if you want recommended conflict actions to run without confirmation prompts.
 
 ### 3. Network And Auth Preconditions
 
 1. Ensure Vita can reach the RomM URL on the same network.
-2. Use either `token`, or `username` + `password` (UI currently targets username/password flow).
+2. Use valid RomM username/password credentials.
 3. For self-signed HTTPS certificates, use `verify_tls = false` only for local testing.
 
 ### 4. Sync Validation
@@ -254,18 +264,18 @@ Host toolchain alternative:
 1. Move through the detected PS1 game list to choose the current sync target.
 2. Return to `Synchronize Selected Game` and press `X`.
 3. Confirm manual sync shows a blocking progress modal with live logs and completion state.
-4. Confirm automatic startup sync (when enabled) updates the persistent `Sync Activity` panel without opening a modal.
+4. Confirm automatic startup sync (when enabled) updates the header state and `Synchronize` panel without opening a modal.
 5. On first successful authenticated sync, confirm `device_id` is persisted in `settings.ini`.
 
 ### 5. Persistence Validation
 
 1. Restart the app.
-2. Confirm URL/username/password are still present.
+2. Confirm URL/username/password are still present and both `Dry-run mode` and `Auto-apply conflicts` keep their saved values.
 3. Confirm `device_id` remains stable across launches.
 
 ### 6. Negative Path Validation
 
-1. Wrong credentials: expect `authentication failed`.
+1. Invalid username/password: expect `authentication failed`.
 2. Unreachable URL/network issue: expect `network error`.
 3. HTTPS with invalid cert and `verify_tls = true`: expect request failure.
 
@@ -274,6 +284,12 @@ Host toolchain alternative:
 1. Default is `dry_run = true` for safety-first runs.
 2. Set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
 3. Upload flow sends `.SRM` through `POST /api/saves`; download flow pulls `GET /api/saves/{id}/content` then rebuilds/signs `.VMP`.
+
+### 8. `auto_apply_conflicts` Validation
+
+1. Default is `auto_apply_conflicts = false` so conflict actions require explicit confirmation during manual sync.
+2. Set `[Sync].auto_apply_conflicts = true` in `settings.ini` or enable the home-screen toggle to apply recommended conflict actions automatically.
+3. Confirm startup auto-sync no longer defers `local_newer` and `remote_newer` conflicts when this setting is enabled.
 
 ## Why This Project Exists
 

@@ -16,7 +16,6 @@
 #define APP_CONFIG_MAX_URL_LEN 256
 #define APP_CONFIG_MAX_USERNAME_LEN 96
 #define APP_CONFIG_MAX_PASSWORD_LEN 160
-#define APP_CONFIG_MAX_TOKEN_LEN 256
 #define APP_CONFIG_MAX_PLATFORM_FILTER_LEN 32
 #define APP_CONFIG_MAX_EMULATOR_LEN 64
 #define APP_CONFIG_MAX_DEVICE_NAME_LEN 64
@@ -37,7 +36,6 @@ typedef struct AppConfig {
   char romm_url[APP_CONFIG_MAX_URL_LEN];
   char romm_username[APP_CONFIG_MAX_USERNAME_LEN];
   char romm_password[APP_CONFIG_MAX_PASSWORD_LEN];
-  char romm_token[APP_CONFIG_MAX_TOKEN_LEN];
   char romm_platform_filter[APP_CONFIG_MAX_PLATFORM_FILTER_LEN];
   char romm_save_emulator[APP_CONFIG_MAX_EMULATOR_LEN];
   int romm_verify_tls;
@@ -52,6 +50,7 @@ typedef struct AppConfig {
   char sync_state_store_path[ROMM_MAX_PATH_LEN];
   char sync_backup_directory[ROMM_MAX_PATH_LEN];
   int sync_dry_run;
+  int sync_auto_apply_conflicts;
   int sync_auto_on_startup;
 
   int log_level;
@@ -86,7 +85,7 @@ int app_config_set_device_id(AppConfig *config, const char *device_id);
 int app_config_has_server_url(const AppConfig *config);
 
 /*
- * Returns non-zero when credentials are configured (token or username+password).
+ * Returns non-zero when username/password authentication is configured.
  */
 int app_config_has_auth(const AppConfig *config);
 

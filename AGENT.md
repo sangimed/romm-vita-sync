@@ -12,6 +12,22 @@ Any change that makes documentation inaccurate or incomplete MUST include a docu
 
 Outdated documentation is considered a bug.
 
+## English-Only Policy
+
+Everything committed to this repository MUST be written in English.
+
+This rule applies to:
+
+- MkDocs pages and README content
+- code comments and function documentation
+- variable names, struct fields, function names, and other identifiers
+- user-facing UI strings and log messages
+- sample configuration comments and developer notes
+
+Do not introduce mixed-language content.
+
+If existing non-English text is touched during a change, translate it to English in the same update.
+
 ## Current State vs Future Work
 
 Current-state documentation must describe implemented behavior only.
