@@ -2,11 +2,35 @@
 
 Documentation is part of the implementation and must remain consistent with the codebase at all times.
 
+The codebase is the source of truth for current behavior.
+
+Documentation that describes the present state of the project must reflect what is actually implemented in code, not what is merely intended, proposed, or assumed.
+
 Both function-level comments and MkDocs project documentation must be updated whenever behavior changes.
 
 Any change that makes documentation inaccurate or incomplete MUST include a documentation update in the same commit.
 
 Outdated documentation is considered a bug.
+
+## Current State vs Future Work
+
+Current-state documentation must describe implemented behavior only.
+
+Use present tense only for behavior, models, architecture, workflows, and constraints that already exist in the codebase.
+
+If a concept is not implemented yet, it must be placed in a clearly labeled section such as:
+
+- `Roadmap`
+- `Planned`
+- `Future Work`
+- `Design Notes`
+- `Brainstorming`
+
+Future-facing sections must make the status explicit. They must not read as if the feature, model, or architecture already exists.
+
+Do not document hypothetical structs, modules, adapters, pipelines, or storage layouts in current-state sections.
+
+If a future idea is important to keep, preserve it in a separate section instead of mixing it into implementation documentation.
 
 ---
 
@@ -43,6 +67,8 @@ If a function changes behavior, its comment must be updated immediately.
 
 MkDocs documentation is the source of truth for project concepts and architecture.
 
+Within that documentation, implemented concepts must remain clearly separated from roadmap or brainstorming material.
+
 Any change that affects documented behavior MUST update the corresponding MkDocs pages in the same commit.
 
 README scope policy:
@@ -71,6 +97,13 @@ This includes changes to:
 If documentation exists for a concept, it must never become stale.
 
 When in doubt: update MkDocs.
+
+When docs and code diverge, either:
+
+1. update the documentation to match the current code, or
+2. implement the missing behavior before documenting it as current
+
+Never leave speculative design written as present-day implementation.
 
 ---
 
