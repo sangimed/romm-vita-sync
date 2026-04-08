@@ -29,6 +29,12 @@ Automatic trigger integration from system plugin events remains planned for a la
 
 This project is in early development. Back up your save data before installation or any manipulation.
 
+Documentation scope:
+
+- unless a section is explicitly labeled `Planned`, `Roadmap`, `Future Work`, or `Design Notes`, it describes the current codebase
+- ideas and possible future refactors are kept separate from implemented behavior on purpose
+- when documentation and code disagree, the code is the reference for current behavior until both are brought back in sync
+
 Initial milestone includes:
 
 - Detect PS1 save folders under `ux0:/pspemu/PSP/SAVEDATA`
@@ -48,7 +54,7 @@ Current integration status:
 - real HTTP device registration is implemented (`POST /api/devices`)
 - upload/download conversion logic is integrated in `SyncEngine`
 - real HTTP save transfer callbacks are wired (`list/upload/download`)
-- local Vita saves are now mapped to RomM `rom_id` using `/api/roms` metadata heuristics
+- local Vita saves are now mapped to RomM `rom_id` by trying `/api/platforms` first, then querying `/api/roms` with targeted `search_term` requests using `GAME_ID` first and `title` as fallback
 
 
 ## Execution Model (Version 1)
@@ -76,7 +82,7 @@ This section summarizes the practical setup for both end users and developers.
 - VitaShell (or equivalent method to install VPK files)
 - Adrenaline installed (for PS1 save support)
 - Network access from Vita to your RomM server
-- Valid RomM credentials (`token` or `username` + `password`)
+- Valid RomM username/password credentials
 
 ### Developer Build Prerequisites (Recommended: Docker)
 
@@ -136,31 +142,34 @@ Commands:
 
 1. Launch the app on Vita
 2. The app automatically creates `ux0:data/romm-vita-sync/`
-3. Select the connection fields and enter RomM `url`, `username`, and `password`
-4. Confirm each field saves immediately after closing the system keyboard
+3. Select the connection fields and enter the RomM `url`, `username`, and `password`
+4. Optionally toggle `Dry-run mode` before the first sync
+5. Confirm each field saves immediately after closing the system keyboard
 
 ### First Sync
 
 1. Ensure Vita can reach the RomM URL
 2. In the game list, choose a detected PS1 game
 3. Return to `Synchronize Selected Game` and press `X`
-4. Follow progress in the sync modal (manual runs) or in the persistent `Sync Activity` panel (automatic startup runs)
+4. Follow progress in the sync modal for manual runs; automatic startup sync updates the header state and `Synchronize` panel status without opening a modal
 
 Notes:
 
-- Credentials are currently stored in plain text (no encryption) in `settings.ini`.
-- Default `dry_run = true`; set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
+- The RomM URL, username, and password are currently stored in plain text (no encryption) in `settings.ini`.
+- Default `dry_run = true`; you can disable it directly from the home screen or set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
+- Default `auto_apply_conflicts = false`; you can enable it from the home screen or set `[Sync].auto_apply_conflicts = true` in `settings.ini` to apply recommended conflict actions automatically.
+- When `auto_apply_conflicts = false`, manual conflict review shows which Vita button currently confirms the action (`X` or `O`, depending on the system enter-button setting). Declining the prompt skips that save, except for same-timestamp conflicts where the app offers upload first and then a download fallback.
 
 ## Configuration (`settings.ini`)
 
-Credentials and sync runtime options are read from:
+Connection and sync runtime options are read from:
 
 `ux0:data/romm-vita-sync/settings.ini`
 
 Format is INI-style (conventional in C/C++ desktop and embedded projects).
 
 The app now creates `ux0:data/romm-vita-sync/` automatically on startup.
-You can configure credentials directly in the in-app UI; manual file creation is not required.
+You can configure the URL, username, password, dry-run mode, and conflict auto-apply mode directly in the in-app UI; manual file creation is not required.
 
 Reference template (optional, for manual editing/debug):
 
@@ -168,37 +177,42 @@ Reference template (optional, for manual editing/debug):
 
 Supported sections:
 
-- `[RomM]`: `url`, `token`, `username`, `password`, `verify_tls`, `timeout_seconds`
+- `[RomM]`: `url`, `username`, `password`, `platform`, `emulator`, `verify_tls`, `timeout_seconds`
 - `[Device]`: `device_id`, `device_name`, `device_platform`, `client`, `client_version`
-- `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`, `auto_sync_on_startup`
+- `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`, `auto_apply_conflicts`, `auto_sync_on_startup`
 - `[Log]`: `level` (`error|warn|info|debug`), `file_enabled` (`true|false`), `scan_verbose` (`true|false`)
 
 Security notice:
 
-- RomM credentials are currently stored locally in `settings.ini` **without encryption** (plain text).
+- The RomM URL, username, and password are currently stored locally in `settings.ini` **without encryption** (plain text).
 - This is intentional for the current milestone and will be hardened in a later iteration.
 
-Credential rule:
+Authentication rule:
 
-- either `token`, or `username` + `password`
+- `username` and `password` are required for all authenticated RomM requests
 - if `[Device].device_id` is empty, startup calls the `RommClient` registration flow and persists the returned `device_id` into `settings.ini`
 - recommended logging for troubleshooting: `level=debug` and keep `scan_verbose=false` first; enable `scan_verbose=true` only when debugging scanner issues
-- file logging path is fixed to `ux0:data/romm-vita-sync/romm-vita-sync.log`
-- file logging rotation is fixed to 3 files max (`.log`, `.log.1`, `.log.2`), 10MB each (max 30MB total)
+- file logging remains available only through `settings.ini`; the home screen no longer exposes a dedicated file logging row
+- when enabled manually, file logging path is fixed to `ux0:data/romm-vita-sync/romm-vita-sync.log` with 3 rotated files max (`.log`, `.log.1`, `.log.2`), 10MB each
 
 Current in-app UI behavior:
 
 - The home screen exposes dedicated fields for the RomM `url`, `username`, and `password`.
-- The home screen includes a `File logging (10MB x3)` toggle with immediate save.
+- The home screen includes a `Dry-run mode` toggle with immediate save.
+- The home screen includes an `Auto-apply conflicts` toggle with immediate save.
 - Editing those fields opens the official PS Vita system keyboard (`SceImeDialog`).
 - Confirming keyboard input persists values immediately to `ux0:data/romm-vita-sync/settings.ini`.
-- The main screen keeps a visible primary `Synchronize Selected Game` action and a secondary `Rescan Local Saves` action.
+- The main screen keeps a visible primary `Synchronize Selected Game` action plus secondary `Synchronize All Saves` and `Rescan Local Saves` actions.
 - The current sync target is selected from the detected PS1 game list and remains highlighted even when focus moves back to the sync button.
-- Manual sync runs now open a blocking modal with a title, real progress bar, and live scrolling logs.
+- The main screen uses three larger panels (`Connection`, `Synchronize`, `Detected PS1 Games`) instead of a separate sync-activity side panel.
+- Connection values wrap inside their rows, and long single-line labels such as game-list entries and footer status text ellipsize to stay inside their bounds.
+- Manual sync runs now open a blocking modal with a wider layout, wrapped text, a real progress bar, and live scrolling logs.
 - While a manual sync is running, the modal cannot be closed; once complete, it shows success/failure and can be closed manually.
-- A persistent `Sync Activity` panel in the main layout shows progress and tail logs for automatic startup sync and last run status.
-- Press `SQUARE` on the main screen to expand/collapse the persistent sync log dropdown.
-- The current UI uses a sober single-screen Vita layout with compact panels, controller navigation, and sharper text placement.
+- Manual sync logs support held `UP/DOWN` scrolling after the viewport leaves auto-follow mode, and they can also be dragged with the front touchscreen.
+- When `Auto-apply conflicts` is enabled, recommended conflict actions execute without opening a confirmation dialog, including during startup auto-sync.
+- When `Auto-apply conflicts` is disabled, manual conflict dialogs show the active Vita confirm/decline button mapping and state whether declining skips the save or opens the alternate action prompt.
+- Automatic startup sync keeps using the same sync pipeline, but its live state is now reflected through the header status and `Synchronize` panel messaging on the home screen.
+- The current UI uses a sober single-screen Vita layout with wider panels, clearer spacing, controller navigation, and sharper text placement.
 
 The sync engine now treats server `409 Conflict` responses as synchronization conflicts (remote newer) rather than generic transfer errors, aligned with `romm-retroarch-sync` behavior.
 
@@ -236,11 +250,13 @@ Host toolchain alternative:
 2. Confirm the app creates `ux0:data/romm-vita-sync/`.
 3. Select each connection field and enter the RomM `url`, `username`, and `password`.
 4. Confirm that each field saves immediately after closing the system keyboard.
+5. Toggle `Dry-run mode` directly from the home screen if you want to execute real transfers immediately.
+6. Toggle `Auto-apply conflicts` if you want recommended conflict actions to run without confirmation prompts.
 
 ### 3. Network And Auth Preconditions
 
 1. Ensure Vita can reach the RomM URL on the same network.
-2. Use either `token`, or `username` + `password` (UI currently targets username/password flow).
+2. Use valid RomM username/password credentials.
 3. For self-signed HTTPS certificates, use `verify_tls = false` only for local testing.
 
 ### 4. Sync Validation
@@ -248,18 +264,18 @@ Host toolchain alternative:
 1. Move through the detected PS1 game list to choose the current sync target.
 2. Return to `Synchronize Selected Game` and press `X`.
 3. Confirm manual sync shows a blocking progress modal with live logs and completion state.
-4. Confirm automatic startup sync (when enabled) updates the persistent `Sync Activity` panel without opening a modal.
+4. Confirm automatic startup sync (when enabled) updates the header state and `Synchronize` panel without opening a modal.
 5. On first successful authenticated sync, confirm `device_id` is persisted in `settings.ini`.
 
 ### 5. Persistence Validation
 
 1. Restart the app.
-2. Confirm URL/username/password are still present.
+2. Confirm URL/username/password are still present and both `Dry-run mode` and `Auto-apply conflicts` keep their saved values.
 3. Confirm `device_id` remains stable across launches.
 
 ### 6. Negative Path Validation
 
-1. Wrong credentials: expect `authentication failed`.
+1. Invalid username/password: expect `authentication failed`.
 2. Unreachable URL/network issue: expect `network error`.
 3. HTTPS with invalid cert and `verify_tls = true`: expect request failure.
 
@@ -268,6 +284,12 @@ Host toolchain alternative:
 1. Default is `dry_run = true` for safety-first runs.
 2. Set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
 3. Upload flow sends `.SRM` through `POST /api/saves`; download flow pulls `GET /api/saves/{id}/content` then rebuilds/signs `.VMP`.
+
+### 8. `auto_apply_conflicts` Validation
+
+1. Default is `auto_apply_conflicts = false` so conflict actions require explicit confirmation during manual sync.
+2. Set `[Sync].auto_apply_conflicts = true` in `settings.ini` or enable the home-screen toggle to apply recommended conflict actions automatically.
+3. Confirm startup auto-sync no longer defers `local_newer` and `remote_newer` conflicts when this setting is enabled.
 
 ## Why This Project Exists
 
@@ -350,43 +372,86 @@ Conversion strategy:
 | Vita → RomM | Remove first 128 bytes |
 | RomM → Vita | Prepend valid VMP header |
 
-## Save Model
+## Save Models (Current Implementation)
 
-### Local Save Representation
+The current PS1 implementation does not use a single `LocalPs1Save` struct. The codebase uses three concrete representations instead, depending on the stage of the pipeline.
+
+### Scanner Inventory (`SaveItem`)
+
+Defined in `src/save_item.h`.
 
 ```
-LocalPs1Save
+SaveItem
+├─ game_id
+├─ game_title
+├─ path
+├─ size_bytes
+└─ timestamp
+```
+
+Notes:
+
+- one `SaveItem` represents one detected `.VMP` file, not one aggregated save directory
+- `game_id` is extracted from the parent directory name
+- `game_title` is read from `PARAM.SFO` when available
+- `path` points directly to the detected `.VMP` file
+- `timestamp` is stored as a formatted local string (`YYYY-MM-DD HH:MM:SS`)
+
+### Sync Inventory (`SyncSaveDescriptor`)
+
+Defined in `src/sync_types.h`.
+
+```
+SyncSaveDescriptor
+├─ rom_id
+├─ remote_id
 ├─ game_id
 ├─ title
-├─ save_dir
-├─ icon_path
-├─ config_path
-├─ vmc0_path
-├─ vmc1_path
-└─ updated_at
-```
-
-### Remote Save Representation
-
-```
-RemotePs1Save
-├─ platform = psx
-├─ emulator = pcsx_rearmed
 ├─ filename
+├─ path
 ├─ remote_path
+├─ size_bytes
+├─ timestamp_unix
 ├─ hash
-├─ updated_at
-└─ size
+├─ origin_device
+├─ device_is_current
+├─ device_is_untracked
+└─ slot
 ```
 
-### Canonical Internal Model
+Notes:
+
+- local scan results are converted from `SaveItem` into `SyncSaveDescriptor` by `src/scan_to_sync_adapter.c`
+- remote saves fetched from RomM are also parsed into `SyncSaveDescriptor`
+- this shared descriptor is the canonical synchronization model currently used by `SyncEngine`
+- `slot` is inferred from `SCEVMC0.VMP` or `SCEVMC1.VMP`
+
+### UI Game Aggregation (`UiGameEntry`)
+
+Defined in `src/main.c`.
 
 ```
-CanonicalPs1MemoryCard
-├─ raw_memory_card_data (131072 bytes)
-├─ metadata
-└─ origin
+UiGameEntry
+├─ key
+├─ game_id
+├─ title
+└─ save_count
 ```
+
+Notes:
+
+- the UI groups multiple `SyncSaveDescriptor` items by game to render the selectable PS1 game list
+- `save_count` is the number of detected memory-card files associated with that game
+
+### Design Notes (Not Implemented Yet)
+
+The current codebase does not yet expose:
+
+- a dedicated directory-level `LocalPs1Save` model with `save_dir`, `icon_path`, `config_path`, `vmc0_path`, and `vmc1_path`
+- a dedicated `RemotePs1Save` struct separate from `SyncSaveDescriptor`
+- a dedicated `CanonicalPs1MemoryCard` struct holding parsed raw card data plus metadata
+
+Those ideas may still be useful later if the project evolves toward a richer per-directory or per-card abstraction, but they are not part of the current implementation.
 
 ## Conversion Strategy
 
@@ -486,31 +551,27 @@ Rules:
 - require explicit confirmation before sync operations
 - preserve original `.VMP` files before rebuilding
 
-## Architecture (Planned)
+## Architecture (Current Codebase)
 
-Core modules:
+Current implementation modules:
 
-- RomMClient
-- SaveScanner
-- SyncEngine
-- BackupManager
-- ConflictResolver
-- UILayer
+- `src/save_scanner.c`: recursively scans candidate roots, detects `.VMP` files, and reads `PARAM.SFO` metadata
+- `src/save_item.h`: defines the scanner inventory item returned by the local scan
+- `src/scan_to_sync_adapter.c`: converts scanner output into synchronization descriptors
+- `src/sync_types.h` and `src/sync_types.c`: define shared sync data structures and helpers such as slot and timestamp parsing
+- `src/game_matcher.c`: resolves local saves to RomM `rom_id` candidates using serials, titles, and filename patterns
+- `src/romm_http_client.c`: handles device registration, platform lookup, RomM ROM lookup, remote save listing, uploads, and downloads
+- `src/conflict_resolver.c`: compares local and remote saves and classifies conflicts
+- `src/backup_manager.c`: creates local backups before overwrite operations
+- `src/sync_state_store.c`: persists sync state used to track prior uploads and origins
+- `src/sync_engine.c`: plans and executes upload/download actions
+- `src/main.c`: owns UI state, scan orchestration, sync triggering, and on-screen feedback
 
-Adapters:
+Implementation notes:
 
-- PS1SaveFolderScanner
-- PS1VMPAdapter
-- PS1SRMAdapter
-- PSPAdapter (planned)
-- VitaSaveAdapter (planned)
-- RetroArchAdapter (planned)
-
-Converters:
-
-- VmpToSrmConverter
-- SrmToVmpConverter
-- PsfParser
+- PS1 support is the only implemented save adapter today
+- VMP and SRM conversion is implemented through `src/vmp_srm_converter.c` and used by the sync flow
+- multi-platform adapters remain roadmap items and are not part of the current codebase yet
 
 ## Roadmap
 
@@ -594,7 +655,14 @@ Initial goals:
 
 RomM device registration is now wired to the real HTTP endpoint (`POST /api/devices`).
 Save listing/upload/download are now wired to real HTTP callbacks in `main.c` (`/api/saves` endpoints).
-Local Vita items are resolved to server `rom_id` via `/api/roms` metadata before sync decisions.
+Local Vita items are resolved to server `rom_id` before sync decisions by:
+
+- resolving the configured platform through `/api/platforms` when available, otherwise falling back to the legacy RomM `platform=` query
+- trying a targeted RomM lookup first through `/api/roms` with `search_term`, using `platform_ids=...` when a numeric platform id is available and `platform=...` otherwise
+- preferring local `GAME_ID` as the primary search term, then retrying with the local title when needed
+- matching candidates by serial metadata first, then title (`fs_name_no_tags`, `name`, `fs_name_no_ext`), then filename patterns
+- surfacing unresolved mappings to the UI when no targeted candidate set yields a unique `rom_id`
+
 Conversion is now wired in the app sync flow:
 
 - upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback
@@ -603,6 +671,17 @@ Conversion is now wired in the app sync flow:
 ## End-to-End Sync Sequence Diagram
 
 ![RomM Vita Sync end-to-end sequence](assets/diagrams/romm-vita-sync-end-to-end-sync-flow.png)
+
+Current Rom ID mapping flow:
+
+1. The app tries to resolve the configured RomM platform through `/api/platforms`.
+2. If `/api/platforms` is unavailable or returns an unsupported response, Rom ID lookup falls back to the legacy `/api/roms?...&platform=...` query path.
+3. For each local save, the app first narrows candidates with a targeted `/api/roms?...&search_term=...` request using the local `GAME_ID` when present.
+4. If the targeted `GAME_ID` search does not yield a unique match, the app retries the targeted lookup with the local title when available.
+5. Each targeted candidate set is matched by serial metadata first.
+6. If serial matching is not unique, the matcher tries title-based candidates in this order: `fs_name_no_tags`, `name`, `fs_name_no_ext`.
+7. If title matching is still not unique, the matcher falls back to filename-pattern scoring inside the targeted candidate set.
+8. If no targeted candidate set yields a unique match, the UI reports the save as unresolved and aborts sync before transfer decisions.
 
 ## Contributing
 

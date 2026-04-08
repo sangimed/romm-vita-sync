@@ -4,12 +4,14 @@
 #include <psp2/common_dialog.h>
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/sysmodule.h>
+#include <psp2/touch.h>
 
 #include <ctype.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include <vita2d.h>
 
@@ -18,6 +20,7 @@
 #include "app_config.h"
 #include "app_log.h"
 #include "backup_manager.h"
+#include "conflict_resolver.h"
 #include "ps1_paths.h"
 #include "romm_client.h"
 #include "romm_http_client.h"
@@ -29,24 +32,29 @@
 #define UI_SELECT_SERVER_URL 0
 #define UI_SELECT_USERNAME 1
 #define UI_SELECT_PASSWORD 2
-#define UI_SELECT_FILE_LOGGING 3
-#define UI_SELECT_SYNC_PRIMARY 4
-#define UI_SELECT_SYNC_ALL 5
-#define UI_SELECT_RESCAN 6
-#define UI_SELECT_GAME_BASE 7
+#define UI_SELECT_DRY_RUN 3
+#define UI_SELECT_AUTO_APPLY_CONFLICTS 4
+#define UI_SELECT_SYNC_PRIMARY 5
+#define UI_SELECT_SYNC_ALL 6
+#define UI_SELECT_RESCAN 7
+#define UI_SELECT_GAME_BASE 8
 
 #define UI_SCREEN_WIDTH 960.0f
 #define UI_SCREEN_HEIGHT 544.0f
 
 #define UI_GAME_LIST_VISIBLE 4
 #define UI_GAME_ROW_HEIGHT 28.0f
-#define UI_LOG_VISIBLE_LINES 3
-#define UI_LOG_EXPANDED_VISIBLE_LINES 7
-#define UI_SYNC_MODAL_VISIBLE_LINES 12
 #define UI_LOG_TOP_PADDING 18.0f
+#define UI_LOG_BOTTOM_PADDING 10.0f
 #define UI_LOG_LINE_HEIGHT 18.0f
+#define UI_LOG_TEXT_SCALE 0.66f
+#define UI_WRAP_BUFFER_LEN 384
+#define UI_WRAP_MAX_LINES_PER_BLOCK 48
 #define UI_STATUS_LINE_LEN 192
 #define UI_EDITOR_BUFFER_LEN 512
+#define UI_SCROLL_REPEAT_DELAY_FRAMES 18
+#define UI_SCROLL_REPEAT_INTERVAL_FRAMES 3
+#define UI_TOUCH_DRAG_DEADZONE 4.0f
 #define APP_RUNTIME_DATA_DIRECTORY "ux0:data/romm-vita-sync"
 #define APP_RUNTIME_LOG_FILE_PATH "ux0:data/romm-vita-sync/romm-vita-sync.log"
 
@@ -74,9 +82,9 @@
 #define UI_COLOR_WARNING RGBA8(255, 194, 119, 255)
 #define UI_COLOR_DANGER RGBA8(255, 140, 140, 255)
 
-#define UI_TEXT_SCALE_BOOST 1.20f
-#define UI_TEXT_SCALE_MIN 1.00f
-#define UI_TEXT_SCALE_MAX 1.52f
+#define UI_TEXT_SCALE_BOOST 1.14f
+#define UI_TEXT_SCALE_MIN 0.82f
+#define UI_TEXT_SCALE_MAX 1.46f
 
 #define UI_NAV_UP 0
 #define UI_NAV_DOWN 1
@@ -104,12 +112,54 @@ typedef struct UiSyncFeedback {
   int total_units;
   int modal_log_scroll;
   int modal_auto_scroll;
-  int persistent_logs_expanded;
+  int modal_scroll_hold_direction;
+  int modal_scroll_hold_frames;
+  int modal_touch_active;
+  int modal_touch_id;
+  float modal_touch_last_y;
+  float modal_touch_scroll_remainder;
   UiSyncTrigger trigger;
   char title[64];
   char message[UI_STATUS_LINE_LEN];
   char context[UI_STATUS_LINE_LEN];
 } UiSyncFeedback;
+
+typedef struct UiMainLayout {
+  float connection_x;
+  float connection_y;
+  float connection_w;
+  float connection_h;
+  float connection_row_x;
+  float connection_row_w;
+  float connection_row_h;
+  float connection_row_gap;
+  float connection_first_row_y;
+
+  float sync_x;
+  float sync_y;
+  float sync_w;
+  float sync_h;
+  float sync_content_x;
+  float sync_content_w;
+  float sync_button_x;
+  float sync_button_w;
+  float sync_button_h;
+  float sync_button_gap;
+  float sync_first_button_y;
+
+  float game_x;
+  float game_y;
+  float game_w;
+  float game_h;
+  float game_row_x;
+  float game_row_w;
+  float game_first_row_y;
+
+  float footer_status_x;
+  float footer_status_w;
+  float footer_hint_right_x;
+  float footer_hint_w;
+} UiMainLayout;
 
 typedef struct UiAppState {
   AppConfig config;
@@ -137,13 +187,34 @@ static UiAppState g_app_state;
 static vita2d_pgf *g_ui_font = NULL;
 static int g_common_dialog_active = 0;
 static int g_dialog_runtime_initialized = 0;
+static SceSystemParamEnterButtonAssign g_dialog_enter_button_assign = SCE_SYSTEM_PARAM_ENTER_BUTTON_CROSS;
 static int g_ime_module_loaded = 0;
+static int g_touch_front_initialized = 0;
+static int g_touch_front_panel_info_ready = 0;
+static SceTouchPanelInfo g_touch_front_panel_info;
+
+static float ui_estimate_text_width(const char *text, float scale);
+static void ui_build_main_layout(UiMainLayout *layout);
 
 /*
  * Returns non-zero when a string is non-null and non-empty.
  */
 static int has_text(const char *value) {
   return (value != NULL) && (value[0] != '\0');
+}
+
+/*
+ * Returns the label of the system button that confirms common dialogs.
+ */
+static const char *ui_dialog_confirm_button_label(void) {
+  return (g_dialog_enter_button_assign == SCE_SYSTEM_PARAM_ENTER_BUTTON_CIRCLE) ? "O" : "X";
+}
+
+/*
+ * Returns the label of the system button that declines common dialogs.
+ */
+static const char *ui_dialog_decline_button_label(void) {
+  return (g_dialog_enter_button_assign == SCE_SYSTEM_PARAM_ENTER_BUTTON_CIRCLE) ? "X" : "O";
 }
 
 /*
@@ -220,7 +291,7 @@ static void ui_sync_feedback_reset(
   feedback->trigger = trigger;
   feedback->total_units = 1;
   feedback->modal_auto_scroll = 1;
-  feedback->persistent_logs_expanded = 0;
+  feedback->modal_touch_id = -1;
   snprintf(feedback->title, sizeof(feedback->title), "%s", has_text(title) ? title : "Synchronization");
   snprintf(feedback->context, sizeof(feedback->context), "%s", has_text(context) ? context : "");
   snprintf(feedback->message, sizeof(feedback->message), "Preparing synchronization...");
@@ -276,6 +347,16 @@ static void ui_sync_log_write(AppLogLevel level, const char *format, ...) {
 }
 
 /*
+ * Polls the controller and returns the currently held buttons.
+ */
+static unsigned int ui_poll_buttons(void) {
+  SceCtrlData pad;
+  memset(&pad, 0, sizeof(pad));
+  sceCtrlPeekBufferPositive(0, &pad, 1);
+  return pad.buttons;
+}
+
+/*
  * Polls controller and returns buttons that transitioned to pressed state.
  */
 static unsigned int ui_poll_pressed(unsigned int *io_previous_buttons) {
@@ -283,12 +364,9 @@ static unsigned int ui_poll_pressed(unsigned int *io_previous_buttons) {
     return 0U;
   }
 
-  SceCtrlData pad;
-  memset(&pad, 0, sizeof(pad));
-  sceCtrlPeekBufferPositive(0, &pad, 1);
-
-  unsigned int pressed = pad.buttons & (~(*io_previous_buttons));
-  *io_previous_buttons = pad.buttons;
+  unsigned int buttons = ui_poll_buttons();
+  unsigned int pressed = buttons & (~(*io_previous_buttons));
+  *io_previous_buttons = buttons;
   return pressed;
 }
 
@@ -325,7 +403,58 @@ static void ui_truncate_text(const char *source, char *out_text, size_t out_size
 }
 
 /*
- * Renders password value as asterisks for screen-safe display.
+ * Truncates one rendered line to a target pixel width using PGF measurements.
+ * UTF-8 continuation bytes are skipped when shrinking so ellipsis stays valid.
+ */
+static void ui_truncate_text_to_width(
+    const char *source,
+    float scale,
+    float max_width,
+    char *out_text,
+    size_t out_size) {
+  if ((out_text == NULL) || (out_size == 0U)) {
+    return;
+  }
+
+  out_text[0] = '\0';
+  if (!has_text(source) || (max_width <= 0.0f)) {
+    return;
+  }
+
+  snprintf(out_text, out_size, "%s", source);
+  if (ui_estimate_text_width(out_text, scale) <= max_width) {
+    return;
+  }
+
+  if (ui_estimate_text_width("...", scale) > max_width) {
+    return;
+  }
+
+  while (has_text(out_text)) {
+    size_t length = strlen(out_text);
+    if (length == 0U) {
+      break;
+    }
+
+    length -= 1U;
+    while ((length > 0U) && (((unsigned char)out_text[length] & 0xC0U) == 0x80U)) {
+      length -= 1U;
+    }
+    out_text[length] = '\0';
+
+    char candidate[UI_EDITOR_BUFFER_LEN];
+    snprintf(candidate, sizeof(candidate), "%s...", out_text);
+    if (ui_estimate_text_width(candidate, scale) <= max_width) {
+      snprintf(out_text, out_size, "%s", candidate);
+      return;
+    }
+  }
+
+  snprintf(out_text, out_size, "...");
+}
+
+/*
+ * Renders secret values as asterisks for screen-safe display.
  */
 static void ui_mask_secret(const char *secret, char *out_masked, size_t out_size) {
   if ((out_masked == NULL) || (out_size == 0U)) {
@@ -365,7 +494,7 @@ static void ui_format_field_display(const char *value, int secret, char *out_tex
     return;
   }
 
-  ui_truncate_text(value, out_text, out_size);
+  snprintf(out_text, out_size, "%s", value);
 }
 
 /*
@@ -494,6 +623,13 @@ static int ui_dialog_runtime_init(void) {
     sceAppUtilShutdown();
     return status;
   }
+  g_dialog_enter_button_assign = dialog_config.enterButtonAssign;
+  app_log_write(
+      APP_LOG_LEVEL_DEBUG,
+      "ui",
+      "common dialog buttons confirm=%s decline=%s",
+      ui_dialog_confirm_button_label(),
+      ui_dialog_decline_button_label());
 
   int ime_was_loaded = (sceSysmoduleIsLoaded(SCE_SYSMODULE_IME) >= 0);
   if (!ime_was_loaded) {
@@ -525,6 +661,45 @@ static void ui_dialog_runtime_term(void) {
 
   sceAppUtilShutdown();
   g_dialog_runtime_initialized = 0;
+}
+
+/*
+ * Enables front touchscreen sampling for optional modal log scrolling.
+ */
+static void ui_touch_init(void) {
+  if (g_touch_front_initialized) {
+    return;
+  }
+
+  int status = sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT, SCE_TOUCH_SAMPLING_STATE_START);
+  if (status < 0) {
+    app_log_write(APP_LOG_LEVEL_WARN, "ui", "front touch sampling unavailable: 0x%08X", (unsigned int)status);
+    return;
+  }
+
+  g_touch_front_initialized = 1;
+  memset(&g_touch_front_panel_info, 0, sizeof(g_touch_front_panel_info));
+  status = sceTouchGetPanelInfo(SCE_TOUCH_PORT_FRONT, &g_touch_front_panel_info);
+  if (status < 0) {
+    app_log_write(APP_LOG_LEVEL_WARN, "ui", "sceTouchGetPanelInfo failed: 0x%08X", (unsigned int)status);
+    return;
+  }
+
+  g_touch_front_panel_info_ready = 1;
+}
+
+/*
+ * Stops front touchscreen sampling before process exit.
+ */
+static void ui_touch_term(void) {
+  if (!g_touch_front_initialized) {
+    return;
+  }
+
+  sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT, SCE_TOUCH_SAMPLING_STATE_STOP);
+  g_touch_front_initialized = 0;
+  g_touch_front_panel_info_ready = 0;
+  memset(&g_touch_front_panel_info, 0, sizeof(g_touch_front_panel_info));
 }
 
 /*
@@ -697,6 +872,45 @@ static int ui_total_selectable_entries(const UiAppState *state) {
 }
 
 /*
+ * Returns non-zero when one selection index points at a sync action button.
+ */
+static int ui_is_sync_button_index(int index) {
+  return (index >= UI_SELECT_SYNC_PRIMARY) && (index <= UI_SELECT_RESCAN);
+}
+
+/*
+ * Applies a few explicit D-pad shortcuts so the main action stays easy to reach.
+ * This keeps navigation more console-like than pure geometric nearest-neighbor moves.
+ */
+static int ui_try_move_selection_shortcut(UiAppState *state, int direction) {
+  if (state == NULL) {
+    return 0;
+  }
+
+  if ((direction == UI_NAV_RIGHT) &&
+      ((state->selected_index == UI_SELECT_SERVER_URL) ||
+       (state->selected_index == UI_SELECT_USERNAME) ||
+       (state->selected_index == UI_SELECT_PASSWORD) ||
+       (state->selected_index == UI_SELECT_DRY_RUN) ||
+       (state->selected_index == UI_SELECT_AUTO_APPLY_CONFLICTS) ||
+       (state->selected_index >= UI_SELECT_GAME_BASE))) {
+    state->selected_index = UI_SELECT_SYNC_PRIMARY;
+    return 1;
+  }
+
+  if ((direction == UI_NAV_LEFT) && ui_is_sync_button_index(state->selected_index)) {
+    if ((state->active_game_index >= 0) && (state->active_game_index < state->game_count)) {
+      state->selected_index = UI_SELECT_GAME_BASE + state->active_game_index;
+    } else {
+      state->selected_index = UI_SELECT_AUTO_APPLY_CONFLICTS;
+    }
+    return 1;
+  }
+
+  return 0;
+}
+
+/*
  * Returns a stable 2D anchor (screen-like coordinates) for one selectable item.
  * Game list items use a virtual y-coordinate so directional navigation still works
  * even when the item is currently outside the visible window.
@@ -706,39 +920,53 @@ static int ui_get_selection_anchor(const UiAppState *state, int index, float *ou
     return -1;
   }
 
+  UiMainLayout layout;
+  ui_build_main_layout(&layout);
+
   if (index == UI_SELECT_SERVER_URL) {
-    *out_x = 48.0f + (398.0f * 0.5f);
-    *out_y = 154.0f + (44.0f * 0.5f);
+    *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
+    *out_y = layout.connection_first_row_y + (layout.connection_row_h * 0.5f);
     return 0;
   }
   if (index == UI_SELECT_USERNAME) {
-    *out_x = 48.0f + (398.0f * 0.5f);
-    *out_y = 208.0f + (44.0f * 0.5f);
+    *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
+    *out_y = layout.connection_first_row_y + layout.connection_row_h +
+             layout.connection_row_gap + (layout.connection_row_h * 0.5f);
     return 0;
   }
   if (index == UI_SELECT_PASSWORD) {
-    *out_x = 48.0f + (398.0f * 0.5f);
-    *out_y = 262.0f + (44.0f * 0.5f);
+    *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
+    *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 2.0f) +
+             (layout.connection_row_h * 0.5f);
     return 0;
   }
-  if (index == UI_SELECT_FILE_LOGGING) {
-    *out_x = 48.0f + (398.0f * 0.5f);
-    *out_y = 316.0f + (28.0f * 0.5f);
+  if (index == UI_SELECT_DRY_RUN) {
+    *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
+    *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 3.0f) +
+             (layout.connection_row_h * 0.5f);
+    return 0;
+  }
+  if (index == UI_SELECT_AUTO_APPLY_CONFLICTS) {
+    *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
+    *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 4.0f) +
+             (layout.connection_row_h * 0.5f);
     return 0;
   }
   if (index == UI_SELECT_SYNC_PRIMARY) {
-    *out_x = 494.0f + (418.0f * 0.5f);
-    *out_y = 252.0f + (28.0f * 0.5f);
+    *out_x = layout.sync_button_x + (layout.sync_button_w * 0.5f);
+    *out_y = layout.sync_first_button_y + (layout.sync_button_h * 0.5f);
     return 0;
   }
   if (index == UI_SELECT_SYNC_ALL) {
-    *out_x = 494.0f + (418.0f * 0.5f);
-    *out_y = 284.0f + (28.0f * 0.5f);
+    *out_x = layout.sync_button_x + (layout.sync_button_w * 0.5f);
+    *out_y = layout.sync_first_button_y + layout.sync_button_h +
+             layout.sync_button_gap + (layout.sync_button_h * 0.5f);
     return 0;
   }
   if (index == UI_SELECT_RESCAN) {
-    *out_x = 494.0f + (418.0f * 0.5f);
-    *out_y = 316.0f + (28.0f * 0.5f);
+    *out_x = layout.sync_button_x + (layout.sync_button_w * 0.5f);
+    *out_y = layout.sync_first_button_y + ((layout.sync_button_h + layout.sync_button_gap) * 2.0f) +
+             (layout.sync_button_h * 0.5f);
     return 0;
   }
 
@@ -748,8 +976,8 @@ static int ui_get_selection_anchor(const UiAppState *state, int index, float *ou
       return -1;
     }
 
-    *out_x = 48.0f + (516.0f * 0.5f);
-    *out_y = 390.0f + (UI_GAME_ROW_HEIGHT * (float)game_index) + (UI_GAME_ROW_HEIGHT * 0.5f);
+    *out_x = layout.game_row_x + (layout.game_row_w * 0.5f);
+    *out_y = layout.game_first_row_y + (UI_GAME_ROW_HEIGHT * (float)game_index) + (UI_GAME_ROW_HEIGHT * 0.5f);
     return 0;
   }
 
@@ -763,6 +991,13 @@ static int ui_get_selection_anchor(const UiAppState *state, int index, float *ou
 static int ui_move_selection_direction(UiAppState *state, int direction) {
   if (state == NULL) {
     return 0;
+  }
+
+  if (ui_try_move_selection_shortcut(state, direction)) {
+    if (state->selected_index >= UI_SELECT_GAME_BASE) {
+      state->active_game_index = state->selected_index - UI_SELECT_GAME_BASE;
+    }
+    return 1;
   }
 
   int total = ui_total_selectable_entries(state);
@@ -1164,10 +1399,40 @@ static void ui_draw_text(float x, float y, unsigned int color, float scale, cons
  * Estimates text width to center short labels in panels.
  */
 static float ui_estimate_text_width(const char *text, float scale) {
-  if (!has_text(text)) {
+  if ((g_ui_font == NULL) || !has_text(text)) {
     return 0.0f;
   }
-  return (float)strlen(text) * 11.0f * ui_resolve_text_scale(scale);
+  return (float)vita2d_pgf_text_width(g_ui_font, ui_resolve_text_scale(scale), text);
+}
+
+/*
+ * Estimates text height for one rendered line at the requested scale.
+ */
+static float ui_estimate_text_height(float scale) {
+  if (g_ui_font == NULL) {
+    return 18.0f * ui_resolve_text_scale(scale);
+  }
+
+  int width = 0;
+  int height = 0;
+  vita2d_pgf_text_dimensions(g_ui_font, ui_resolve_text_scale(scale), "Ag", &width, &height);
+  if (height <= 0) {
+    return 18.0f * ui_resolve_text_scale(scale);
+  }
+
+  return (float)height;
+}
+
+/*
+ * Draws plain text aligned to the provided right edge.
+ */
+static void ui_draw_text_right(float right_x, float y, unsigned int color, float scale, const char *text) {
+  if (!has_text(text)) {
+    return;
+  }
+
+  float width = ui_estimate_text_width(text, scale);
+  ui_draw_text(right_x - width, y, color, scale, "%s", text);
 }
 
 /*
@@ -1180,6 +1445,301 @@ static void ui_draw_text_center(float center_x, float y, unsigned int color, flo
 
   float width = ui_estimate_text_width(text, scale);
   ui_draw_text(center_x - (width * 0.5f), y, color, scale, "%s", text);
+}
+
+/*
+ * Draws one single-line label that always stays inside the requested width.
+ */
+static void ui_draw_truncated_text(
+    float x,
+    float y,
+    float max_width,
+    unsigned int color,
+    float scale,
+    const char *text) {
+  char truncated[UI_EDITOR_BUFFER_LEN];
+  ui_truncate_text_to_width(text, scale, max_width, truncated, sizeof(truncated));
+  if (!has_text(truncated)) {
+    return;
+  }
+
+  ui_draw_text(x, y, color, scale, "%s", truncated);
+}
+
+/*
+ * Draws one right-aligned single-line label that ellipsizes to a max width.
+ */
+static void ui_draw_truncated_text_right(
+    float right_x,
+    float y,
+    float max_width,
+    unsigned int color,
+    float scale,
+    const char *text) {
+  char truncated[UI_EDITOR_BUFFER_LEN];
+  ui_truncate_text_to_width(text, scale, max_width, truncated, sizeof(truncated));
+  if (!has_text(truncated)) {
+    return;
+  }
+
+  ui_draw_text_right(right_x, y, color, scale, truncated);
+}
+
+/*
+ * Stores one wrapped line when the destination buffer still has capacity.
+ * The running line count always reflects the full logical line total.
+ */
+static void ui_wrap_store_line(
+    char out_lines[][UI_WRAP_BUFFER_LEN],
+    int max_lines,
+    int *io_line_count,
+    const char *line) {
+  if (io_line_count == NULL) {
+    return;
+  }
+
+  if ((out_lines != NULL) && (*io_line_count >= 0) && (*io_line_count < max_lines)) {
+    snprintf(out_lines[*io_line_count], UI_WRAP_BUFFER_LEN, "%s", has_text(line) ? line : "");
+  }
+  *io_line_count += 1;
+}
+
+/*
+ * Appends ellipsis to the final stored wrapped line without exceeding max width.
+ */
+static void ui_wrap_append_ellipsis(char *line, float scale, float max_width) {
+  if (line == NULL) {
+    return;
+  }
+
+  if (!has_text(line)) {
+    snprintf(line, UI_WRAP_BUFFER_LEN, "...");
+    return;
+  }
+
+  char candidate[UI_WRAP_BUFFER_LEN];
+  snprintf(candidate, sizeof(candidate), "%s...", line);
+  while (has_text(line) && (ui_estimate_text_width(candidate, scale) > max_width)) {
+    size_t length = strlen(line);
+    if (length == 0U) {
+      break;
+    }
+    line[length - 1U] = '\0';
+    snprintf(candidate, sizeof(candidate), "%s...", line);
+  }
+
+  char final_line[UI_WRAP_BUFFER_LEN];
+  snprintf(final_line, sizeof(final_line), "%s...", line);
+  snprintf(line, UI_WRAP_BUFFER_LEN, "%s", final_line);
+}
+
+/*
+ * Pushes one word into the current wrapped line, splitting long words if needed.
+ */
+static void ui_wrap_push_word(
+    const char *word,
+    float scale,
+    float max_width,
+    char out_lines[][UI_WRAP_BUFFER_LEN],
+    int max_lines,
+    int *io_line_count,
+    char *current_line,
+    size_t current_line_size) {
+  if (!has_text(word) || (io_line_count == NULL) || (current_line == NULL) || (current_line_size == 0U)) {
+    return;
+  }
+
+  char remaining[UI_WRAP_BUFFER_LEN];
+  snprintf(remaining, sizeof(remaining), "%s", word);
+
+  while (has_text(remaining)) {
+    char candidate[UI_WRAP_BUFFER_LEN];
+    if (has_text(current_line)) {
+      snprintf(candidate, sizeof(candidate), "%s %s", current_line, remaining);
+    } else {
+      snprintf(candidate, sizeof(candidate), "%s", remaining);
+    }
+
+    if (ui_estimate_text_width(candidate, scale) <= max_width) {
+      snprintf(current_line, current_line_size, "%s", candidate);
+      return;
+    }
+
+    if (has_text(current_line)) {
+      ui_wrap_store_line(out_lines, max_lines, io_line_count, current_line);
+      current_line[0] = '\0';
+      continue;
+    }
+
+    char chunk[UI_WRAP_BUFFER_LEN];
+    size_t chunk_len = 0U;
+    chunk[0] = '\0';
+
+    while (remaining[chunk_len] != '\0') {
+      char next_chunk[UI_WRAP_BUFFER_LEN];
+      snprintf(next_chunk, sizeof(next_chunk), "%s%c", chunk, remaining[chunk_len]);
+      if ((chunk[0] != '\0') && (ui_estimate_text_width(next_chunk, scale) > max_width)) {
+        break;
+      }
+
+      snprintf(chunk, sizeof(chunk), "%s", next_chunk);
+      chunk_len += 1U;
+    }
+
+    if (remaining[chunk_len] != '\0') {
+      ui_wrap_store_line(out_lines, max_lines, io_line_count, chunk);
+      memmove(remaining, remaining + chunk_len, strlen(remaining + chunk_len) + 1U);
+      continue;
+    }
+
+    snprintf(current_line, current_line_size, "%s", chunk);
+    return;
+  }
+}
+
+/*
+ * Wraps text to a maximum pixel width using the active PGF font metrics.
+ * Explicit newlines are preserved, spaces are collapsed between wrapped words.
+ */
+static int ui_wrap_text_lines(
+    const char *text,
+    float scale,
+    float max_width,
+    char out_lines[][UI_WRAP_BUFFER_LEN],
+    int max_lines,
+    int append_ellipsis_on_truncate) {
+  if (!has_text(text) || (max_lines <= 0) || (max_width <= 0.0f)) {
+    return 0;
+  }
+
+  int line_count = 0;
+  char current_line[UI_WRAP_BUFFER_LEN];
+  current_line[0] = '\0';
+
+  const char *cursor = text;
+  while (*cursor != '\0') {
+    if (*cursor == '\n') {
+      ui_wrap_store_line(out_lines, max_lines, &line_count, current_line);
+      current_line[0] = '\0';
+      cursor += 1;
+      continue;
+    }
+
+    while ((*cursor == ' ') || (*cursor == '\t') || (*cursor == '\r')) {
+      cursor += 1;
+    }
+    if (*cursor == '\0') {
+      break;
+    }
+    if (*cursor == '\n') {
+      continue;
+    }
+
+    char word[UI_WRAP_BUFFER_LEN];
+    size_t word_len = 0U;
+    while ((*cursor != '\0') &&
+           (*cursor != '\n') &&
+           (*cursor != ' ') &&
+           (*cursor != '\t') &&
+           (*cursor != '\r')) {
+      if ((word_len + 1U) < sizeof(word)) {
+        word[word_len++] = *cursor;
+      }
+      cursor += 1;
+    }
+    word[word_len] = '\0';
+
+    ui_wrap_push_word(word, scale, max_width, out_lines, max_lines, &line_count, current_line, sizeof(current_line));
+  }
+
+  if (has_text(current_line)) {
+    ui_wrap_store_line(out_lines, max_lines, &line_count, current_line);
+  }
+
+  if (append_ellipsis_on_truncate && (line_count > max_lines) && (out_lines != NULL)) {
+    ui_wrap_append_ellipsis(out_lines[max_lines - 1], scale, max_width);
+  }
+
+  return line_count;
+}
+
+/*
+ * Draws a wrapped text block and returns the y position for the next block.
+ */
+static float ui_draw_wrapped_text_block(
+    float x,
+    float y,
+    float max_width,
+    unsigned int color,
+    float scale,
+    float line_spacing,
+    int max_lines,
+    const char *text) {
+  if (!has_text(text) || (max_lines <= 0)) {
+    return y;
+  }
+
+  char lines[UI_WRAP_MAX_LINES_PER_BLOCK][UI_WRAP_BUFFER_LEN];
+  int total_lines = ui_wrap_text_lines(text, scale, max_width, lines, max_lines, 1);
+  int render_lines = total_lines;
+  if (render_lines > max_lines) {
+    render_lines = max_lines;
+  }
+
+  float line_height = ui_estimate_text_height(scale) + line_spacing;
+  for (int i = 0; i < render_lines; ++i) {
+    ui_draw_text(x, y + (line_height * (float)i), color, scale, "%s", lines[i]);
+  }
+
+  return y + (line_height * (float)render_lines);
+}
+
+/*
+ * Builds the fixed home-screen geometry used by rendering and D-pad anchors.
+ */
+static void ui_build_main_layout(UiMainLayout *layout) {
+  if (layout == NULL) {
+    return;
+  }
+
+  memset(layout, 0, sizeof(*layout));
+
+  layout->connection_x = 32.0f;
+  layout->connection_y = 88.0f;
+  layout->connection_w = 332.0f;
+  layout->connection_h = 256.0f;
+  layout->connection_row_x = layout->connection_x + 16.0f;
+  layout->connection_row_w = layout->connection_w - 32.0f;
+  layout->connection_row_h = 38.0f;
+  layout->connection_row_gap = 3.0f;
+  layout->connection_first_row_y = layout->connection_y + 46.0f;
+
+  layout->sync_x = layout->connection_x + layout->connection_w + 20.0f;
+  layout->sync_y = layout->connection_y;
+  layout->sync_w = 544.0f;
+  layout->sync_h = layout->connection_h;
+  layout->sync_content_x = layout->sync_x + 16.0f;
+  layout->sync_content_w = layout->sync_w - 32.0f;
+  layout->sync_button_x = layout->sync_content_x;
+  layout->sync_button_w = layout->sync_content_w;
+  layout->sync_button_h = 30.0f;
+  layout->sync_button_gap = 8.0f;
+  layout->sync_first_button_y = layout->sync_y + layout->sync_h - 16.0f -
+                                (layout->sync_button_h * 3.0f) -
+                                (layout->sync_button_gap * 2.0f);
+
+  layout->game_x = 32.0f;
+  layout->game_y = layout->connection_y + layout->connection_h + 18.0f;
+  layout->game_w = 896.0f;
+  layout->game_h = 148.0f;
+  layout->game_row_x = layout->game_x + 16.0f;
+  layout->game_row_w = layout->game_w - 32.0f;
+  layout->game_first_row_y = layout->game_y + 36.0f;
+
+  layout->footer_status_x = 92.0f;
+  layout->footer_status_w = 392.0f;
+  layout->footer_hint_right_x = 928.0f;
+  layout->footer_hint_w = 380.0f;
 }
 
 /*
@@ -1254,44 +1814,95 @@ static unsigned int ui_log_line_color(const char *line) {
 }
 
 /*
+ * Returns how many wrapped log rows fit inside a viewport height.
+ */
+static int ui_log_viewport_visible_lines(float h) {
+  float usable_height = h - UI_LOG_TOP_PADDING - UI_LOG_BOTTOM_PADDING;
+  if (usable_height < UI_LOG_LINE_HEIGHT) {
+    return 1;
+  }
+
+  int visible_lines = (int)floorf(usable_height / UI_LOG_LINE_HEIGHT);
+  if (visible_lines < 1) {
+    visible_lines = 1;
+  }
+  return visible_lines;
+}
+
+/*
+ * Counts wrapped visual log rows for the current history and viewport width.
+ */
+static int ui_log_total_visual_lines(float viewport_width) {
+  float inner_width = viewport_width - 20.0f;
+  if (inner_width <= 0.0f) {
+    return 0;
+  }
+
+  int total_visual_lines = 0;
+  int total_entries = app_log_history_count();
+  for (int i = 0; i < total_entries; ++i) {
+    const char *line = app_log_history_line(i);
+    if (!has_text(line)) {
+      continue;
+    }
+
+    char wrapped_lines[UI_WRAP_MAX_LINES_PER_BLOCK][UI_WRAP_BUFFER_LEN];
+    int wrapped_count = ui_wrap_text_lines(line, UI_LOG_TEXT_SCALE, inner_width, wrapped_lines, UI_WRAP_MAX_LINES_PER_BLOCK, 0);
+    total_visual_lines += (wrapped_count > 0) ? wrapped_count : 1;
+  }
+
+  return total_visual_lines;
+}
+
+/*
  * Draws one scrollable log viewport from global app_log history.
+ * Scrolling is expressed in wrapped visual line offsets rather than raw entries.
  */
 static void ui_draw_log_viewport(
     float x,
     float y,
     float w,
     float h,
-    int start_index,
-    int visible_lines) {
+    int start_visual_line) {
   ui_draw_panel(x, y, w, h, UI_COLOR_PANEL_ALT, UI_COLOR_PANEL_BORDER);
 
-  if (visible_lines <= 0) {
-    return;
-  }
-
-  int total = app_log_history_count();
-  int max_start = total - visible_lines;
+  int visible_lines = ui_log_viewport_visible_lines(h);
+  int total_visual_lines = ui_log_total_visual_lines(w);
+  int max_start = total_visual_lines - visible_lines;
   if (max_start < 0) {
     max_start = 0;
   }
 
-  int start = clamp_int(start_index, 0, max_start);
+  int start = clamp_int(start_visual_line, 0, max_start);
   int end = start + visible_lines;
-  if (end > total) {
-    end = total;
-  }
 
   float line_y = y + UI_LOG_TOP_PADDING;
-  for (int i = start; i < end; ++i) {
+  int visual_index = 0;
+  int rendered_lines = 0;
+  int total_entries = app_log_history_count();
+  for (int i = 0; (i < total_entries) && (visual_index < end); ++i) {
     const char *line = app_log_history_line(i);
     if (!has_text(line)) {
       continue;
     }
 
-    char clipped[UI_STATUS_LINE_LEN];
-    ui_truncate_text(line, clipped, sizeof(clipped));
-    ui_draw_text(x + 10.0f, line_y, ui_log_line_color(line), 0.66f, "%s", clipped);
-    line_y += UI_LOG_LINE_HEIGHT;
+    char wrapped_lines[UI_WRAP_MAX_LINES_PER_BLOCK][UI_WRAP_BUFFER_LEN];
+    int wrapped_count = ui_wrap_text_lines(line, UI_LOG_TEXT_SCALE, w - 20.0f, wrapped_lines, UI_WRAP_MAX_LINES_PER_BLOCK, 0);
+    if (wrapped_count <= 0) {
+      continue;
+    }
+
+    for (int j = 0; (j < wrapped_count) && (visual_index < end); ++j) {
+      if (visual_index >= start) {
+        ui_draw_text(x + 10.0f, line_y, ui_log_line_color(line), UI_LOG_TEXT_SCALE, "%s", wrapped_lines[j]);
+        line_y += UI_LOG_LINE_HEIGHT;
+        rendered_lines += 1;
+        if (rendered_lines >= visible_lines) {
+          return;
+        }
+      }
+      visual_index += 1;
+    }
   }
 }
 
@@ -1302,18 +1913,21 @@ static void ui_draw_field_row(float x, float y, float w, float h, int selected, 
   unsigned int fill = selected ? UI_COLOR_FIELD_ACTIVE : UI_COLOR_FIELD;
   unsigned int border = selected ? UI_COLOR_PANEL_BORDER_ACTIVE : UI_COLOR_PANEL_BORDER;
   unsigned int value_color = has_text(value) ? UI_COLOR_TEXT : UI_COLOR_TEXT_DIM;
-  float label_scale = (h < 36.0f) ? 0.68f : 0.78f;
-  float value_scale = (h < 36.0f) ? 0.80f : 0.92f;
-  float label_y = y + ((h < 36.0f) ? 11.0f : 17.0f);
-  float value_y = y + ((h < 36.0f) ? 24.0f : 39.0f);
+  float label_scale = (h >= 52.0f) ? 0.66f : 0.60f;
+  float value_scale = (h >= 52.0f) ? 0.70f : 0.64f;
+  float label_y = y + ((h >= 52.0f) ? 16.0f : 13.0f);
+  float value_y = y + ((h >= 52.0f) ? 32.0f : 25.0f);
+  float line_spacing = (h >= 52.0f) ? 1.0f : 0.0f;
 
   ui_draw_panel(x, y, w, h, fill, border);
   if (selected) {
     vita2d_draw_rectangle(ui_snap_to_pixel(x), ui_snap_to_pixel(y), 4.0f, ui_snap_to_pixel(h), UI_COLOR_ACCENT);
   }
 
-  ui_draw_text(x + 16.0f, label_y, UI_COLOR_TEXT_DIM, label_scale, "%s", label);
-  ui_draw_text(x + 16.0f, value_y, value_color, value_scale, "%s", value);
+  float inner_x = x + 14.0f;
+  float inner_w = w - 28.0f;
+  ui_draw_truncated_text(inner_x, label_y, inner_w, UI_COLOR_TEXT_DIM, label_scale, label);
+  ui_draw_wrapped_text_block(inner_x, value_y, inner_w, value_color, value_scale, line_spacing, 2, value);
 }
 
 /*
@@ -1338,7 +1952,7 @@ static void ui_draw_button(float x, float y, float w, float h, int primary, int 
     vita2d_draw_rectangle(ui_snap_to_pixel(x), ui_snap_to_pixel(y), 4.0f, ui_snap_to_pixel(h), UI_COLOR_ACCENT);
   }
 
-  ui_draw_text_center(x + (w * 0.5f), y + (h * 0.62f), text_color, primary ? 0.90f : 0.78f, title);
+  ui_draw_text_center(x + (w * 0.5f), y + (h * 0.62f), text_color, primary ? 0.82f : 0.76f, title);
 }
 
 /*
@@ -1364,67 +1978,117 @@ static void ui_draw_game_row(
     vita2d_draw_rectangle(ui_snap_to_pixel(x), ui_snap_to_pixel(y), 3.0f, ui_snap_to_pixel(h), UI_COLOR_ACCENT);
   }
 
-  ui_draw_text(x + 12.0f, y + 17.0f, title_color, 0.82f, "%s", title);
-  ui_draw_text(
-      x + w - 106.0f,
-      y + 17.0f,
-      count_color,
-      0.76f,
-      "%d card%s",
-      save_count,
-      (save_count == 1) ? "" : "s");
+  char count_text[32];
+  snprintf(count_text, sizeof(count_text), "%d card%s", save_count, (save_count == 1) ? "" : "s");
+
+  float count_scale = 0.64f;
+  float count_width = ui_estimate_text_width(count_text, count_scale);
+  float title_width = w - 36.0f - count_width;
+  if (title_width < 80.0f) {
+    title_width = 80.0f;
+  }
+
+  ui_draw_truncated_text(x + 12.0f, y + 18.0f, title_width, title_color, 0.72f, title);
+  ui_draw_text_right(x + w - 12.0f, y + 18.0f, count_color, count_scale, count_text);
 }
 
 /*
  * Renders the top title area.
  */
 static void ui_render_header(const UiAppState *state) {
-  ui_draw_text(32.0f, 28.0f, UI_COLOR_TEXT_DIM, 0.78f, "RomM Vita Sync");
-  ui_draw_text(32.0f, 54.0f, UI_COLOR_TEXT, 1.10f, "Save Synchronization");
-  ui_draw_text(32.0f, 70.0f, UI_COLOR_TEXT_MUTED, 0.80f, "Configure RoMM access, choose a PS1 game, then run manual or startup auto sync.");
+  const char *status_text = ui_sync_action_enabled(state) ? "Ready to synchronize" : "Setup required";
+  unsigned int status_color = ui_sync_action_enabled(state) ? UI_COLOR_SUCCESS : UI_COLOR_WARNING;
+  if (state->sync_feedback.running) {
+    status_text = "Synchronization running";
+    status_color = UI_COLOR_ACCENT;
+  } else if (state->sync_feedback.completed) {
+    status_text = state->sync_feedback.success ? "Last sync completed" : "Last sync failed";
+    status_color = state->sync_feedback.success ? UI_COLOR_SUCCESS : UI_COLOR_DANGER;
+  }
 
-  ui_draw_text(736.0f, 28.0f, UI_COLOR_TEXT_DIM, 0.78f, "Status");
-  ui_draw_text(
-      736.0f,
-      54.0f,
-      ui_sync_action_enabled(state) ? UI_COLOR_SUCCESS : UI_COLOR_WARNING,
-      0.82f,
-      "%s",
-      ui_sync_action_enabled(state) ? "Ready to synchronize" : "Setup required");
+  ui_draw_text(32.0f, 28.0f, UI_COLOR_TEXT_DIM, 0.72f, "RomM Vita Sync");
+  ui_draw_text(32.0f, 52.0f, UI_COLOR_TEXT, 1.02f, "Save Synchronization");
+  ui_draw_truncated_text(
+      32.0f,
+      70.0f,
+      620.0f,
+      UI_COLOR_TEXT_MUTED,
+      0.68f,
+      "Configure the RoMM server, choose a PS1 game, then start a manual or startup synchronization.");
+
+  ui_draw_text_right(928.0f, 28.0f, UI_COLOR_TEXT_DIM, 0.72f, "Status");
+  ui_draw_truncated_text_right(928.0f, 52.0f, 240.0f, status_color, 0.76f, status_text);
 }
 
 /*
- * Renders the credentials form.
+ * Renders the connection form and sync safety toggles.
  */
 static void ui_render_connection_panel(const UiAppState *state) {
   if (state == NULL) {
     return;
   }
 
-  char url_display[96];
-  char user_display[96];
-  char pass_display[96];
-  char file_log_display[24];
+  UiMainLayout layout;
+  ui_build_main_layout(&layout);
+
+  char url_display[APP_CONFIG_MAX_URL_LEN + 16];
+  char username_display[APP_CONFIG_MAX_USERNAME_LEN + 16];
+  char password_display[APP_CONFIG_MAX_PASSWORD_LEN + 16];
+  char dry_run_display[24];
+  char auto_apply_conflicts_display[24];
   ui_format_field_display(state->config.romm_url, 0, url_display, sizeof(url_display));
-  ui_format_field_display(state->config.romm_username, 0, user_display, sizeof(user_display));
-  ui_format_field_display(state->config.romm_password, 1, pass_display, sizeof(pass_display));
-  snprintf(file_log_display, sizeof(file_log_display), "%s", state->config.log_file_enabled ? "Enabled" : "Disabled");
+  ui_format_field_display(state->config.romm_username, 0, username_display, sizeof(username_display));
+  ui_format_field_display(state->config.romm_password, 1, password_display, sizeof(password_display));
+  snprintf(dry_run_display, sizeof(dry_run_display), "%s", state->config.sync_dry_run ? "Enabled" : "Disabled");
+  snprintf(
+      auto_apply_conflicts_display,
+      sizeof(auto_apply_conflicts_display),
+      "%s",
+      state->config.sync_auto_apply_conflicts ? "Enabled" : "Disabled");
 
-  ui_draw_panel(32.0f, 88.0f, 430.0f, 258.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
-  ui_draw_text(48.0f, 118.0f, UI_COLOR_TEXT, 0.96f, "Connection");
-  ui_draw_text(48.0f, 140.0f, UI_COLOR_TEXT_MUTED, 0.78f, "X: edit/toggle selected field (auto-save).");
+  ui_draw_panel(layout.connection_x, layout.connection_y, layout.connection_w, layout.connection_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
+  ui_draw_text(layout.connection_x + 16.0f, layout.connection_y + 30.0f, UI_COLOR_TEXT, 0.88f, "Connection");
 
-  ui_draw_field_row(48.0f, 154.0f, 398.0f, 44.0f, state->selected_index == UI_SELECT_SERVER_URL, "RoMM server address", url_display);
-  ui_draw_field_row(48.0f, 208.0f, 398.0f, 44.0f, state->selected_index == UI_SELECT_USERNAME, "RoMM username", user_display);
-  ui_draw_field_row(48.0f, 262.0f, 398.0f, 44.0f, state->selected_index == UI_SELECT_PASSWORD, "RoMM password", pass_display);
   ui_draw_field_row(
-      48.0f,
-      316.0f,
-      398.0f,
-      28.0f,
-      state->selected_index == UI_SELECT_FILE_LOGGING,
-      "File logging (10MB x3)",
-      file_log_display);
+      layout.connection_row_x,
+      layout.connection_first_row_y,
+      layout.connection_row_w,
+      layout.connection_row_h,
+      state->selected_index == UI_SELECT_SERVER_URL,
+      "RoMM server address",
+      url_display);
+  ui_draw_field_row(
+      layout.connection_row_x,
+      layout.connection_first_row_y + layout.connection_row_h + layout.connection_row_gap,
+      layout.connection_row_w,
+      layout.connection_row_h,
+      state->selected_index == UI_SELECT_USERNAME,
+      "RoMM username",
+      username_display);
+  ui_draw_field_row(
+      layout.connection_row_x,
+      layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 2.0f),
+      layout.connection_row_w,
+      layout.connection_row_h,
+      state->selected_index == UI_SELECT_PASSWORD,
+      "RoMM password",
+      password_display);
+  ui_draw_field_row(
+      layout.connection_row_x,
+      layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 3.0f),
+      layout.connection_row_w,
+      layout.connection_row_h,
+      state->selected_index == UI_SELECT_DRY_RUN,
+      "Dry-run mode",
+      dry_run_display);
+  ui_draw_field_row(
+      layout.connection_row_x,
+      layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 4.0f),
+      layout.connection_row_w,
+      layout.connection_row_h,
+      state->selected_index == UI_SELECT_AUTO_APPLY_CONFLICTS,
+      "Auto-apply conflicts",
+      auto_apply_conflicts_display);
 }
 
 /*
@@ -1435,65 +2099,94 @@ static void ui_render_sync_panel(const UiAppState *state) {
     return;
   }
 
+  UiMainLayout layout;
+  ui_build_main_layout(&layout);
+
   const UiGameEntry *game = ui_active_game(state);
-  char title_display[80];
-  char detail[128];
-  char readiness[96];
+  char title_display[ROMM_GAME_TITLE_LEN + 16];
+  char detail[96];
+  char readiness[UI_STATUS_LINE_LEN];
   unsigned int readiness_color = UI_COLOR_SUCCESS;
   int sync_enabled = ui_sync_action_enabled(state);
   int sync_all_enabled = ui_sync_all_action_enabled(state);
 
   if (game != NULL) {
     const char *resolved_title = has_text(game->title) ? game->title : game->game_id;
-    ui_truncate_text(resolved_title, title_display, sizeof(title_display));
-    snprintf(detail, sizeof(detail), "%s  |  %d save card(s)", game->game_id, game->save_count);
+    snprintf(title_display, sizeof(title_display), "%s", resolved_title);
+    snprintf(detail, sizeof(detail), "%s | %d save card%s", game->game_id, game->save_count, (game->save_count == 1) ? "" : "s");
   } else {
     snprintf(title_display, sizeof(title_display), "No PS1 game selected");
     snprintf(detail, sizeof(detail), "Rescan local saves after copying memory cards to the Vita.");
   }
 
-  if (game == NULL) {
+  if (state->sync_feedback.running) {
+    snprintf(readiness, sizeof(readiness), "%s", state->sync_feedback.message);
+    readiness_color = UI_COLOR_ACCENT;
+  } else if (state->sync_feedback.completed) {
+    snprintf(readiness, sizeof(readiness), "%s", state->sync_feedback.message);
+    readiness_color = state->sync_feedback.success ? UI_COLOR_SUCCESS : UI_COLOR_DANGER;
+  } else if (game == NULL) {
     snprintf(readiness, sizeof(readiness), "No local PS1 saves detected yet.");
     readiness_color = UI_COLOR_WARNING;
   } else if (!app_config_has_server_url(&state->config)) {
     snprintf(readiness, sizeof(readiness), "Enter the RoMM server address first.");
     readiness_color = UI_COLOR_WARNING;
   } else if (!app_config_has_auth(&state->config)) {
-    snprintf(readiness, sizeof(readiness), "Enter both username and password to enable sync.");
+    snprintf(readiness, sizeof(readiness), "Enter your RoMM username and password to enable sync.");
     readiness_color = UI_COLOR_WARNING;
   } else {
     snprintf(readiness, sizeof(readiness), "Connection details look complete.");
   }
 
-  ui_draw_panel(478.0f, 88.0f, 450.0f, 258.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
-  ui_draw_text(494.0f, 118.0f, UI_COLOR_TEXT, 0.96f, "Synchronize");
-  ui_draw_text(494.0f, 140.0f, UI_COLOR_TEXT_MUTED, 0.78f, "Choose the target game in the list below.");
-  ui_draw_text(494.0f, 184.0f, game != NULL ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED, 0.98f, "%s", title_display);
-  ui_draw_text(494.0f, 208.0f, UI_COLOR_TEXT_MUTED, 0.78f, "%s", detail);
-  ui_draw_text(494.0f, 232.0f, readiness_color, 0.78f, "%s", readiness);
+  ui_draw_panel(layout.sync_x, layout.sync_y, layout.sync_w, layout.sync_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
+  ui_draw_text(layout.sync_content_x, layout.sync_y + 30.0f, UI_COLOR_TEXT, 0.88f, "Synchronize");
+
+  float cursor_y = layout.sync_y + 58.0f;
+  cursor_y = ui_draw_wrapped_text_block(
+      layout.sync_content_x,
+      cursor_y,
+      layout.sync_content_w,
+      game != NULL ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED,
+      0.88f,
+      2.0f,
+      2,
+      title_display);
+  cursor_y += 4.0f;
+  ui_draw_truncated_text(layout.sync_content_x, cursor_y, layout.sync_content_w, UI_COLOR_TEXT_MUTED, 0.68f, detail);
+  cursor_y += ui_estimate_text_height(0.68f) + 8.0f;
+  ui_draw_wrapped_text_block(
+      layout.sync_content_x,
+      cursor_y,
+      layout.sync_content_w,
+      readiness_color,
+      0.64f,
+      1.0f,
+      2,
+      readiness);
+
   ui_draw_button(
-      494.0f,
-      252.0f,
-      418.0f,
-      28.0f,
+      layout.sync_button_x,
+      layout.sync_first_button_y,
+      layout.sync_button_w,
+      layout.sync_button_h,
       1,
       state->selected_index == UI_SELECT_SYNC_PRIMARY,
       sync_enabled,
       "Synchronize Selected Game");
   ui_draw_button(
-      494.0f,
-      284.0f,
-      418.0f,
-      28.0f,
+      layout.sync_button_x,
+      layout.sync_first_button_y + layout.sync_button_h + layout.sync_button_gap,
+      layout.sync_button_w,
+      layout.sync_button_h,
       0,
       state->selected_index == UI_SELECT_SYNC_ALL,
       sync_all_enabled,
       "Synchronize All Saves");
   ui_draw_button(
-      494.0f,
-      316.0f,
-      418.0f,
-      28.0f,
+      layout.sync_button_x,
+      layout.sync_first_button_y + ((layout.sync_button_h + layout.sync_button_gap) * 2.0f),
+      layout.sync_button_w,
+      layout.sync_button_h,
       0,
       state->selected_index == UI_SELECT_RESCAN,
       1,
@@ -1508,11 +2201,20 @@ static void ui_render_game_panel(const UiAppState *state) {
     return;
   }
 
-  ui_draw_panel(32.0f, 354.0f, 548.0f, 132.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
-  ui_draw_text(48.0f, 378.0f, UI_COLOR_TEXT, 0.90f, "Detected PS1 Games");
+  UiMainLayout layout;
+  ui_build_main_layout(&layout);
+
+  ui_draw_panel(layout.game_x, layout.game_y, layout.game_w, layout.game_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
+  ui_draw_text(layout.game_x + 16.0f, layout.game_y + 24.0f, UI_COLOR_TEXT, 0.84f, "Detected PS1 Games");
 
   if (state->game_count <= 0) {
-    ui_draw_text(48.0f, 422.0f, UI_COLOR_TEXT_MUTED, 0.84f, "No PS1 memory card files were detected on this Vita.");
+    ui_draw_truncated_text(
+        layout.game_x + 16.0f,
+        layout.game_y + 60.0f,
+        layout.game_w - 32.0f,
+        UI_COLOR_TEXT_MUTED,
+        0.72f,
+        "No PS1 memory card files were detected on this Vita.");
     return;
   }
 
@@ -1522,92 +2224,28 @@ static void ui_render_game_panel(const UiAppState *state) {
     end = state->game_count;
   }
 
-  ui_draw_text(404.0f, 378.0f, UI_COLOR_TEXT_DIM, 0.72f, "Showing %d-%d of %d", start + 1, end, state->game_count);
+  char summary[48];
+  snprintf(summary, sizeof(summary), "Showing %d-%d of %d", start + 1, end, state->game_count);
+  ui_draw_text_right(layout.game_x + layout.game_w - 16.0f, layout.game_y + 24.0f, UI_COLOR_TEXT_DIM, 0.64f, summary);
 
-  float row_y = 390.0f;
+  float row_y = layout.game_first_row_y;
   for (int i = start; i < end; ++i) {
     const UiGameEntry *game = &state->games[i];
-    char full_title[128];
-    char row_title[96];
+    char full_title[ROMM_GAME_TITLE_LEN + ROMM_GAME_ID_LEN + 8];
     const char *resolved_title = has_text(game->title) ? game->title : game->game_id;
     snprintf(full_title, sizeof(full_title), "%s [%s]", resolved_title, game->game_id);
-    ui_truncate_text(full_title, row_title, sizeof(row_title));
 
     ui_draw_game_row(
-        48.0f,
+        layout.game_row_x,
         row_y,
-        516.0f,
+        layout.game_row_w,
         UI_GAME_ROW_HEIGHT,
         state->selected_index == (UI_SELECT_GAME_BASE + i),
         state->active_game_index == i,
-        row_title,
+        full_title,
         game->save_count);
     row_y += UI_GAME_ROW_HEIGHT;
   }
-}
-
-/*
- * Renders persistent sync progress and tail logs in the main layout.
- * Expanded mode opens an anchored dropdown with additional recent log lines.
- */
-static void ui_render_sync_activity_panel(const UiAppState *state) {
-  if (state == NULL) {
-    return;
-  }
-
-  const UiSyncFeedback *feedback = &state->sync_feedback;
-  float ratio = 0.0f;
-  if (feedback->total_units > 0) {
-    ratio = (float)feedback->completed_units / (float)feedback->total_units;
-  }
-
-  const char *trigger_text = (feedback->trigger == UI_SYNC_TRIGGER_AUTOMATIC) ? "Auto" : "Manual";
-  const char *state_text = "Idle";
-  unsigned int state_color = UI_COLOR_TEXT_DIM;
-  if (feedback->running) {
-    state_text = "Running";
-    state_color = UI_COLOR_ACCENT;
-  } else if (feedback->completed) {
-    state_text = feedback->success ? "Completed" : "Failed";
-    state_color = feedback->success ? UI_COLOR_SUCCESS : UI_COLOR_DANGER;
-  }
-
-  ui_draw_panel(592.0f, 354.0f, 336.0f, 132.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
-  ui_draw_text(608.0f, 378.0f, UI_COLOR_TEXT, 0.88f, "Sync Activity");
-  ui_draw_text(608.0f, 396.0f, UI_COLOR_TEXT_MUTED, 0.68f, "%s | %s", trigger_text, state_text);
-  ui_draw_text(856.0f, 396.0f, state_color, 0.68f, "%d%%", (int)(ratio * 100.0f));
-
-  ui_draw_progress_bar(608.0f, 402.0f, 304.0f, 14.0f, ratio);
-
-  char message[UI_STATUS_LINE_LEN];
-  ui_truncate_text(feedback->message, message, sizeof(message));
-  ui_draw_text(608.0f, 428.0f, UI_COLOR_TEXT_MUTED, 0.66f, "%s", has_text(message) ? message : "No sync activity yet.");
-
-  int total_logs = app_log_history_count();
-  int tail_start = total_logs - UI_LOG_VISIBLE_LINES;
-  if (tail_start < 0) {
-    tail_start = 0;
-  }
-  ui_draw_log_viewport(608.0f, 432.0f, 304.0f, 48.0f, tail_start, UI_LOG_VISIBLE_LINES);
-  ui_draw_text(
-      608.0f,
-      480.0f,
-      UI_COLOR_TEXT_DIM,
-      0.62f,
-      feedback->persistent_logs_expanded ? "SQUARE hide logs" : "SQUARE show logs");
-
-  if (!feedback->persistent_logs_expanded) {
-    return;
-  }
-
-  int expanded_start = total_logs - UI_LOG_EXPANDED_VISIBLE_LINES;
-  if (expanded_start < 0) {
-    expanded_start = 0;
-  }
-
-  ui_draw_panel(592.0f, 166.0f, 336.0f, 180.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER_ACTIVE);
-  ui_draw_text(608.0f, 188.0f, UI_COLOR_TEXT, 0.76f, "Recent Sync Logs");
-  ui_draw_log_viewport(608.0f, 194.0f, 304.0f, 146.0f, expanded_start, UI_LOG_EXPANDED_VISIBLE_LINES);
 }
 
 /*
@@ -1618,12 +2256,18 @@ static void ui_render_footer(const UiAppState *state) {
     return;
   }
 
-  char status[UI_STATUS_LINE_LEN];
-  ui_truncate_text(state->status_line, status, sizeof(status));
+  UiMainLayout layout;
+  ui_build_main_layout(&layout);
 
-  ui_draw_text(32.0f, 522.0f, UI_COLOR_TEXT_DIM, 0.76f, "Status");
-  ui_draw_text(92.0f, 522.0f, UI_COLOR_STATUS, 0.80f, "%s", status);
-  ui_draw_text(498.0f, 522.0f, UI_COLOR_TEXT_MUTED, 0.72f, "D-Pad move   X apply   SQUARE logs   START quit");
+  ui_draw_text(32.0f, 522.0f, UI_COLOR_TEXT_DIM, 0.78f, "Status");
+  ui_draw_truncated_text(layout.footer_status_x, 522.0f, layout.footer_status_w, UI_COLOR_STATUS, 0.72f, state->status_line);
+  ui_draw_truncated_text_right(
+      layout.footer_hint_right_x,
+      522.0f,
+      layout.footer_hint_w,
+      UI_COLOR_TEXT_MUTED,
+      0.66f,
+      "D-Pad move   X select/apply   START quit");
 }
 
 /*
@@ -1639,7 +2283,6 @@ static void ui_render_main_screen(UiAppState *state) {
   ui_render_connection_panel(state);
   ui_render_sync_panel(state);
   ui_render_game_panel(state);
-  ui_render_sync_activity_panel(state);
   ui_render_footer(state);
   ui_end_frame();
 }
@@ -1821,6 +2464,321 @@ static void ui_sync_append_report_logs(const SyncRunReport *report) {
 }
 
 /*
+ * Captures the current manual-sync modal geometry for rendering and input.
+ */
+typedef struct UiSyncModalLayout {
+  float panel_x;
+  float panel_y;
+  float panel_w;
+  float panel_h;
+  float content_x;
+  float content_w;
+  float title_y;
+  float context_y;
+  float progress_y;
+  float progress_text_y;
+  float log_label_y;
+  float log_x;
+  float log_y;
+  float log_w;
+  float log_h;
+  float scroll_hint_y;
+  float message_y;
+  float footer_y;
+} UiSyncModalLayout;
+
+/*
+ * Converts one raw front-touch report into current screen coordinates.
+ */
+static int ui_touch_report_to_screen(const SceTouchReport *report, float *out_x, float *out_y) {
+  if ((report == NULL) || (out_x == NULL) || (out_y == NULL) || !g_touch_front_initialized) {
+    return 0;
+  }
+
+  float min_x = 0.0f;
+  float max_x = 1919.0f;
+  float min_y = 0.0f;
+  float max_y = 1087.0f;
+  if (g_touch_front_panel_info_ready &&
+      (g_touch_front_panel_info.maxDispX > g_touch_front_panel_info.minDispX) &&
+      (g_touch_front_panel_info.maxDispY > g_touch_front_panel_info.minDispY)) {
+    min_x = (float)g_touch_front_panel_info.minDispX;
+    max_x = (float)g_touch_front_panel_info.maxDispX;
+    min_y = (float)g_touch_front_panel_info.minDispY;
+    max_y = (float)g_touch_front_panel_info.maxDispY;
+  }
+
+  float normalized_x = ((float)report->x - min_x) / (max_x - min_x);
+  float normalized_y = ((float)report->y - min_y) / (max_y - min_y);
+  if (normalized_x < 0.0f) {
+    normalized_x = 0.0f;
+  }
+  if (normalized_x > 1.0f) {
+    normalized_x = 1.0f;
+  }
+  if (normalized_y < 0.0f) {
+    normalized_y = 0.0f;
+  }
+  if (normalized_y > 1.0f) {
+    normalized_y = 1.0f;
+  }
+
+  *out_x = normalized_x * UI_SCREEN_WIDTH;
+  *out_y = normalized_y * UI_SCREEN_HEIGHT;
+  return 1;
+}
+
+/*
+ * Computes the current sync modal layout with wider safe margins and wrapped text.
+ */
+static void ui_build_sync_modal_layout(const UiSyncFeedback *feedback, UiSyncModalLayout *layout) {
+  if ((feedback == NULL) || (layout == NULL)) {
+    return;
+  }
+
+  memset(layout, 0, sizeof(*layout));
+  layout->panel_x = 40.0f;
+  layout->panel_y = 22.0f;
+  layout->panel_w = 880.0f;
+  layout->panel_h = 500.0f;
+  layout->content_x = layout->panel_x + 28.0f;
+  layout->content_w = layout->panel_w - 56.0f;
+
+  float cursor_y = layout->panel_y + 28.0f;
+
+  int title_lines = ui_wrap_text_lines(
+      has_text(feedback->title) ? feedback->title : "Synchronization",
+      0.94f,
+      layout->content_w,
+      NULL,
+      2,
+      1);
+  if (title_lines < 1) {
+    title_lines = 1;
+  }
+  if (title_lines > 2) {
+    title_lines = 2;
+  }
+
+  layout->title_y = cursor_y;
+  cursor_y += (ui_estimate_text_height(0.94f) + 6.0f) * (float)title_lines;
+
+  int context_lines = 0;
+  if (has_text(feedback->context)) {
+    cursor_y += 2.0f;
+    layout->context_y = cursor_y;
+    context_lines = ui_wrap_text_lines(feedback->context, 0.72f, layout->content_w, NULL, 2, 1);
+    if (context_lines < 1) {
+      context_lines = 1;
+    }
+    if (context_lines > 2) {
+      context_lines = 2;
+    }
+    cursor_y += (ui_estimate_text_height(0.72f) + 4.0f) * (float)context_lines;
+  } else {
+    layout->context_y = cursor_y;
+  }
+
+  cursor_y += 14.0f;
+  layout->progress_y = cursor_y;
+  cursor_y += 30.0f;
+  layout->progress_text_y = cursor_y;
+  cursor_y += 22.0f;
+  layout->log_label_y = cursor_y;
+  cursor_y += 12.0f;
+
+  layout->log_x = layout->content_x;
+  layout->log_y = cursor_y;
+  layout->log_w = layout->content_w;
+
+  float footer_height = ui_estimate_text_height(0.68f);
+  float message_height = (ui_estimate_text_height(0.76f) + 4.0f) * 2.0f;
+  float scroll_hint_height = ui_estimate_text_height(0.62f);
+  layout->footer_y = layout->panel_y + layout->panel_h - 24.0f;
+  layout->message_y = layout->footer_y - footer_height - 12.0f - message_height;
+  layout->scroll_hint_y = layout->message_y - 10.0f - scroll_hint_height;
+  layout->log_h = layout->scroll_hint_y - 14.0f - layout->log_y;
+  if (layout->log_h < 110.0f) {
+    layout->log_h = 110.0f;
+    layout->scroll_hint_y = layout->log_y + layout->log_h + 14.0f;
+    layout->message_y = layout->scroll_hint_y + scroll_hint_height + 10.0f;
+  }
+}
+
+/*
+ * Returns the maximum wrapped-line scroll offset for the current modal viewport.
+ */
+static int ui_sync_modal_max_scroll(const UiSyncModalLayout *layout) {
+  if (layout == NULL) {
+    return 0;
+  }
+
+  int visible_lines = ui_log_viewport_visible_lines(layout->log_h);
+  int total_visual_lines = ui_log_total_visual_lines(layout->log_w);
+  int max_scroll = total_visual_lines - visible_lines;
+  if (max_scroll < 0) {
+    max_scroll = 0;
+  }
+  return max_scroll;
+}
+
+/*
+ * Updates modal scroll position while keeping auto-scroll enabled only at the bottom.
+ */
+static void ui_sync_modal_scroll_by(UiSyncFeedback *feedback, const UiSyncModalLayout *layout, int delta_lines) {
+  if ((feedback == NULL) || (layout == NULL)) {
+    return;
+  }
+
+  int max_scroll = ui_sync_modal_max_scroll(layout);
+  int next_scroll = clamp_int(feedback->modal_log_scroll + delta_lines, 0, max_scroll);
+  feedback->modal_log_scroll = next_scroll;
+  feedback->modal_auto_scroll = (next_scroll >= max_scroll) ? 1 : 0;
+}
+
+/*
+ * Clears any active touchscreen drag state for the sync modal.
+ */
+static void ui_sync_modal_reset_touch(UiSyncFeedback *feedback) {
+  if (feedback == NULL) {
+    return;
+  }
+
+  feedback->modal_touch_active = 0;
+  feedback->modal_touch_id = -1;
+  feedback->modal_touch_last_y = 0.0f;
+  feedback->modal_touch_scroll_remainder = 0.0f;
+}
+
+/*
+ * Applies held-button repeat scrolling inside the sync modal.
+ */
+static void ui_sync_modal_handle_controller_scroll(
+    UiSyncFeedback *feedback,
+    const UiSyncModalLayout *layout,
+    unsigned int buttons) {
+  if ((feedback == NULL) || (layout == NULL)) {
+    return;
+  }
+
+  int direction = 0;
+  if (buttons & SCE_CTRL_DOWN) {
+    direction = 1;
+  } else if (buttons & SCE_CTRL_UP) {
+    direction = -1;
+  }
+
+  if (direction == 0) {
+    feedback->modal_scroll_hold_direction = 0;
+    feedback->modal_scroll_hold_frames = 0;
+    return;
+  }
+
+  if (feedback->modal_scroll_hold_direction != direction) {
+    feedback->modal_scroll_hold_direction = direction;
+    feedback->modal_scroll_hold_frames = 0;
+    ui_sync_modal_scroll_by(feedback, layout, direction);
+    return;
+  }
+
+  feedback->modal_scroll_hold_frames += 1;
+  if ((feedback->modal_scroll_hold_frames >= UI_SCROLL_REPEAT_DELAY_FRAMES) &&
+      (((feedback->modal_scroll_hold_frames - UI_SCROLL_REPEAT_DELAY_FRAMES) % UI_SCROLL_REPEAT_INTERVAL_FRAMES) == 0)) {
+    ui_sync_modal_scroll_by(feedback, layout, direction);
+  }
+}
+
+/*
+ * Applies front-touch drag scrolling inside the sync modal log viewport.
+ */
+static void ui_sync_modal_handle_touch_scroll(UiSyncFeedback *feedback, const UiSyncModalLayout *layout) {
+  if ((feedback == NULL) || (layout == NULL) || !g_touch_front_initialized) {
+    ui_sync_modal_reset_touch(feedback);
+    return;
+  }
+
+  SceTouchData touch_data;
+  memset(&touch_data, 0, sizeof(touch_data));
+  int peek_status = sceTouchPeek(SCE_TOUCH_PORT_FRONT, &touch_data, 1);
+  if ((peek_status < 0) || (touch_data.reportNum == 0U)) {
+    ui_sync_modal_reset_touch(feedback);
+    return;
+  }
+
+  int matched_report = -1;
+  float matched_x = 0.0f;
+  float matched_y = 0.0f;
+
+  for (unsigned int i = 0; i < touch_data.reportNum; ++i) {
+    float screen_x = 0.0f;
+    float screen_y = 0.0f;
+    if (!ui_touch_report_to_screen(&touch_data.report[i], &screen_x, &screen_y)) {
+      continue;
+    }
+
+    if (feedback->modal_touch_active && (feedback->modal_touch_id == (int)touch_data.report[i].id)) {
+      matched_report = (int)i;
+      matched_x = screen_x;
+      matched_y = screen_y;
+      break;
+    }
+
+    if (!feedback->modal_touch_active &&
+        (screen_x >= layout->log_x) &&
+        (screen_x <= (layout->log_x + layout->log_w)) &&
+        (screen_y >= layout->log_y) &&
+        (screen_y <= (layout->log_y + layout->log_h))) {
+      feedback->modal_touch_active = 1;
+      feedback->modal_touch_id = (int)touch_data.report[i].id;
+      feedback->modal_touch_last_y = screen_y;
+      feedback->modal_touch_scroll_remainder = 0.0f;
+      matched_report = (int)i;
+      matched_x = screen_x;
+      matched_y = screen_y;
+      break;
+    }
+  }
+
+  if (matched_report < 0) {
+    ui_sync_modal_reset_touch(feedback);
+    return;
+  }
+
+  if (!feedback->modal_touch_active) {
+    return;
+  }
+
+  float delta_y = feedback->modal_touch_last_y - matched_y;
+  if (fabsf(delta_y) < UI_TOUCH_DRAG_DEADZONE) {
+    return;
+  }
+
+  feedback->modal_touch_scroll_remainder += delta_y;
+  int scroll_lines = (int)(feedback->modal_touch_scroll_remainder / UI_LOG_LINE_HEIGHT);
+  if (scroll_lines != 0) {
+    ui_sync_modal_scroll_by(feedback, layout, scroll_lines);
+    feedback->modal_touch_scroll_remainder -= (float)scroll_lines * UI_LOG_LINE_HEIGHT;
+  }
+  feedback->modal_touch_last_y = matched_y;
+  (void)matched_x;
+}
+
+/*
+ * Processes held controller input and optional touch dragging for the manual-sync modal.
+ */
+static void ui_sync_modal_handle_input(UiAppState *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  UiSyncModalLayout layout;
+  ui_build_sync_modal_layout(&state->sync_feedback, &layout);
+
+  ui_sync_modal_handle_controller_scroll(&state->sync_feedback, &layout, ui_poll_buttons());
+  ui_sync_modal_handle_touch_scroll(&state->sync_feedback, &layout);
+}
+
+/*
  * Renders the blocking manual-sync modal with progress and scrolling log area.
  */
 static void ui_render_sync_modal(UiAppState *state) {
@@ -1829,22 +2787,52 @@ static void ui_render_sync_modal(UiAppState *state) {
   }
 
   UiSyncFeedback *feedback = &state->sync_feedback;
+  UiSyncModalLayout layout;
+  ui_build_sync_modal_layout(feedback, &layout);
+
   float ratio = 0.0f;
   if (feedback->total_units > 0) {
     ratio = (float)feedback->completed_units / (float)feedback->total_units;
   }
 
+  int total_visual_lines = ui_log_total_visual_lines(layout.log_w);
+  int visible_lines = ui_log_viewport_visible_lines(layout.log_h);
+  int max_scroll = total_visual_lines - visible_lines;
+  if (max_scroll < 0) {
+    max_scroll = 0;
+  }
+  if (feedback->modal_auto_scroll) {
+    feedback->modal_log_scroll = max_scroll;
+  }
+  feedback->modal_log_scroll = clamp_int(feedback->modal_log_scroll, 0, max_scroll);
+
   ui_begin_frame();
-  ui_draw_panel(96.0f, 30.0f, 768.0f, 484.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER_ACTIVE);
-  ui_draw_text(124.0f, 60.0f, UI_COLOR_TEXT, 0.96f, "%s", has_text(feedback->title) ? feedback->title : "Synchronization");
+  ui_draw_panel(layout.panel_x, layout.panel_y, layout.panel_w, layout.panel_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER_ACTIVE);
+  ui_draw_wrapped_text_block(
+      layout.content_x,
+      layout.title_y,
+      layout.content_w,
+      UI_COLOR_TEXT,
+      0.94f,
+      6.0f,
+      2,
+      has_text(feedback->title) ? feedback->title : "Synchronization");
   if (has_text(feedback->context)) {
-    ui_draw_text(124.0f, 82.0f, UI_COLOR_TEXT_MUTED, 0.74f, "%s", feedback->context);
+    ui_draw_wrapped_text_block(
+        layout.content_x,
+        layout.context_y,
+        layout.content_w,
+        UI_COLOR_TEXT_MUTED,
+        0.72f,
+        4.0f,
+        2,
+        feedback->context);
   }
 
-  ui_draw_progress_bar(124.0f, 98.0f, 712.0f, 18.0f, ratio);
+  ui_draw_progress_bar(layout.content_x, layout.progress_y, layout.content_w, 18.0f, ratio);
   ui_draw_text(
-      124.0f,
-      134.0f,
+      layout.content_x,
+      layout.progress_text_y,
       UI_COLOR_TEXT_MUTED,
       0.72f,
       "%d%% (%d/%d)",
@@ -1852,40 +2840,23 @@ static void ui_render_sync_modal(UiAppState *state) {
       feedback->completed_units,
       feedback->total_units);
 
-  int total_logs = app_log_history_count();
-  int max_scroll = total_logs - UI_SYNC_MODAL_VISIBLE_LINES;
-  if (max_scroll < 0) {
-    max_scroll = 0;
-  }
-
-  if (feedback->running || feedback->modal_auto_scroll) {
-    feedback->modal_log_scroll = max_scroll;
-  }
-  feedback->modal_log_scroll = clamp_int(feedback->modal_log_scroll, 0, max_scroll);
-
-  ui_draw_text(124.0f, 160.0f, UI_COLOR_TEXT, 0.82f, "Live logs");
-  ui_draw_log_viewport(
-      124.0f,
-      166.0f,
-      712.0f,
-      230.0f,
-      feedback->modal_log_scroll,
-      UI_SYNC_MODAL_VISIBLE_LINES);
+  ui_draw_text(layout.content_x, layout.log_label_y, UI_COLOR_TEXT, 0.82f, "Live logs");
+  ui_draw_log_viewport(layout.log_x, layout.log_y, layout.log_w, layout.log_h, feedback->modal_log_scroll);
 
   if (max_scroll > 0) {
-    int visible_end = feedback->modal_log_scroll + UI_SYNC_MODAL_VISIBLE_LINES;
-    if (visible_end > total_logs) {
-      visible_end = total_logs;
+    int visible_end = feedback->modal_log_scroll + visible_lines;
+    if (visible_end > total_visual_lines) {
+      visible_end = total_visual_lines;
     }
     ui_draw_text(
-        124.0f,
-        416.0f,
+        layout.content_x,
+        layout.scroll_hint_y,
         UI_COLOR_TEXT_DIM,
         0.64f,
-        "UP/DOWN scroll %d-%d/%d",
+        "Hold UP/DOWN or drag the touchscreen to scroll %d-%d/%d",
         feedback->modal_log_scroll + 1,
         visible_end,
-        total_logs);
+        total_visual_lines);
   }
 
   unsigned int result_color = UI_COLOR_TEXT_MUTED;
@@ -1897,13 +2868,21 @@ static void ui_render_sync_modal(UiAppState *state) {
     result_color = UI_COLOR_DANGER;
   }
 
-  ui_draw_text(124.0f, 442.0f, result_color, 0.80f, "%s", has_text(feedback->message) ? feedback->message : "");
+  ui_draw_wrapped_text_block(
+      layout.content_x,
+      layout.message_y,
+      layout.content_w,
+      result_color,
+      0.76f,
+      4.0f,
+      2,
+      has_text(feedback->message) ? feedback->message : "");
   ui_draw_text(
-      124.0f,
-      486.0f,
+      layout.content_x,
+      layout.footer_y,
       UI_COLOR_TEXT_DIM,
-      0.70f,
-      feedback->running ? "Synchronization is running..." : "O/X/START: close");
+      0.68f,
+      feedback->running ? "Synchronization is running..." : "CIRCLE, CROSS, or START: close");
   ui_end_frame();
 }
 
@@ -1918,6 +2897,7 @@ static void ui_sync_render_live(UiAppState *state) {
 
   ui_pump_app_events();
   if (state->sync_feedback.trigger == UI_SYNC_TRIGGER_MANUAL) {
+    ui_sync_modal_handle_input(state);
     ui_render_sync_modal(state);
   } else {
     ui_render_main_screen(state);
@@ -1929,6 +2909,13 @@ typedef struct UiSyncProgressBridge {
   int base_completed_units;
   int overall_total_units;
 } UiSyncProgressBridge;
+
+typedef struct UiSyncConflictResolutionContext {
+  UiAppState *state;
+  UiSyncTrigger trigger;
+  int dry_run;
+  int auto_apply_conflicts;
+} UiSyncConflictResolutionContext;
 
 /*
  * Bridges sync_engine progress callbacks into UI progress + live redraw.
@@ -1958,8 +2945,340 @@ static void ui_sync_engine_progress_callback(
   if (has_text(message)) {
     ui_sync_feedback_set_message(feedback, message);
   }
-  feedback->modal_auto_scroll = 1;
   ui_sync_render_live(state);
+}
+
+/*
+ * Formats a Unix timestamp for conflict prompts using local device time when available.
+ */
+static void ui_format_sync_timestamp(int64_t timestamp_unix, char *out_text, size_t out_size) {
+  if ((out_text == NULL) || (out_size == 0U)) {
+    return;
+  }
+
+  if (timestamp_unix <= 0) {
+    snprintf(out_text, out_size, "unknown");
+    return;
+  }
+
+  time_t raw = (time_t)timestamp_unix;
+  struct tm *local = localtime(&raw);
+  if (local == NULL) {
+    snprintf(out_text, out_size, "%lld", (long long)timestamp_unix);
+    return;
+  }
+
+  snprintf(
+      out_text,
+      out_size,
+      "%04d-%02d-%02d %02d:%02d:%02d",
+      local->tm_year + 1900,
+      local->tm_mon + 1,
+      local->tm_mday,
+      local->tm_hour,
+      local->tm_min,
+      local->tm_sec);
+}
+
+/*
+ * Returns a short user-facing explanation for one conflict kind.
+ */
+static const char *ui_sync_conflict_summary(SyncConflictType conflict) {
+  switch (conflict) {
+    case SYNC_CONFLICT_LOCAL_NEWER:
+      return "Local save is newer than the remote save.";
+    case SYNC_CONFLICT_REMOTE_NEWER:
+      return "Remote save is newer than the local save.";
+    case SYNC_CONFLICT_SAME_TIMESTAMP_DIFFERENT_CONTENT:
+      return "Local and remote saves share the same timestamp but differ in content.";
+    case SYNC_CONFLICT_SAME_ORIGIN_DEVICE:
+      return "Remote save already belongs to this device.";
+    case SYNC_CONFLICT_NONE:
+    default:
+      return "No conflict detected.";
+  }
+}
+
+/*
+ * Returns a short user-facing phrase for a recommended sync action.
+ */
+static const char *ui_sync_action_phrase(SyncActionType action) {
+  switch (action) {
+    case SYNC_ACTION_UPLOAD:
+      return "upload the local save to RomM";
+    case SYNC_ACTION_DOWNLOAD:
+      return "download the remote save to this Vita";
+    case SYNC_ACTION_SKIP:
+    case SYNC_ACTION_NONE:
+    default:
+      return "skip this save for now";
+  }
+}
+
+/*
+ * Builds one concise multi-line conflict prompt message for the system dialog,
+ * including the current Vita confirm/decline button mapping.
+ */
+static void ui_build_conflict_prompt_message(
+    char *out_message,
+    size_t out_size,
+    const SyncSaveDescriptor *local_item,
+    const SyncSaveDescriptor *remote_item,
+    SyncConflictType conflict,
+    SyncActionType action,
+    int dry_run,
+    const char *question,
+    const char *decline_outcome) {
+  if ((out_message == NULL) || (out_size == 0U)) {
+    return;
+  }
+
+  char local_timestamp[64];
+  char remote_timestamp[64];
+  ui_format_sync_timestamp(local_item != NULL ? local_item->timestamp_unix : 0, local_timestamp, sizeof(local_timestamp));
+  ui_format_sync_timestamp(remote_item != NULL ? remote_item->timestamp_unix : 0, remote_timestamp, sizeof(remote_timestamp));
+
+  const char *title = (local_item != NULL) && has_text(local_item->title)
+                          ? local_item->title
+                          : (((local_item != NULL) && has_text(local_item->game_id)) ? local_item->game_id : "(unknown)");
+  const char *filename = (local_item != NULL) && has_text(local_item->filename)
+                             ? local_item->filename
+                             : (((remote_item != NULL) && has_text(remote_item->filename)) ? remote_item->filename : "(unknown)");
+  const char *question_text = has_text(question) ? question : "Apply the recommended action?";
+  const char *decline_text = has_text(decline_outcome) ? decline_outcome : "skip this save";
+
+  char title_display[96];
+  char filename_display[80];
+  char summary_display[96];
+  char action_display[96];
+  char question_display[128];
+  char decline_display[96];
+  ui_truncate_text(title, title_display, sizeof(title_display));
+  ui_truncate_text(filename, filename_display, sizeof(filename_display));
+  ui_truncate_text(ui_sync_conflict_summary(conflict), summary_display, sizeof(summary_display));
+  ui_truncate_text(ui_sync_action_phrase(action), action_display, sizeof(action_display));
+  ui_truncate_text(question_text, question_display, sizeof(question_display));
+  ui_truncate_text(decline_text, decline_display, sizeof(decline_display));
+
+  snprintf(
+      out_message,
+      out_size,
+      "Conflict for %s\n"
+      "File: %s (%s)\n\n"
+      "Local : %s | %llu B\n"
+      "Remote: %s | %llu B\n\n"
+      "%s\n"
+      "Recommended action: %s.\n\n"
+      "%s%s\n\n"
+      "Press %s to %s.\n"
+      "Press %s to %s.",
+      title_display,
+      filename_display,
+      (local_item != NULL) ? sync_slot_str(local_item->slot) : "unknown",
+      local_timestamp,
+      (unsigned long long)((local_item != NULL) ? local_item->size_bytes : 0U),
+      remote_timestamp,
+      (unsigned long long)((remote_item != NULL) ? remote_item->size_bytes : 0U),
+      summary_display,
+      action_display,
+      dry_run ? "Dry-run: approving this will only plan the action.\n\n" : "",
+      question_display,
+      ui_dialog_confirm_button_label(),
+      action_display,
+      ui_dialog_decline_button_label(),
+      decline_display);
+}
+
+/*
+ * Resolves one conflict through either automatic recommended-action handling
+ * or blocking UI prompts, depending on the current sync settings.
+ */
+static SyncActionType ui_sync_resolve_conflict_callback(
+    SyncActionRecord *candidate_action,
+    const SyncSaveDescriptor *local_item,
+    const SyncSaveDescriptor *remote_item,
+    void *user_data) {
+  UiSyncConflictResolutionContext *context = (UiSyncConflictResolutionContext *)user_data;
+  SyncConflictType conflict =
+      (candidate_action != NULL) ? candidate_action->conflict : conflict_resolver_detect(local_item, remote_item, NULL);
+  SyncActionType recommended_action = conflict_resolver_default_action(conflict);
+  const char *filename = (candidate_action != NULL) && has_text(candidate_action->filename)
+                             ? candidate_action->filename
+                             : (((local_item != NULL) && has_text(local_item->filename)) ? local_item->filename : "(unknown)");
+
+  if (recommended_action == SYNC_ACTION_NONE) {
+    recommended_action = SYNC_ACTION_SKIP;
+  }
+
+  if ((context == NULL) || (context->state == NULL)) {
+    return recommended_action;
+  }
+
+  UiAppState *state = context->state;
+  if (context->auto_apply_conflicts) {
+    if (candidate_action != NULL) {
+      snprintf(
+          candidate_action->reason,
+          sizeof(candidate_action->reason),
+          "auto-applied recommended action=%s (conflict=%s)",
+          sync_action_type_str(recommended_action),
+          sync_conflict_type_str(conflict));
+    }
+    ui_sync_log_write(
+        APP_LOG_LEVEL_INFO,
+        "Conflict auto-applied: file=%s conflict=%s action=%s trigger=%s",
+        filename,
+        sync_conflict_type_str(conflict),
+        sync_action_type_str(recommended_action),
+        (context->trigger == UI_SYNC_TRIGGER_AUTOMATIC) ? "automatic" : "manual");
+    return recommended_action;
+  }
+
+  if (context->trigger == UI_SYNC_TRIGGER_AUTOMATIC) {
+    if (candidate_action != NULL) {
+      snprintf(
+          candidate_action->reason,
+          sizeof(candidate_action->reason),
+          "auto sync deferred: review conflict manually (recommended=%s, conflict=%s)",
+          sync_action_type_str(recommended_action),
+          sync_conflict_type_str(conflict));
+    }
+    ui_sync_log_write(
+        APP_LOG_LEVEL_WARN,
+        "Auto sync deferred conflict review: file=%s conflict=%s recommended=%s",
+        filename,
+        sync_conflict_type_str(conflict),
+        sync_action_type_str(recommended_action));
+    return SYNC_ACTION_SKIP;
+  }
+
+  ui_sync_feedback_set_message(&state->sync_feedback, "Waiting for conflict confirmation...");
+  ui_sync_render_live(state);
+
+  ui_sync_log_write(
+      APP_LOG_LEVEL_WARN,
+      "Conflict review required: file=%s conflict=%s recommended=%s confirm=%s decline=%s",
+      filename,
+      sync_conflict_type_str(conflict),
+      sync_action_type_str(recommended_action),
+      ui_dialog_confirm_button_label(),
+      ui_dialog_decline_button_label());
+
+  char prompt[UI_DIALOG_MSG_MAX_LEN];
+  int response = 0;
+
+  if (conflict == SYNC_CONFLICT_SAME_TIMESTAMP_DIFFERENT_CONTENT) {
+    ui_build_conflict_prompt_message(
+        prompt,
+        sizeof(prompt),
+        local_item,
+        remote_item,
+        conflict,
+        SYNC_ACTION_UPLOAD,
+        context->dry_run,
+        "Upload the local save to RomM?",
+        "show the download option");
+    response = ui_dialog_confirm(prompt);
+    if (response < 0) {
+      if (candidate_action != NULL) {
+        snprintf(candidate_action->reason, sizeof(candidate_action->reason), "conflict dialog failed during upload choice");
+      }
+      ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Conflict dialog failed for file=%s", filename);
+      return SYNC_ACTION_SKIP;
+    }
+    if (response == 1) {
+      ui_sync_log_write(
+          APP_LOG_LEVEL_INFO,
+          "%s approved: file=%s action=upload",
+          context->dry_run ? "Dry-run conflict plan" : "Conflict action",
+          filename);
+      return SYNC_ACTION_UPLOAD;
+    }
+
+    ui_build_conflict_prompt_message(
+        prompt,
+        sizeof(prompt),
+        local_item,
+        remote_item,
+        conflict,
+        SYNC_ACTION_DOWNLOAD,
+        context->dry_run,
+        "Download the remote save to this Vita?",
+        "skip this save");
+    response = ui_dialog_confirm(prompt);
+    if (response < 0) {
+      if (candidate_action != NULL) {
+        snprintf(candidate_action->reason, sizeof(candidate_action->reason), "conflict dialog failed during download choice");
+      }
+      ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Conflict dialog failed for file=%s", filename);
+      return SYNC_ACTION_SKIP;
+    }
+    if (response == 1) {
+      ui_sync_log_write(
+          APP_LOG_LEVEL_INFO,
+          "%s approved: file=%s action=download",
+          context->dry_run ? "Dry-run conflict plan" : "Conflict action",
+          filename);
+      return SYNC_ACTION_DOWNLOAD;
+    }
+
+    if (candidate_action != NULL) {
+      snprintf(
+          candidate_action->reason,
+          sizeof(candidate_action->reason),
+          "user skipped after reviewing same-content conflict");
+    }
+    ui_sync_log_write(
+        APP_LOG_LEVEL_INFO,
+        "Conflict skipped by user: file=%s conflict=%s alternatives=upload,download",
+        filename,
+        sync_conflict_type_str(conflict));
+    return SYNC_ACTION_SKIP;
+  }
+
+  ui_build_conflict_prompt_message(
+      prompt,
+      sizeof(prompt),
+      local_item,
+      remote_item,
+      conflict,
+      recommended_action,
+      context->dry_run,
+      "Apply the recommended action?",
+      "skip this save");
+  response = ui_dialog_confirm(prompt);
+  if (response < 0) {
+    if (candidate_action != NULL) {
+      snprintf(candidate_action->reason, sizeof(candidate_action->reason), "conflict dialog failed");
+    }
+    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Conflict dialog failed for file=%s", filename);
+    return SYNC_ACTION_SKIP;
+  }
+
+  if (response == 1) {
+    ui_sync_log_write(
+        APP_LOG_LEVEL_INFO,
+        "%s approved: file=%s action=%s",
+        context->dry_run ? "Dry-run conflict plan" : "Conflict action",
+        filename,
+        sync_action_type_str(recommended_action));
+    return recommended_action;
+  }
+
+  if (candidate_action != NULL) {
+    snprintf(
+        candidate_action->reason,
+        sizeof(candidate_action->reason),
+        "user skipped after reviewing conflict=%s",
+        sync_conflict_type_str(conflict));
+  }
+  ui_sync_log_write(
+      APP_LOG_LEVEL_INFO,
+      "Conflict skipped by user: file=%s conflict=%s recommended=%s",
+      filename,
+      sync_conflict_type_str(conflict),
+      sync_action_type_str(recommended_action));
+  return SYNC_ACTION_SKIP;
 }
 
 /*
@@ -1970,28 +3289,18 @@ static void ui_present_completed_manual_sync(UiAppState *state) {
     return;
   }
 
-  unsigned int previous_buttons = 0U;
+  unsigned int previous_buttons = ui_poll_buttons();
+  state->sync_feedback.modal_scroll_hold_direction = 0;
+  state->sync_feedback.modal_scroll_hold_frames = 0;
+  ui_sync_modal_reset_touch(&state->sync_feedback);
   for (;;) {
     ui_pump_app_events();
+    ui_sync_modal_handle_input(state);
     ui_render_sync_modal(state);
 
     unsigned int pressed = ui_poll_pressed(&previous_buttons);
-    if ((pressed & SCE_CTRL_UP) && (state->sync_feedback.modal_log_scroll > 0)) {
-      state->sync_feedback.modal_auto_scroll = 0;
-      state->sync_feedback.modal_log_scroll -= 1;
-    }
-    if (pressed & SCE_CTRL_DOWN) {
-      int total_logs = app_log_history_count();
-      int max_scroll = total_logs - UI_SYNC_MODAL_VISIBLE_LINES;
-      if (max_scroll < 0) {
-        max_scroll = 0;
-      }
-      if (state->sync_feedback.modal_log_scroll < max_scroll) {
-        state->sync_feedback.modal_auto_scroll = 0;
-        state->sync_feedback.modal_log_scroll += 1;
-      }
-    }
     if (pressed & (SCE_CTRL_CIRCLE | SCE_CTRL_CROSS | SCE_CTRL_START)) {
+      ui_sync_modal_reset_touch(&state->sync_feedback);
       return;
     }
 
@@ -2054,8 +3363,8 @@ static int ui_run_sync_pipeline(
     return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
   }
   if (!app_config_has_auth(&state->config)) {
-    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync failed: credentials are missing");
-    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: credentials are missing");
+    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync failed: username/password is missing");
+    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: username/password is missing");
     state->sync_feedback.running = 0;
     state->sync_feedback.completed = 1;
     state->sync_feedback.success = 0;
@@ -2065,7 +3374,7 @@ static int ui_run_sync_pipeline(
     return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
   }
   ui_sync_feedback_set_progress(&state->sync_feedback, 1, total_units);
-  ui_sync_log_write(APP_LOG_LEVEL_INFO, "Credentials validated");
+  ui_sync_log_write(APP_LOG_LEVEL_INFO, "Username/password present in configuration");
   ui_sync_render_live(state);
 
   ui_sync_feedback_set_message(&state->sync_feedback, "Ensuring device registration...");
@@ -2099,11 +3408,52 @@ static int ui_run_sync_pipeline(
     return mapped_count;
   }
   ui_sync_log_write(APP_LOG_LEVEL_INFO, "Mapped %d/%d save(s)", mapped_count, work_item_count);
+  int unresolved_count = 0;
+  for (int i = 0; i < work_item_count; ++i) {
+    const SyncSaveDescriptor *item = &work_items[i];
+    if (item->rom_id > 0) {
+      continue;
+    }
+
+    unresolved_count++;
+    ui_sync_log_write(
+        APP_LOG_LEVEL_WARN,
+        "rom_id unresolved: game=%s title=%s file=%s",
+        has_text(item->game_id) ? item->game_id : "(unknown)",
+        has_text(item->title) ? item->title : "(unknown)",
+        has_text(item->filename) ? item->filename : "(unknown)");
+  }
+  if (unresolved_count > 0) {
+    ui_sync_log_write(
+        APP_LOG_LEVEL_ERROR,
+        "Sync aborted: %d save(s) have no rom_id after mapping",
+        unresolved_count);
+    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: unresolved RomM mapping");
+    state->sync_feedback.running = 0;
+    state->sync_feedback.completed = 1;
+    state->sync_feedback.success = 0;
+    state->sync_feedback.sync_status = SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID;
+    ui_sync_feedback_set_progress(&state->sync_feedback, total_units, total_units);
+    ui_sync_render_live(state);
+    return SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID;
+  }
   ui_sync_feedback_set_progress(&state->sync_feedback, 3, total_units);
   ui_sync_render_live(state);
 
+  ui_sync_log_write(
+      APP_LOG_LEVEL_INFO,
+      "Sync options: dry_run=%d auto_apply_conflicts=%d trigger=%s",
+      state->config.sync_dry_run,
+      state->config.sync_auto_apply_conflicts,
+      (trigger == UI_SYNC_TRIGGER_AUTOMATIC) ? "automatic" : "manual");
+
   if (state->config.sync_dry_run) {
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "Dry-run enabled: transfers will not execute");
+  }
+  if (state->config.sync_auto_apply_conflicts) {
+    ui_sync_log_write(
+        APP_LOG_LEVEL_INFO,
+        "Auto-apply conflicts enabled: recommended actions will execute without confirmation");
   }
 
   SyncEngineConfig config;
@@ -2118,6 +3468,16 @@ static int ui_run_sync_pipeline(
   progress_bridge.state = state;
   progress_bridge.base_completed_units = 3;
   progress_bridge.overall_total_units = total_units;
+
+  UiSyncConflictResolutionContext conflict_context;
+  memset(&conflict_context, 0, sizeof(conflict_context));
+  conflict_context.state = state;
+  conflict_context.trigger = trigger;
+  conflict_context.dry_run = state->config.sync_dry_run;
+  conflict_context.auto_apply_conflicts = state->config.sync_auto_apply_conflicts;
+
+  config.resolve_conflict = ui_sync_resolve_conflict_callback;
+  config.resolve_conflict_user_data = &conflict_context;
   config.progress_callback = ui_sync_engine_progress_callback;
   config.progress_user_data = &progress_bridge;
 
@@ -2139,12 +3499,18 @@ static int ui_run_sync_pipeline(
     ui_sync_append_report_logs(&state->sync_report);
     ui_sync_feedback_set_message(&state->sync_feedback, "Sync completed successfully.");
   } else {
+    char failure_message[96];
+    snprintf(
+        failure_message,
+        sizeof(failure_message),
+        "Sync failed: %s.",
+        sync_engine_status_str(sync_status));
     ui_sync_log_write(
         APP_LOG_LEVEL_ERROR,
         "Sync failed: %s (%d)",
         sync_engine_status_str(sync_status),
         sync_status);
-    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed.");
+    ui_sync_feedback_set_message(&state->sync_feedback, failure_message);
   }
 
   ui_sync_render_live(state);
@@ -2293,7 +3659,7 @@ static void ui_run_pending_auto_sync(UiAppState *state) {
   }
 
   if (!app_config_has_server_url(&state->config) || !app_config_has_auth(&state->config)) {
-    ui_set_status(state, "Auto sync skipped: configure RomM URL and credentials first");
+    ui_set_status(state, "Auto sync skipped: configure the RomM URL, username, and password first");
     return;
   }
 
@@ -2460,7 +3826,7 @@ static void ui_edit_config_field(
     char *field,
     size_t field_size,
     unsigned int ime_type,
-    int password_mode,
+    int secret_mode,
     int trim_whitespace) {
   if ((state == NULL) || !has_text(label) || (field == NULL) || (field_size == 0U)) {
     return;
@@ -2469,7 +3835,7 @@ static void ui_edit_config_field(
   char previous_value[UI_EDITOR_BUFFER_LEN];
   snprintf(previous_value, sizeof(previous_value), "%s", field);
 
-  unsigned int textbox_mode = password_mode
+  unsigned int textbox_mode = secret_mode
                                   ? SCE_IME_DIALOG_TEXTBOX_MODE_PASSWORD
                                   : SCE_IME_DIALOG_TEXTBOX_MODE_DEFAULT;
   int edited = ui_edit_text_field(state, label, field, field_size, ime_type, textbox_mode);
@@ -2541,19 +3907,42 @@ static void ui_activate_selection(UiAppState *state) {
     return;
   }
 
-  if (state->selected_index == UI_SELECT_FILE_LOGGING) {
-    state->config.log_file_enabled = state->config.log_file_enabled ? 0 : 1;
-    const char *message = state->config.log_file_enabled
-                              ? "File logging enabled"
-                              : "File logging disabled";
-    int save_status = ui_save_config(state, message);
+  if (state->selected_index == UI_SELECT_DRY_RUN) {
+    int previous_dry_run = state->config.sync_dry_run;
+    state->config.sync_dry_run = state->config.sync_dry_run ? 0 : 1;
+    int save_status = ui_save_config(state, state->config.sync_dry_run ? "Dry-run enabled" : "Dry-run disabled");
+    if (save_status != APP_CONFIG_OK) {
+      state->config.sync_dry_run = previous_dry_run;
+      return;
+    }
+
     if (save_status == APP_CONFIG_OK) {
       app_log_write(
           APP_LOG_LEVEL_INFO,
           "ui",
-          "file logging %s (%s)",
-          state->config.log_file_enabled ? "enabled" : "disabled",
-          APP_RUNTIME_LOG_FILE_PATH);
+          "dry-run %s from the home screen",
+          state->config.sync_dry_run ? "enabled" : "disabled");
+    }
+    return;
+  }
+
+  if (state->selected_index == UI_SELECT_AUTO_APPLY_CONFLICTS) {
+    int previous_auto_apply_conflicts = state->config.sync_auto_apply_conflicts;
+    state->config.sync_auto_apply_conflicts = state->config.sync_auto_apply_conflicts ? 0 : 1;
+    int save_status = ui_save_config(
+        state,
+        state->config.sync_auto_apply_conflicts ? "Auto-apply conflicts enabled" : "Auto-apply conflicts disabled");
+    if (save_status != APP_CONFIG_OK) {
+      state->config.sync_auto_apply_conflicts = previous_auto_apply_conflicts;
+      return;
+    }
+
+    if (save_status == APP_CONFIG_OK) {
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "ui",
+          "auto-apply conflicts %s from the home screen",
+          state->config.sync_auto_apply_conflicts ? "enabled" : "disabled");
     }
     return;
   }
@@ -2642,7 +4031,7 @@ static void ui_initialize_state(UiAppState *state) {
 
   if (state->config_status == APP_CONFIG_ERR_NOT_FOUND) {
     app_log_write(APP_LOG_LEVEL_WARN, "main", "settings.ini not found, using defaults");
-    ui_set_status(state, "Connection settings not found. Enter the server, username, and password.");
+    ui_set_status(state, "Connection settings not found. Enter the server URL, username, and password.");
   } else if (state->config_status == APP_CONFIG_OK) {
     ui_set_status(state, "Configuration loaded from %s", APP_CONFIG_DEFAULT_PATH);
   } else {
@@ -2744,6 +4133,7 @@ int main(int argc, char *argv[]) {
     app_log_write(APP_LOG_LEVEL_WARN, "main", "system keyboard runtime unavailable; text editing will be disabled");
   }
   ui_dialog_init();
+  ui_touch_init();
 
   UiAppState *state = &g_app_state;
   ui_initialize_state(state);
@@ -2784,15 +4174,12 @@ int main(int argc, char *argv[]) {
     if (pressed & SCE_CTRL_RIGHT) {
       ui_move_selection_direction(state, UI_NAV_RIGHT);
     }
-    if (pressed & SCE_CTRL_SQUARE) {
-      state->sync_feedback.persistent_logs_expanded = !state->sync_feedback.persistent_logs_expanded;
-    }
     if (state->selected_index >= UI_SELECT_GAME_BASE) {
       state->active_game_index = state->selected_index - UI_SELECT_GAME_BASE;
     }
     if (pressed & SCE_CTRL_CROSS) {
       ui_activate_selection(state);
-      previous_buttons = 0U;
+      previous_buttons = ui_poll_buttons();
     }
 
     sceKernelDelayThread(16 * 1000);
@@ -2800,6 +4187,7 @@ int main(int argc, char *argv[]) {
 
   ui_render_exit_screen();
   sceKernelDelayThread(400 * 1000);
+  ui_touch_term();
   ui_dialog_runtime_term();
   ui_renderer_term();
   return 0;

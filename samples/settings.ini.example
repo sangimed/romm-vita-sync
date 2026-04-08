@@ -1,14 +1,14 @@
 ; romm-vita-sync configuration example
 ; Copy this file to: ux0:data/romm-vita-sync/settings.ini
-; SECURITY NOTICE: url/username/password/token are currently stored as plain text (no encryption).
+; SECURITY NOTICE: url/username/password are currently stored as plain text (no encryption).
 
 [RomM]
 ; Base URL of your RomM instance (without trailing slash preferred)
-url = https://romm.example.com
-; Use either token OR username/password
-token =
+url =
 username =
 password =
+platform = psx
+emulator = pcsx_rearmed
 verify_tls = true
 timeout_seconds = 30
 
@@ -26,7 +26,9 @@ state_store_path = ux0:data/romm-vita-sync/sync_state.tsv
 backup_directory = ux0:data/romm-vita-sync/backups
 ; Keep true for safe first runs, set false to execute transfers
 dry_run = true
-; Optional automatic full sync at app startup (runs in background panel, no modal)
+; When true, recommended conflict actions are applied automatically without prompts
+auto_apply_conflicts = false
+; Optional automatic full sync at app startup (runs without opening the manual sync modal)
 auto_sync_on_startup = false
 
 [Log]

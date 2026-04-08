@@ -5,6 +5,7 @@
 *.vpk
 *.sfo
 build
+.build-wsl2
 build-tools/
 *.VMP
 *.vmp

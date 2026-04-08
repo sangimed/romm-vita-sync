@@ -18,6 +18,7 @@ FTP_REMOTE_DIR=""
 CONFIGURATION="$DEFAULT_CONFIGURATION"
 CONFIG_FILE="$SCRIPT_DIR/build-and-upload-vpk.local.env"
 BUILD_DIR="$REPO_ROOT/build"
+FALLBACK_BUILD_DIR="$REPO_ROOT/.build-wsl2"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -98,6 +99,27 @@ fi
 [ -z "$FTP_REMOTE_DIR" ] && FTP_REMOTE_DIR="$DEFAULT_FTP_REMOTE_DIR"
 
 FTP_REMOTE_DIR=$(printf '%s' "$FTP_REMOTE_DIR" | sed -e 's:/*$::')
+
+cmake_cache="$BUILD_DIR/CMakeCache.txt"
+if [ -f "$cmake_cache" ]; then
+  cached_build_dir=$(sed -n 's/^# For build in directory: //p' "$cmake_cache" | head -n 1)
+  cached_source_dir=$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$cmake_cache" | head -n 1)
+
+  if [ "$cached_build_dir" != "$BUILD_DIR" ] || [ "$cached_source_dir" != "$REPO_ROOT" ]; then
+    echo "==> Stale CMake cache detected"
+    echo "    - Cached build dir: ${cached_build_dir:-<unknown>}"
+    echo "    - Cached source dir: ${cached_source_dir:-<unknown>}"
+    echo "    - Expected build dir: $BUILD_DIR"
+    echo "    - Expected source dir: $REPO_ROOT"
+    echo "==> Removing $BUILD_DIR to regenerate CMake files for the current environment"
+
+    if ! rm -rf "$BUILD_DIR" 2>/dev/null; then
+      echo "==> Could not remove $BUILD_DIR (likely due to ownership mismatch)." >&2
+      echo "==> Falling back to a user-owned build directory: $FALLBACK_BUILD_DIR"
+      BUILD_DIR="$FALLBACK_BUILD_DIR"
+    fi
+  fi
+fi
 
 echo "==> Configure CMake"
 cmake -S "$REPO_ROOT" -B "$BUILD_DIR"
