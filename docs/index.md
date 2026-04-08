@@ -54,7 +54,7 @@ Current integration status:
 - real HTTP device registration is implemented (`POST /api/devices`)
 - upload/download conversion logic is integrated in `SyncEngine`
 - real HTTP save transfer callbacks are wired (`list/upload/download`)
-- local Vita saves are now mapped to RomM `rom_id` by resolving the platform via `/api/platforms`, then querying `/api/roms` with targeted `search_term` requests only
+- local Vita saves are now mapped to RomM `rom_id` by trying `/api/platforms` first, then querying `/api/roms` with targeted `search_term` requests using `GAME_ID` first and `title` as fallback
 
 
 ## Execution Model (Version 1)
@@ -657,10 +657,11 @@ RomM device registration is now wired to the real HTTP endpoint (`POST /api/devi
 Save listing/upload/download are now wired to real HTTP callbacks in `main.c` (`/api/saves` endpoints).
 Local Vita items are resolved to server `rom_id` before sync decisions by:
 
-- resolving the configured platform through `/api/platforms`
-- trying a targeted RomM lookup first through `/api/roms?platform_ids=...&search_term=...`
+- resolving the configured platform through `/api/platforms` when available, otherwise falling back to the legacy RomM `platform=` query
+- trying a targeted RomM lookup first through `/api/roms` with `search_term`, using `platform_ids=...` when a numeric platform id is available and `platform=...` otherwise
+- preferring local `GAME_ID` as the primary search term, then retrying with the local title when needed
 - matching candidates by serial metadata first, then title (`fs_name_no_tags`, `name`, `fs_name_no_ext`), then filename patterns
-- surfacing an explicit user-facing warning when the targeted lookup returns no candidate
+- surfacing unresolved mappings to the UI when no targeted candidate set yields a unique `rom_id`
 
 Conversion is now wired in the app sync flow:
 
@@ -669,14 +670,18 @@ Conversion is now wired in the app sync flow:
 
 ## End-to-End Sync Sequence Diagram
 
+![RomM Vita Sync end-to-end sequence](assets/diagrams/romm-vita-sync-end-to-end-sync-flow.png)
+
 Current Rom ID mapping flow:
 
-1. The app resolves the configured RomM platform through `/api/platforms`.
-2. It first narrows candidates with `/api/roms?platform_ids=...&search_term=...`.
-3. Each local save is matched by serial metadata first.
-4. If serial matching is not unique, the matcher tries title-based candidates in this order: `fs_name_no_tags`, `name`, `fs_name_no_ext`.
-5. If title matching is still not unique, the matcher falls back to filename-pattern scoring inside the targeted candidate set.
-6. If the targeted lookup returns no candidate, the UI reports that explicitly instead of loading the full platform catalog.
+1. The app tries to resolve the configured RomM platform through `/api/platforms`.
+2. If `/api/platforms` is unavailable or returns an unsupported response, Rom ID lookup falls back to the legacy `/api/roms?...&platform=...` query path.
+3. For each local save, the app first narrows candidates with a targeted `/api/roms?...&search_term=...` request using the local `GAME_ID` when present.
+4. If the targeted `GAME_ID` search does not yield a unique match, the app retries the targeted lookup with the local title when available.
+5. Each targeted candidate set is matched by serial metadata first.
+6. If serial matching is not unique, the matcher tries title-based candidates in this order: `fs_name_no_tags`, `name`, `fs_name_no_ext`.
+7. If title matching is still not unique, the matcher falls back to filename-pattern scoring inside the targeted candidate set.
+8. If no targeted candidate set yields a unique match, the UI reports the save as unresolved and aborts sync before transfer decisions.
 
 ## Contributing
 

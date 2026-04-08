@@ -35,25 +35,37 @@ group Rom ID mapping
   UI -> HTTP: romm_http_resolve_rom_ids(config, items)
 
   HTTP -> API: GET /api/platforms
-  API --> HTTP: platform[]
-  HTTP -> HTTP: resolve configured platform_id
+  alt /api/platforms available
+    API --> HTTP: platform[]
+    HTTP -> HTTP: resolve configured platform_id
+  else /api/platforms unavailable or unsupported
+    API --> HTTP: non-200 or unsupported body
+    HTTP -> HTTP: keep platform_id=0 and use legacy platform filter
+  end
 
   loop each local item without rom_id
-    HTTP -> API: GET /api/roms?limit&offset&platform_ids=...&search_term=...
-    API --> HTTP: matching items[] + total
+    HTTP -> HTTP: build primary search_term from local GAME_ID
+    HTTP -> API: GET /api/roms?...&(platform_ids or platform)=...&search_term=GAME_ID
+    API --> HTTP: targeted items[] + total
     HTTP -> HTTP: parse targeted candidates
-    alt no targeted candidates
-      HTTP --> UI: unresolved mapping reason
-    else targeted candidates found
+    alt unique rom_id not found and title available
+      HTTP -> HTTP: build fallback search_term from local title
+      HTTP -> API: GET /api/roms?...&(platform_ids or platform)=...&search_term=title
+      API --> HTTP: targeted items[] + total
+      HTTP -> HTTP: parse fallback targeted candidates
+    end
+    alt any targeted candidates found
       HTTP -> GM: game_matcher_resolve_rom_id(...)
-      GM -> GM: Stage 1 serial/game_id
-      alt no unique match
+      GM -> GM: Stage 1 serial/game_id metadata
+      alt no unique serial match
         GM -> GM: Stage 2 title vs fs_name_no_tags/name/fs_name_no_ext
       end
       alt still no unique match
         GM -> GM: Stage 3 filename patterns
       end
       GM --> HTTP: rom_id, ambiguous, or no-match
+    else no targeted candidates
+      HTTP --> UI: unresolved mapping reason
     end
   end
 

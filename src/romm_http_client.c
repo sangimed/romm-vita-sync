@@ -433,25 +433,14 @@ static const char *romm_save_emulator(const AppConfig *config) {
 }
 
 /*
- * Builds a compact search term from a local title or GAME_ID for /api/roms.
+ * Builds a compact search term from one local text source for /api/roms.
  * Non-alnum separators collapse to single spaces so symbols like TM do not block matches.
  */
-static int build_rom_search_term(
-    const SyncSaveDescriptor *local_item,
+static int build_compact_search_term(
+    const char *source,
     char *out_term,
     size_t out_term_size) {
-  if ((local_item == NULL) || (out_term == NULL) || (out_term_size == 0U)) {
-    return -1;
-  }
-
-  out_term[0] = '\0';
-
-  const char *source = NULL;
-  if (has_text(local_item->title)) {
-    source = local_item->title;
-  } else if (has_text(local_item->game_id)) {
-    source = local_item->game_id;
-  } else {
+  if (!has_text(source) || (out_term == NULL) || (out_term_size == 0U)) {
     return -1;
   }
 
@@ -479,6 +468,41 @@ static int build_rom_search_term(
   out_term[out] = '\0';
 
   return (out >= 4U) ? 0 : -1;
+}
+
+/*
+ * Builds the primary /api/roms search term.
+ * Prefer GAME_ID because it is usually the most stable identifier across localized titles.
+ */
+static int build_rom_search_term(
+    const SyncSaveDescriptor *local_item,
+    char *out_term,
+    size_t out_term_size) {
+  if ((local_item == NULL) || (out_term == NULL) || (out_term_size == 0U)) {
+    return -1;
+  }
+
+  out_term[0] = '\0';
+  if (build_compact_search_term(local_item->game_id, out_term, out_term_size) == 0) {
+    return 0;
+  }
+
+  return build_compact_search_term(local_item->title, out_term, out_term_size);
+}
+
+/*
+ * Builds a secondary title-based search term when GAME_ID pre-filtering misses localized entries.
+ */
+static int build_rom_title_search_term(
+    const SyncSaveDescriptor *local_item,
+    char *out_term,
+    size_t out_term_size) {
+  if ((local_item == NULL) || (out_term == NULL) || (out_term_size == 0U)) {
+    return -1;
+  }
+
+  out_term[0] = '\0';
+  return build_compact_search_term(local_item->title, out_term, out_term_size);
 }
 
 /*
@@ -2005,7 +2029,8 @@ static int parse_platform_id_from_list(
 
 /*
  * Looks up the numeric RomM platform id used by current API versions.
- * Returns ROMM_CLIENT_OK on success, with out_platform_id set to 0 when no match exists.
+ * Returns ROMM_CLIENT_OK on success, with out_platform_id set to 0 when no match exists
+ * or when /api/platforms is unavailable and the legacy rom query should be used instead.
  */
 static int resolve_platform_id(
     const AppConfig *config,
@@ -2038,16 +2063,23 @@ static int resolve_platform_id(
     return ROMM_CLIENT_ERR_AUTH;
   }
   if (status_code != 200) {
-    app_log_write(APP_LOG_LEVEL_WARN, "http", "platform lookup failed status=%d", status_code);
+    app_log_write(
+        APP_LOG_LEVEL_WARN,
+        "http",
+        "platform lookup failed status=%d; falling back to legacy rom query",
+        status_code);
     free(body);
-    return ROMM_CLIENT_ERR_NETWORK;
+    return ROMM_CLIENT_OK;
   }
 
   int parse_status = parse_platform_id_from_list(body, platform_slug, out_platform_id);
   free(body);
   if (parse_status < 0) {
-    app_log_write(APP_LOG_LEVEL_WARN, "http", "platform lookup returned unsupported response format");
-    return ROMM_CLIENT_ERR_NETWORK;
+    app_log_write(
+        APP_LOG_LEVEL_WARN,
+        "http",
+        "platform lookup returned unsupported response format; falling back to legacy rom query");
+    return ROMM_CLIENT_OK;
   }
 
   if (*out_platform_id > 0) {
@@ -2469,40 +2501,61 @@ int romm_http_resolve_rom_ids(
 
     char search_term[ROMM_HTTP_MAX_SEARCH_TERM];
     search_term[0] = '\0';
-    if (build_rom_search_term(local_item, search_term, sizeof(search_term)) == 0) {
-      if (!sync_string_ieq(search_term, last_search_term)) {
-        int search_status = fetch_rom_catalog(
-            config,
-            platform_filter,
-            platform_id,
-            search_term,
-            search_catalog,
-            ROMM_HTTP_MAX_SEARCH_ROMS,
-            body,
-            ROMM_HTTP_MAX_BODY_SIZE,
-            &last_search_count);
-        if (search_status < 0) {
-          free(body);
-          free(search_catalog);
-          return search_status;
-        }
-        safe_copy(last_search_term, sizeof(last_search_term), search_term);
-      }
+    char fallback_search_term[ROMM_HTTP_MAX_SEARCH_TERM];
+    fallback_search_term[0] = '\0';
 
-      if (last_search_count > 0) {
-        resolved_rom_id = game_matcher_resolve_rom_id_with_details(
+    const char *search_terms[2];
+    int search_term_count = 0;
+    if (build_rom_search_term(local_item, search_term, sizeof(search_term)) == 0) {
+      search_terms[search_term_count++] = search_term;
+    }
+    if ((build_rom_title_search_term(local_item, fallback_search_term, sizeof(fallback_search_term)) == 0) &&
+        ((search_term_count == 0) || !sync_string_ieq(fallback_search_term, search_term))) {
+      search_terms[search_term_count++] = fallback_search_term;
+    }
+
+    if (search_term_count > 0) {
+      for (int term_index = 0; term_index < search_term_count; ++term_index) {
+        const char *active_search_term = search_terms[term_index];
+        if (!sync_string_ieq(active_search_term, last_search_term)) {
+          int search_status = fetch_rom_catalog(
+              config,
+              platform_filter,
+              platform_id,
+              active_search_term,
+              search_catalog,
+              ROMM_HTTP_MAX_SEARCH_ROMS,
+              body,
+              ROMM_HTTP_MAX_BODY_SIZE,
+              &last_search_count);
+          if (search_status < 0) {
+            free(body);
+            free(search_catalog);
+            return search_status;
+          }
+          safe_copy(last_search_term, sizeof(last_search_term), active_search_term);
+        }
+
+        if (last_search_count <= 0) {
+          continue;
+        }
+
+        GameMatcherResolution candidate_resolution;
+        int candidate_rom_id = game_matcher_resolve_rom_id_with_details(
             local_item,
             search_catalog,
             last_search_count,
-            &resolution);
-      } else {
-        app_log_write(
-            APP_LOG_LEVEL_WARN,
-            "http",
-            "no RomM candidates found for game=%s title=%s term=%s",
-            local_item->game_id,
-            local_item->title,
-            search_term);
+            &candidate_resolution);
+        if (candidate_rom_id > 0) {
+          resolved_rom_id = candidate_rom_id;
+          resolution = candidate_resolution;
+          break;
+        }
+        if ((candidate_rom_id == GAME_MATCHER_AMBIGUOUS) &&
+            (resolved_rom_id != GAME_MATCHER_AMBIGUOUS)) {
+          resolved_rom_id = candidate_rom_id;
+          resolution = candidate_resolution;
+        }
       }
     } else {
       app_log_write(
