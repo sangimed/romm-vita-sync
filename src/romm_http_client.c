@@ -2627,7 +2627,9 @@ static int remote_candidate_is_newer(
 }
 
 /*
- * Searches existing remote entry with same identity key.
+ * Searches the retained remote entry bucket for one RomM game.
+ * Remote selection intentionally ignores slot so the newest server-side save
+ * by updated_at wins for the whole rom_id.
  */
 static int find_existing_remote_index(
     const SyncSaveDescriptor *items,
@@ -2640,8 +2642,7 @@ static int find_existing_remote_index(
   for (int i = 0; i < count; ++i) {
     const SyncSaveDescriptor *entry = &items[i];
     if ((entry->rom_id > 0) && (candidate->rom_id > 0) &&
-        (entry->rom_id == candidate->rom_id) &&
-        (entry->slot == candidate->slot)) {
+        (entry->rom_id == candidate->rom_id)) {
       return i;
     }
   }

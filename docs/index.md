@@ -552,6 +552,7 @@ Candidate selection rule:
 
 - when both `SCEVMC0.VMP` and `SCEVMC1.VMP` exist for the same game, only the local card with the newest modification timestamp is eligible for sync
 - when both local timestamps are exactly equal, the app keeps `SCEVMC0.VMP`, skips `SCEVMC1.VMP`, and surfaces a warning to the user before continuing
+- remote save listing keeps the single newest RomM save per `rom_id` using `updated_at`, regardless of remote slot metadata
 - if the remote/server save is newer and a download is selected, the app overwrites that already-selected local card; it does not switch to the other local slot during the restore path
 - backup behavior is unchanged: backups are still mandatory before any local overwrite during download/restore
 - sync logs now include the compared timestamps for each detected local save, each selected PS1 candidate, the matched remote candidate, and the remote save chosen for download so `remote_newer` / `local_newer` decisions can be inspected directly
@@ -583,7 +584,7 @@ sync_engine_run(local_items):
 
   state_store = load_sync_state_tsv()
   active_device_id = config.device_id or state_store.device_id
-  remote_items = list_remote_saves_filtered_by_rom_id(selected_rom_ids)
+  remote_items = list_remote_saves_filtered_by_rom_id_keep_latest_updated_at_per_rom(selected_rom_ids)
 
   for each local_item in local_items:
     if local_item is not selected by selected_mask:
@@ -592,6 +593,7 @@ sync_engine_run(local_items):
 
     state_entry = find_state_entry(local_item.game_id, local_item.filename, local_item.slot)
     remote_item = find_best_matching_remote(local_item, remote_items)
+    # exact rom+slot+filename first, then compatible slot, then rom_id only
 
     if remote_item does not exist:
       if local_item.size and local_item.timestamp match state_entry:
@@ -688,7 +690,7 @@ Current implementation modules:
 - `src/scan_to_sync_adapter.c`: converts scanner output into synchronization descriptors
 - `src/sync_types.h` and `src/sync_types.c`: define shared sync data structures and helpers such as slot and timestamp parsing
 - `src/game_matcher.c`: resolves local saves to RomM `rom_id` candidates using serials, titles, and filename patterns
-- `src/romm_http_client.c`: handles device registration, platform lookup, RomM ROM lookup, remote save listing, uploads, and downloads
+- `src/romm_http_client.c`: handles device registration, platform lookup, RomM ROM lookup, remote save listing (newest `updated_at` per `rom_id`), uploads, and downloads
 - `src/conflict_resolver.c`: compares local and remote saves and classifies conflicts
 - `src/backup_manager.c`: creates local backups before overwrite operations
 - `src/sync_state_store.c`: persists sync state used to track prior uploads and origins

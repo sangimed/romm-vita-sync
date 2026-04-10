@@ -721,8 +721,10 @@ static int resolve_rom_id_by_filename_patterns(
 }
 
 /*
- * Finds the best remote candidate using stable identity rules:
- * exact rom+slot+filename, then rom+slot compatibility.
+ * Finds the best retained remote candidate using stable identity rules:
+ * exact rom+slot+filename, then rom+slot compatibility, then rom only.
+ * The final rom-only fallback exists because remote save listing already keeps
+ * only the newest server save per rom_id regardless of slot.
  */
 int game_matcher_find_remote_index(
     const SyncSaveDescriptor *local_item,
@@ -746,6 +748,13 @@ int game_matcher_find_remote_index(
   for (int i = 0; i < remote_count; ++i) {
     const SyncSaveDescriptor *candidate = &remote_items[i];
     if (rom_id_matches(local_item, candidate) && slot_is_compatible(local_item->slot, candidate->slot)) {
+      return i;
+    }
+  }
+
+  for (int i = 0; i < remote_count; ++i) {
+    const SyncSaveDescriptor *candidate = &remote_items[i];
+    if (rom_id_matches(local_item, candidate)) {
       return i;
     }
   }
