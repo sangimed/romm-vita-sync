@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <psp2/libssl.h>
 #include <psp2/net/http.h>
@@ -696,6 +697,60 @@ static const char *slot_to_query_value(SyncSlot slot) {
 }
 
 /*
+ * Builds one local-time timestamp token used in uploaded SRM filenames.
+ * Local scan metadata is normalized on a UTC-like basis, so convert it back to
+ * the device local timezone before exposing it in the human-readable filename.
+ */
+static void build_upload_timestamp_token(
+    const SyncSaveDescriptor *local_item,
+    char *out_token,
+    size_t out_size) {
+  if ((out_token == NULL) || (out_size == 0U)) {
+    return;
+  }
+
+  out_token[0] = '\0';
+  if (local_item == NULL) {
+    return;
+  }
+
+  if (local_item->timestamp_unix > 0) {
+    time_t raw = (time_t)local_item->timestamp_unix;
+    struct tm *local = localtime(&raw);
+    if (local != NULL) {
+      snprintf(
+          out_token,
+          out_size,
+          "%04d%02d%02d-%02d%02d%02d",
+          local->tm_year + 1900,
+          local->tm_mon + 1,
+          local->tm_mday,
+          local->tm_hour,
+          local->tm_min,
+          local->tm_sec);
+      return;
+    }
+  }
+
+  if (strlen(local_item->timestamp_text) >= 19U) {
+    const char *text = local_item->timestamp_text;
+    if ((text[4] == '-') && (text[7] == '-') && (text[10] == ' ') &&
+        (text[13] == ':') && (text[16] == ':')) {
+      snprintf(
+          out_token,
+          out_size,
+          "%.4s%.2s%.2s-%.2s%.2s%.2s",
+          text + 0,
+          text + 5,
+          text + 8,
+          text + 11,
+          text + 14,
+          text + 17);
+    }
+  }
+}
+
+/*
  * Builds deterministic upload filename to keep remote entries readable.
  */
 static void build_upload_filename(const SyncSaveDescriptor *local_item, char *out_filename, size_t out_size) {
@@ -723,23 +778,7 @@ static void build_upload_filename(const SyncSaveDescriptor *local_item, char *ou
   }
 
   char timestamp_token[32];
-  timestamp_token[0] = '\0';
-  if (strlen(local_item->timestamp_text) >= 19U) {
-    const char *text = local_item->timestamp_text;
-    if ((text[4] == '-') && (text[7] == '-') && (text[10] == ' ') &&
-        (text[13] == ':') && (text[16] == ':')) {
-      snprintf(
-          timestamp_token,
-          sizeof(timestamp_token),
-          "%.4s%.2s%.2s-%.2s%.2s%.2s",
-          text + 0,
-          text + 5,
-          text + 8,
-          text + 11,
-          text + 14,
-          text + 17);
-    }
-  }
+  build_upload_timestamp_token(local_item, timestamp_token, sizeof(timestamp_token));
 
   if (has_text(timestamp_token)) {
     snprintf(out_filename, out_size, "%s_%s_%s.srm", normalized_game_id, slot, timestamp_token);
