@@ -18,3 +18,6 @@ tools/build-and-upload-vpk.local.env
 # Track reference VMP templates included for SRM->VMP conversions
 !samples/vmp-templates/*.VMP
 !samples/vmp-templates/*.vmp
+
+# Local context
+local_context/

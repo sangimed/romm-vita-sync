@@ -21,9 +21,13 @@ int romm_http_register_device_callback(
 /*
  * Real RomM save-list callback backed by GET /api/saves.
  * context must point to AppConfig.
+ * rom_ids optionally narrows the listing to the current user's saves for the
+ * mapped games required by the current sync batch.
  */
 int romm_http_list_remote_saves_callback(
     void *context,
+    const int *rom_ids,
+    int rom_id_count,
     SyncSaveDescriptor *out_items,
     int max_items);
 

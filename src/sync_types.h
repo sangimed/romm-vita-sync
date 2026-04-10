@@ -35,6 +35,14 @@ typedef enum SyncConflictType {
   SYNC_CONFLICT_SAME_ORIGIN_DEVICE = 4
 } SyncConflictType;
 
+typedef enum SyncLocalSelectionReason {
+  SYNC_LOCAL_SELECTION_NOT_SELECTED = 0,
+  SYNC_LOCAL_SELECTION_ONLY_ITEM = 1,
+  SYNC_LOCAL_SELECTION_LATEST_TIMESTAMP = 2,
+  SYNC_LOCAL_SELECTION_EQUAL_TIMESTAMP_PREFER_SLOT0 = 3,
+  SYNC_LOCAL_SELECTION_DETERMINISTIC_FALLBACK = 4
+} SyncLocalSelectionReason;
+
 typedef struct SyncSaveDescriptor {
   int rom_id;
   int remote_id;
@@ -96,6 +104,21 @@ int sync_string_ieq(const char *lhs, const char *rhs);
 int sync_extract_filename(const char *path, char *out_filename, size_t out_size);
 int sync_slot_from_filename(const char *filename, SyncSlot *out_slot);
 int sync_parse_local_timestamp(const char *timestamp, int64_t *out_timestamp_unix);
+/*
+ * Selects at most one local PS1 save card per game before sync decisions.
+ * The newest local timestamp wins; exact ties prefer slot 0 so behavior stays
+ * deterministic and callers can warn the user about that fallback.
+ * Items without a non-empty game_id are treated as standalone selections.
+ * out_selected_mask[i] is set to non-zero only for items that should continue
+ * through RomM mapping and synchronization.
+ * out_selection_reasons[i] is populated only for selected items.
+ * Returns the number of selected items, or -1 on invalid arguments.
+ */
+int sync_select_latest_local_per_game(
+    const SyncSaveDescriptor *items,
+    int item_count,
+    int *out_selected_mask,
+    SyncLocalSelectionReason *out_selection_reasons);
 const char *sync_slot_str(SyncSlot slot);
 const char *sync_action_type_str(SyncActionType action);
 const char *sync_conflict_type_str(SyncConflictType conflict);

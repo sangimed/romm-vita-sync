@@ -2422,6 +2422,133 @@ static int ui_collect_game_items(
 }
 
 /*
+ * Estimates how many local PS1 cards remain after the latest-card rule is
+ * applied per game. This keeps confirmation copy aligned with actual sync work.
+ */
+static int ui_estimate_ps1_sync_candidate_count(
+    const SyncSaveDescriptor *items,
+    int item_count) {
+  if ((items == NULL) || (item_count <= 0) || (item_count > ROMM_SYNC_MAX_ITEMS)) {
+    return 0;
+  }
+
+  int selected_mask[ROMM_SYNC_MAX_ITEMS];
+  int selected_count = sync_select_latest_local_per_game(
+      items,
+      item_count,
+      selected_mask,
+      NULL);
+  if (selected_count < 0) {
+    return item_count;
+  }
+
+  return selected_count;
+}
+
+/*
+ * Finds the slot 1 peer that lost an equal-timestamp tie against a selected
+ * slot 0 item so the UI can explain the deterministic fallback to the user.
+ */
+static const SyncSaveDescriptor *ui_find_slot1_tie_peer(
+    const SyncSaveDescriptor *items,
+    int item_count,
+    int selected_index) {
+  if ((items == NULL) || (selected_index < 0) || (selected_index >= item_count)) {
+    return NULL;
+  }
+
+  const SyncSaveDescriptor *selected = &items[selected_index];
+  if ((selected->slot != SYNC_SLOT_0) || !has_text(selected->game_id)) {
+    return NULL;
+  }
+
+  for (int i = 0; i < item_count; ++i) {
+    if (i == selected_index) {
+      continue;
+    }
+
+    const SyncSaveDescriptor *candidate = &items[i];
+    if (!has_text(candidate->game_id) ||
+        !sync_string_ieq(candidate->game_id, selected->game_id)) {
+      continue;
+    }
+    if ((candidate->slot != SYNC_SLOT_1) ||
+        (candidate->timestamp_unix != selected->timestamp_unix)) {
+      continue;
+    }
+
+    return candidate;
+  }
+
+  return NULL;
+}
+
+/*
+ * Applies the PS1 latest-card rule to the current work list, logs the outcome
+ * for the user, and compacts the selected items in place for mapping/sync.
+ */
+static int ui_prepare_ps1_sync_candidates(
+    SyncSaveDescriptor *items,
+    int item_count,
+    int *out_warning_count) {
+  if ((items == NULL) || (item_count < 0) || (item_count > ROMM_SYNC_MAX_ITEMS)) {
+    return 0;
+  }
+
+  int selected_mask[ROMM_SYNC_MAX_ITEMS];
+  SyncLocalSelectionReason selection_reasons[ROMM_SYNC_MAX_ITEMS];
+  int selected_count = sync_select_latest_local_per_game(
+      items,
+      item_count,
+      selected_mask,
+      selection_reasons);
+  if (selected_count < 0) {
+    return item_count;
+  }
+
+  if (out_warning_count != NULL) {
+    *out_warning_count = 0;
+  }
+
+  if ((item_count > 0) && (selected_count != item_count)) {
+    ui_sync_log_write(
+        APP_LOG_LEVEL_INFO,
+        "PS1 latest-card rule active: %d sync candidate(s) selected from %d local save card(s)",
+        selected_count,
+        item_count);
+  }
+
+  int write_index = 0;
+  for (int i = 0; i < item_count; ++i) {
+    if (!selected_mask[i]) {
+      continue;
+    }
+
+    if (selection_reasons[i] == SYNC_LOCAL_SELECTION_EQUAL_TIMESTAMP_PREFER_SLOT0) {
+      const SyncSaveDescriptor *slot1_peer = ui_find_slot1_tie_peer(items, item_count, i);
+      if (slot1_peer != NULL) {
+        ui_sync_log_write(
+            APP_LOG_LEVEL_WARN,
+            "Equal local timestamps for %s; defaulting to %s and skipping %s",
+            has_text(items[i].title) ? items[i].title : items[i].game_id,
+            has_text(items[i].filename) ? items[i].filename : items[i].path,
+            has_text(slot1_peer->filename) ? slot1_peer->filename : slot1_peer->path);
+        if (out_warning_count != NULL) {
+          *out_warning_count += 1;
+        }
+      }
+    }
+
+    if (write_index != i) {
+      memmove(&items[write_index], &items[i], sizeof(items[write_index]));
+    }
+    write_index += 1;
+  }
+
+  return write_index;
+}
+
+/*
  * Appends a concise sync summary and action tail to the shared sync logger.
  */
 static void ui_sync_append_report_logs(const SyncRunReport *report) {
@@ -3327,16 +3454,11 @@ static int ui_run_sync_pipeline(
   app_log_clear_history();
   ui_sync_feedback_reset(&state->sync_feedback, trigger, title, context);
 
-  int engine_units = work_item_count + 1;
-  if (engine_units < 1) {
-    engine_units = 1;
-  }
-  int total_units = 3 + engine_units;
-  ui_sync_feedback_set_progress(&state->sync_feedback, 0, total_units);
-  ui_sync_render_live(state);
+  int detected_item_count = work_item_count;
+  int selection_warning_count = 0;
 
   ui_sync_log_write(APP_LOG_LEVEL_INFO, "Scanning local saves...");
-  int preview_count = work_item_count;
+  int preview_count = detected_item_count;
   if (preview_count > 24) {
     preview_count = 24;
   }
@@ -3345,9 +3467,33 @@ static int ui_run_sync_pipeline(
     const char *name = has_text(item->filename) ? item->filename : item->path;
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "Save detected: %s", has_text(name) ? name : "(unknown)");
   }
-  if (work_item_count > preview_count) {
-    ui_sync_log_write(APP_LOG_LEVEL_INFO, "... %d more local save(s) omitted", work_item_count - preview_count);
+  if (detected_item_count > preview_count) {
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "... %d more local save(s) omitted", detected_item_count - preview_count);
   }
+
+  work_item_count = ui_prepare_ps1_sync_candidates(
+      work_items,
+      detected_item_count,
+      &selection_warning_count);
+  if (work_item_count <= 0) {
+    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync failed: no PS1 sync candidate was selected");
+    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: no sync candidate selected");
+    state->sync_feedback.running = 0;
+    state->sync_feedback.completed = 1;
+    state->sync_feedback.success = 0;
+    state->sync_feedback.sync_status = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+    ui_sync_feedback_set_progress(&state->sync_feedback, 1, 1);
+    ui_sync_render_live(state);
+    return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+  }
+
+  int engine_units = work_item_count + 1;
+  if (engine_units < 1) {
+    engine_units = 1;
+  }
+  int total_units = 3 + engine_units;
+  ui_sync_feedback_set_progress(&state->sync_feedback, 0, total_units);
+  ui_sync_render_live(state);
 
   ui_sync_feedback_set_message(&state->sync_feedback, "Validating RomM configuration...");
   ui_sync_render_live(state);
@@ -3497,7 +3643,11 @@ static int ui_run_sync_pipeline(
   if (sync_status == SYNC_ENGINE_OK) {
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "Sync completed");
     ui_sync_append_report_logs(&state->sync_report);
-    ui_sync_feedback_set_message(&state->sync_feedback, "Sync completed successfully.");
+    if (selection_warning_count > 0) {
+      ui_sync_feedback_set_message(&state->sync_feedback, "Sync completed with warnings.");
+    } else {
+      ui_sync_feedback_set_message(&state->sync_feedback, "Sync completed successfully.");
+    }
   } else {
     char failure_message[96];
     snprintf(
@@ -3531,13 +3681,17 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
       game,
       state->sync_work_items,
       (int)(sizeof(state->sync_work_items) / sizeof(state->sync_work_items[0])));
+  int sync_candidate_count = ui_estimate_ps1_sync_candidate_count(
+      state->sync_work_items,
+      game_item_count);
 
   char confirm_msg[256];
   snprintf(
       confirm_msg,
       sizeof(confirm_msg),
-      "Synchronize %s?\n%d save card(s) will be checked.",
+      "Synchronize %s?\n%d sync candidate(s) selected from %d save card(s).",
       has_text(game->title) ? game->title : game->game_id,
+      sync_candidate_count,
       game_item_count);
   if (ui_dialog_confirm(confirm_msg) != 1) {
     ui_set_status(state, "Sync canceled for %s", game->game_id);
@@ -3553,10 +3707,10 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
   snprintf(
       context,
       sizeof(context),
-      "Game: %s (%d save card%s)",
+      "Game: %s (%d sync candidate%s)",
       game->game_id,
-      game_item_count,
-      (game_item_count == 1) ? "" : "s");
+      sync_candidate_count,
+      (sync_candidate_count == 1) ? "" : "s");
 
   int sync_status = ui_run_sync_pipeline(
       state,
@@ -3599,12 +3753,16 @@ static void ui_run_sync_all_saves(UiAppState *state) {
     work_item_count = (int)(sizeof(state->sync_work_items) / sizeof(state->sync_work_items[0]));
   }
   memcpy(state->sync_work_items, state->local_items, sizeof(state->sync_work_items[0]) * (size_t)work_item_count);
+  int sync_candidate_count = ui_estimate_ps1_sync_candidate_count(
+      state->sync_work_items,
+      work_item_count);
 
   char confirm_msg[256];
   snprintf(
       confirm_msg,
       sizeof(confirm_msg),
-      "Synchronize all detected PS1 saves?\n%d save card(s) across %d game(s) will be checked.",
+      "Synchronize all detected PS1 saves?\n%d sync candidate(s) selected from %d save card(s) across %d game(s).",
+      sync_candidate_count,
       work_item_count,
       state->game_count);
   if (ui_dialog_confirm(confirm_msg) != 1) {
@@ -3616,9 +3774,9 @@ static void ui_run_sync_all_saves(UiAppState *state) {
   snprintf(
       context,
       sizeof(context),
-      "All games: %d save card%s across %d game(s)",
-      work_item_count,
-      (work_item_count == 1) ? "" : "s",
+      "All games: %d sync candidate%s across %d game(s)",
+      sync_candidate_count,
+      (sync_candidate_count == 1) ? "" : "s",
       state->game_count);
 
   int sync_status = ui_run_sync_pipeline(
@@ -3668,14 +3826,17 @@ static void ui_run_pending_auto_sync(UiAppState *state) {
     work_item_count = (int)(sizeof(state->sync_work_items) / sizeof(state->sync_work_items[0]));
   }
   memcpy(state->sync_work_items, state->local_items, sizeof(state->sync_work_items[0]) * (size_t)work_item_count);
+  int sync_candidate_count = ui_estimate_ps1_sync_candidate_count(
+      state->sync_work_items,
+      work_item_count);
 
   char context[UI_STATUS_LINE_LEN];
   snprintf(
       context,
       sizeof(context),
-      "Startup auto sync: %d save card%s",
-      work_item_count,
-      (work_item_count == 1) ? "" : "s");
+      "Startup auto sync: %d sync candidate%s",
+      sync_candidate_count,
+      (sync_candidate_count == 1) ? "" : "s");
 
   int sync_status = ui_run_sync_pipeline(
       state,

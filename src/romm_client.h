@@ -14,6 +14,8 @@
 
 typedef int (*RommClientListRemoteSavesFn)(
     void *context,
+    const int *rom_ids,
+    int rom_id_count,
     SyncSaveDescriptor *out_items,
     int max_items);
 
@@ -45,6 +47,8 @@ typedef struct RommClient {
 
 int romm_client_list_remote_saves(
     const RommClient *client,
+    const int *rom_ids,
+    int rom_id_count,
     SyncSaveDescriptor *out_items,
     int max_items);
 

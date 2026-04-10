@@ -46,6 +46,11 @@ void sync_engine_config_init(SyncEngineConfig *config);
 /*
  * Executes one deterministic manual synchronization pass.
  * local_items is the current local inventory.
+ * When several local PS1 cards share the same game_id, only the newest local
+ * card is eligible for transfer decisions; exact ties fall back to slot 0.
+ * Remote save listing is narrowed to the mapped rom_id set required by the
+ * selected local sync candidates for the authenticated RomM user.
+ * Downloads still keep the mandatory backup-before-overwrite behavior.
  * When provided, progress_callback receives real-time stage/item checkpoints.
  */
 int sync_engine_run(

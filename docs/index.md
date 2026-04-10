@@ -44,6 +44,7 @@ Initial milestone includes:
 - Convert `.VMP` → `.SRM`
 - Convert `.SRM` → `.VMP`
 - Compare local vs remote saves
+- Select only the newest local PS1 card per game before sync; exact timestamp ties default to `SCEVMC0.VMP` with a warning
 - Manual synchronization workflow
 - Synchronization is triggered manually from the application UI in this phase, with optional startup auto-sync (`auto_sync_on_startup`)
 - Automatic backup before overwrite
@@ -182,6 +183,32 @@ Supported sections:
 - `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`, `auto_apply_conflicts`, `auto_sync_on_startup`
 - `[Log]`: `level` (`error|warn|info|debug`), `file_enabled` (`true|false`), `scan_verbose` (`true|false`)
 
+### Sync State Store (`sync_state.tsv`)
+
+Default path:
+
+`ux0:data/romm-vita-sync/sync_state.tsv`
+
+Purpose:
+
+- persist local synchronization metadata between runs
+- remember the last known state for one save key (`game_id` + `filename` + `slot`)
+- help the sync engine skip redundant uploads when local size and timestamp are unchanged and no remote match is found
+- track the recorded origin device and the last upload timestamp associated with that save entry
+
+What it stores:
+
+- one format/version header
+- the current `device_id` when available
+- one tab-separated entry per tracked save with `game_id`, `filename`, `slot`, `size_bytes`, `timestamp_unix`, `origin_device`, and `last_upload_unix`
+
+Operational notes:
+
+- if the file is missing, the app treats it as an empty sync state rather than an error
+- deleting `sync_state.tsv` does not delete any save data; it only resets the local sync history
+- after deletion, the next synchronization behaves like a first pass and may re-evaluate or repeat transfers that would otherwise have been skipped
+- this file is metadata only; it is not a backup and it does not contain the actual save payload
+
 Security notice:
 
 - The RomM URL, username, and password are currently stored locally in `settings.ini` **without encryption** (plain text).
@@ -192,6 +219,7 @@ Authentication rule:
 - `username` and `password` are required for all authenticated RomM requests
 - if `[Device].device_id` is empty, startup calls the `RommClient` registration flow and persists the returned `device_id` into `settings.ini`
 - recommended logging for troubleshooting: `level=debug` and keep `scan_verbose=false` first; enable `scan_verbose=true` only when debugging scanner issues
+- at `level=info`, RomM HTTP logs summarize request/response flow for `/api/platforms`, `/api/roms`, `/api/saves`, and `/api/devices`; `level=debug` still keeps the raw response-body details
 - file logging remains available only through `settings.ini`; the home screen no longer exposes a dedicated file logging row
 - when enabled manually, file logging path is fixed to `ux0:data/romm-vita-sync/romm-vita-sync.log` with 3 rotated files max (`.log`, `.log.1`, `.log.2`), 10MB each
 
@@ -425,6 +453,8 @@ Notes:
 - remote saves fetched from RomM are also parsed into `SyncSaveDescriptor`
 - this shared descriptor is the canonical synchronization model currently used by `SyncEngine`
 - `slot` is inferred from `SCEVMC0.VMP` or `SCEVMC1.VMP`
+- before RomM mapping and transfer decisions, local descriptors are grouped per `game_id` and only the newest local card remains eligible for sync
+- when two local cards from the same game share the exact same timestamp, `SCEVMC0.VMP` wins deterministically and the UI shows a warning
 
 ### UI Game Aggregation (`UiGameEntry`)
 
@@ -518,10 +548,18 @@ The `SRM -> VMP` wrappers require a known-good `.VMP` template header. Pass an e
 
 ## PS1 Sync Pipeline
 
+Candidate selection rule:
+
+- when both `SCEVMC0.VMP` and `SCEVMC1.VMP` exist for the same game, only the local card with the newest modification timestamp is eligible for sync
+- when both local timestamps are exactly equal, the app keeps `SCEVMC0.VMP`, skips `SCEVMC1.VMP`, and surfaces a warning to the user before continuing
+- if the remote/server save is newer and a download is selected, the app overwrites that already-selected local card; it does not switch to the other local slot during the restore path
+- backup behavior is unchanged: backups are still mandatory before any local overwrite during download/restore
+
 Upload flow:
 
 ```
 PS Vita save folder
+→ select latest local PS1 card for this game
 → PARAM.SFO parser
 → VMP reader
 → VMP → SRM conversion (in-app, temp file)
@@ -548,6 +586,7 @@ Rules:
 - never overwrite local saves automatically
 - always create backups before restore
 - compare timestamps and hashes when possible
+- warn the user when equal local timestamps force the deterministic `SCEVMC0.VMP` fallback
 - require explicit confirmation before sync operations
 - preserve original `.VMP` files before rebuilding
 
@@ -662,11 +701,14 @@ Local Vita items are resolved to server `rom_id` before sync decisions by:
 - preferring local `GAME_ID` as the primary search term, then retrying with the local title when needed
 - matching candidates by serial metadata first, then title (`fs_name_no_tags`, `name`, `fs_name_no_ext`), then filename patterns
 - surfacing unresolved mappings to the UI when no targeted candidate set yields a unique `rom_id`
+- listing remote saves only for the mapped `rom_id` set required by the current sync batch, scoped to the authenticated RomM user rather than the full save inventory
 
 Conversion is now wired in the app sync flow:
 
 - upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback
 - download path: remote `.SRM` is reconstructed to local `.VMP` and re-signed in-app
+- when one game has both local PS1 cards, only the newest local card is mapped and synchronized; exact timestamp ties keep `SCEVMC0.VMP` and warn the user
+- if the server copy is newer, the download target remains that selected local card, so the restore does not hop from `SCEVMC0.VMP` to `SCEVMC1.VMP` or the reverse
 
 ## End-to-End Sync Sequence Diagram
 

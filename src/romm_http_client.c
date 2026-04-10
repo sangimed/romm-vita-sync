@@ -31,6 +31,7 @@
 #define ROMM_HTTP_MAX_FILENAME 128
 #define ROMM_HTTP_MAX_PLATFORM_SLUG 64
 #define ROMM_HTTP_MAX_SEARCH_TERM ROMM_GAME_TITLE_LEN
+#define ROMM_HTTP_LOG_BODY_PREVIEW 96
 #define ROMM_HTTP_FALLBACK_URL_BUFFER_SIZE (APP_CONFIG_MAX_URL_LEN + 256)
 #define ROMM_HTTP_SSL_TRANSPORT_ERROR 0x80431075u
 #define ROMM_HTTP_TLS_DISABLE_UNSUPPORTED 0x8043506Bu
@@ -367,6 +368,58 @@ static void safe_copy(char *destination, size_t destination_size, const char *so
     return;
   }
   snprintf(destination, destination_size, "%s", source);
+}
+
+/*
+ * Builds one compact single-line preview from a response body for INFO/WARN logs.
+ */
+static void build_body_preview(const char *input, char *output, size_t output_size) {
+  if ((output == NULL) || (output_size == 0U)) {
+    return;
+  }
+
+  output[0] = '\0';
+  if (!has_text(input)) {
+    safe_copy(output, output_size, "(empty)");
+    return;
+  }
+
+  size_t out = 0U;
+  int last_was_space = 1;
+  int truncated = 0;
+  for (const unsigned char *cursor = (const unsigned char *)input; *cursor != '\0'; ++cursor) {
+    unsigned char c = *cursor;
+    if (isspace(c)) {
+      if (!last_was_space && (out > 0U) && ((out + 1U) < output_size)) {
+        output[out++] = ' ';
+        last_was_space = 1;
+      }
+      continue;
+    }
+
+    if ((out + 1U) >= output_size) {
+      truncated = 1;
+      break;
+    }
+
+    output[out++] = (char)c;
+    last_was_space = 0;
+  }
+
+  while ((out > 0U) && (output[out - 1U] == ' ')) {
+    out--;
+  }
+
+  if (truncated && (output_size >= 4U)) {
+    if (out > (output_size - 4U)) {
+      out = output_size - 4U;
+    }
+    output[out++] = '.';
+    output[out++] = '.';
+    output[out++] = '.';
+  }
+
+  output[out] = '\0';
 }
 
 /*
@@ -791,6 +844,28 @@ static int extract_json_scalar_field(
 
   out_value[out] = '\0';
   return 0;
+}
+
+/*
+ * Extracts an integer field from a small JSON payload, quoted or unquoted.
+ */
+static int extract_json_int_field(
+    const char *json,
+    const char *field_name,
+    int *out_value) {
+  if (!has_text(json) || !has_text(field_name) || (out_value == NULL)) {
+    return -1;
+  }
+
+  char scalar[32];
+  if (extract_json_scalar_field(json, field_name, scalar, sizeof(scalar)) == 0) {
+    return parse_int_value(scalar, out_value);
+  }
+  if (extract_json_string_field(json, field_name, scalar, sizeof(scalar)) == 0) {
+    return parse_int_value(scalar, out_value);
+  }
+
+  return -1;
 }
 
 /*
@@ -2053,21 +2128,27 @@ static int resolve_platform_id(
   }
 
   int status_code = 0;
+  app_log_write(APP_LOG_LEVEL_INFO, "http", "request GET /api/platforms slug=%s", platform_slug);
   int transport_status = http_get_text(config, url, &status_code, body, ROMM_HTTP_PLATFORM_BODY_SIZE);
   if (transport_status < 0) {
     free(body);
     return transport_status;
   }
+  app_log_write(APP_LOG_LEVEL_INFO, "http", "response GET /api/platforms status=%d slug=%s", status_code, platform_slug);
   if ((status_code == 401) || (status_code == 403)) {
     free(body);
     return ROMM_CLIENT_ERR_AUTH;
   }
   if (status_code != 200) {
+    char body_preview[ROMM_HTTP_LOG_BODY_PREVIEW];
+    build_body_preview(body, body_preview, sizeof(body_preview));
     app_log_write(
         APP_LOG_LEVEL_WARN,
         "http",
-        "platform lookup failed status=%d; falling back to legacy rom query",
-        status_code);
+        "platform lookup failed status=%d slug=%s body=%s; falling back to legacy rom query",
+        status_code,
+        platform_slug,
+        body_preview);
     free(body);
     return ROMM_CLIENT_OK;
   }
@@ -2211,6 +2292,43 @@ static int fetch_rom_catalog(
     }
 
     int status_code = 0;
+    if (has_text(search_term)) {
+      if (platform_id > 0) {
+        app_log_write(
+            APP_LOG_LEVEL_INFO,
+            "http",
+            "request GET /api/roms offset=%d limit=%d platform_id=%d term=%s",
+            offset,
+            ROMM_HTTP_ROM_PAGE_LIMIT,
+            platform_id,
+            search_term);
+      } else {
+        app_log_write(
+            APP_LOG_LEVEL_INFO,
+            "http",
+            "request GET /api/roms offset=%d limit=%d platform=%s term=%s",
+            offset,
+            ROMM_HTTP_ROM_PAGE_LIMIT,
+            platform_filter,
+            search_term);
+      }
+    } else if (platform_id > 0) {
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "http",
+          "request GET /api/roms offset=%d limit=%d platform_id=%d",
+          offset,
+          ROMM_HTTP_ROM_PAGE_LIMIT,
+          platform_id);
+    } else {
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "http",
+          "request GET /api/roms offset=%d limit=%d platform=%s",
+          offset,
+          ROMM_HTTP_ROM_PAGE_LIMIT,
+          platform_filter);
+    }
     int transport_status = http_get_text(config, url, &status_code, body, body_size);
     if (transport_status < 0) {
       return transport_status;
@@ -2219,21 +2337,25 @@ static int fetch_rom_catalog(
       return ROMM_CLIENT_ERR_AUTH;
     }
     if (status_code != 200) {
+      char body_preview[ROMM_HTTP_LOG_BODY_PREVIEW];
+      build_body_preview(body, body_preview, sizeof(body_preview));
       if (has_text(search_term)) {
         app_log_write(
             APP_LOG_LEVEL_WARN,
             "http",
-            "rom search fetch failed status=%d offset=%d term=%s",
+            "rom search fetch failed status=%d offset=%d term=%s body=%s",
             status_code,
             offset,
-            search_term);
+            search_term,
+            body_preview);
       } else {
         app_log_write(
             APP_LOG_LEVEL_WARN,
             "http",
-            "rom catalog fetch failed status=%d offset=%d",
+            "rom catalog fetch failed status=%d offset=%d body=%s",
             status_code,
-            offset);
+            offset,
+            body_preview);
       }
       return ROMM_CLIENT_ERR_NETWORK;
     }
@@ -2250,6 +2372,27 @@ static int fetch_rom_catalog(
     }
     if (parsed == 0) {
       break;
+    }
+
+    if (has_text(search_term)) {
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "http",
+          "response GET /api/roms status=%d offset=%d parsed=%d total_hint=%d term=%s",
+          status_code,
+          offset,
+          parsed,
+          page_total,
+          search_term);
+    } else {
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "http",
+          "response GET /api/roms status=%d offset=%d parsed=%d total_hint=%d",
+          status_code,
+          offset,
+          parsed,
+          page_total);
     }
 
     if (has_text(search_term)) {
@@ -2634,15 +2777,24 @@ int romm_http_resolve_rom_ids(
  */
 int romm_http_list_remote_saves_callback(
     void *context,
+    const int *rom_ids,
+    int rom_id_count,
     SyncSaveDescriptor *out_items,
     int max_items) {
-  if ((context == NULL) || (out_items == NULL) || (max_items <= 0)) {
+  if ((context == NULL) || (out_items == NULL) || (max_items <= 0) ||
+      (rom_id_count < 0) || ((rom_id_count > 0) && (rom_ids == NULL))) {
     return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
   }
 
   const AppConfig *config = (const AppConfig *)context;
   if (!app_config_has_server_url(config) || !app_config_has_auth(config)) {
     return ROMM_CLIENT_ERR_AUTH;
+  }
+
+  for (int i = 0; i < rom_id_count; ++i) {
+    if (rom_ids[i] <= 0) {
+      return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
+    }
   }
 
   for (int i = 0; i < max_items; ++i) {
@@ -2658,86 +2810,182 @@ int romm_http_list_remote_saves_callback(
   }
 
   int count = 0;
-  int total = INT_MAX;
   const char *emulator = romm_save_emulator(config);
-  for (int offset = 0; (offset < total); offset += ROMM_HTTP_PAGE_LIMIT) {
-    char path[256];
-    snprintf(
-        path,
-        sizeof(path),
-        "/api/saves?limit=%d&offset=%d&emulator=%s",
-        ROMM_HTTP_PAGE_LIMIT,
-        offset,
-        emulator);
-
-    char url[APP_CONFIG_MAX_URL_LEN + sizeof(path)];
-    if (build_api_url(config->romm_url, path, url, sizeof(url)) < 0) {
-      free(body);
-      free(page_items);
-      return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
-    }
-
-    int status_code = 0;
-    int transport_status = http_get_text(config, url, &status_code, body, ROMM_HTTP_MAX_BODY_SIZE);
-    if (transport_status < 0) {
-      free(body);
-      free(page_items);
-      return transport_status;
-    }
-    if ((status_code == 401) || (status_code == 403)) {
-      free(body);
-      free(page_items);
-      return ROMM_CLIENT_ERR_AUTH;
-    }
-    if (status_code != 200) {
-      app_log_write(APP_LOG_LEVEL_WARN, "http", "remote saves fetch failed status=%d offset=%d", status_code, offset);
-      free(body);
-      free(page_items);
-      return ROMM_CLIENT_ERR_NETWORK;
-    }
-
-    int page_total = -1;
-    int page_count = parse_remote_save_entries(body, page_items, ROMM_HTTP_PAGE_LIMIT, &page_total);
-    if (page_count < 0) {
-      free(body);
-      free(page_items);
-      return ROMM_CLIENT_ERR_NETWORK;
-    }
-    if (page_total > 0) {
-      total = page_total;
-    }
-    if (page_count == 0) {
-      break;
-    }
-
-    for (int i = 0; i < page_count; ++i) {
-      SyncSaveDescriptor *candidate = &page_items[i];
-      if (candidate->remote_id <= 0) {
-        continue;
+  int filter_count = (rom_id_count > 0) ? rom_id_count : 1;
+  for (int filter_index = 0; filter_index < filter_count; ++filter_index) {
+    int current_rom_id = (rom_id_count > 0) ? rom_ids[filter_index] : 0;
+    int total = INT_MAX;
+    for (int offset = 0; (offset < total); offset += ROMM_HTTP_PAGE_LIMIT) {
+      char path[320];
+      if (current_rom_id > 0) {
+        snprintf(
+            path,
+            sizeof(path),
+            "/api/saves?limit=%d&offset=%d&emulator=%s&rom_id=%d",
+            ROMM_HTTP_PAGE_LIMIT,
+            offset,
+            emulator,
+            current_rom_id);
+      } else {
+        snprintf(
+            path,
+            sizeof(path),
+            "/api/saves?limit=%d&offset=%d&emulator=%s",
+            ROMM_HTTP_PAGE_LIMIT,
+            offset,
+            emulator);
       }
 
-      int existing_index = find_existing_remote_index(out_items, count, candidate);
-      if (existing_index >= 0) {
-        if (remote_candidate_is_newer(&out_items[existing_index], candidate)) {
-          memcpy(&out_items[existing_index], candidate, sizeof(*candidate));
+      char url[APP_CONFIG_MAX_URL_LEN + sizeof(path)];
+      if (build_api_url(config->romm_url, path, url, sizeof(url)) < 0) {
+        free(body);
+        free(page_items);
+        return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
+      }
+
+      int status_code = 0;
+      if (current_rom_id > 0) {
+        app_log_write(
+            APP_LOG_LEVEL_INFO,
+            "http",
+            "request GET /api/saves offset=%d limit=%d emulator=%s rom_id=%d",
+            offset,
+            ROMM_HTTP_PAGE_LIMIT,
+            emulator,
+            current_rom_id);
+      } else {
+        app_log_write(
+            APP_LOG_LEVEL_INFO,
+            "http",
+            "request GET /api/saves offset=%d limit=%d emulator=%s",
+            offset,
+            ROMM_HTTP_PAGE_LIMIT,
+            emulator);
+      }
+      int transport_status = http_get_text(config, url, &status_code, body, ROMM_HTTP_MAX_BODY_SIZE);
+      if (transport_status < 0) {
+        free(body);
+        free(page_items);
+        return transport_status;
+      }
+      if ((status_code == 401) || (status_code == 403)) {
+        free(body);
+        free(page_items);
+        return ROMM_CLIENT_ERR_AUTH;
+      }
+      if (status_code != 200) {
+        char body_preview[ROMM_HTTP_LOG_BODY_PREVIEW];
+        build_body_preview(body, body_preview, sizeof(body_preview));
+        if (current_rom_id > 0) {
+          app_log_write(
+              APP_LOG_LEVEL_WARN,
+              "http",
+              "remote saves fetch failed status=%d offset=%d emulator=%s rom_id=%d body=%s",
+              status_code,
+              offset,
+              emulator,
+              current_rom_id,
+              body_preview);
+        } else {
+          app_log_write(
+              APP_LOG_LEVEL_WARN,
+              "http",
+              "remote saves fetch failed status=%d offset=%d emulator=%s body=%s",
+              status_code,
+              offset,
+              emulator,
+              body_preview);
         }
-        continue;
+        free(body);
+        free(page_items);
+        return ROMM_CLIENT_ERR_NETWORK;
       }
 
-      if (count < max_items) {
-        memcpy(&out_items[count], candidate, sizeof(*candidate));
-        count++;
+      int page_total = -1;
+      int page_count = parse_remote_save_entries(body, page_items, ROMM_HTTP_PAGE_LIMIT, &page_total);
+      if (page_count < 0) {
+        free(body);
+        free(page_items);
+        return ROMM_CLIENT_ERR_NETWORK;
+      }
+      if (page_total > 0) {
+        total = page_total;
+      }
+      if (page_count == 0) {
+        break;
+      }
+
+      for (int i = 0; i < page_count; ++i) {
+        SyncSaveDescriptor *candidate = &page_items[i];
+        if (candidate->remote_id <= 0) {
+          continue;
+        }
+
+        int existing_index = find_existing_remote_index(out_items, count, candidate);
+        if (existing_index >= 0) {
+          if (remote_candidate_is_newer(&out_items[existing_index], candidate)) {
+            memcpy(&out_items[existing_index], candidate, sizeof(*candidate));
+          }
+          continue;
+        }
+
+        if (count < max_items) {
+          memcpy(&out_items[count], candidate, sizeof(*candidate));
+          count++;
+        }
+      }
+
+      if (current_rom_id > 0) {
+        app_log_write(
+            APP_LOG_LEVEL_INFO,
+            "http",
+            "response GET /api/saves status=%d offset=%d parsed=%d total_hint=%d unique_kept=%d rom_id=%d",
+            status_code,
+            offset,
+            page_count,
+            page_total,
+            count,
+            current_rom_id);
+      } else {
+        app_log_write(
+            APP_LOG_LEVEL_INFO,
+            "http",
+            "response GET /api/saves status=%d offset=%d parsed=%d total_hint=%d unique_kept=%d",
+            status_code,
+            offset,
+            page_count,
+            page_total,
+            count);
+      }
+
+      if ((count >= max_items) || (page_count < ROMM_HTTP_PAGE_LIMIT)) {
+        break;
       }
     }
 
-    if ((count >= max_items) || (page_count < ROMM_HTTP_PAGE_LIMIT)) {
+    if (count >= max_items) {
       break;
     }
   }
 
   free(body);
   free(page_items);
-  app_log_write(APP_LOG_LEVEL_INFO, "http", "remote saves listed=%d", count);
+  if (rom_id_count > 0) {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "http",
+        "remote saves listed=%d unique entries after filtered pagination/deduplication emulator=%s rom_filters=%d",
+        count,
+        emulator,
+        rom_id_count);
+  } else {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "http",
+        "remote saves listed=%d unique entries after pagination/deduplication emulator=%s",
+        count,
+        emulator);
+  }
   return count;
 }
 
@@ -2817,6 +3065,15 @@ int romm_http_upload_save_callback(
 
   char response_body[ROMM_HTTP_SMALL_BODY_SIZE];
   int status_code = 0;
+  app_log_write(
+      APP_LOG_LEVEL_INFO,
+      "http",
+      "request POST /api/saves rom_id=%d game=%s slot=%s device_id=%s upload=%s",
+      rom_id,
+      has_text(local_item->game_id) ? local_item->game_id : "(unknown)",
+      has_text(slot_query) ? slot_query : "(none)",
+      has_text(config->device_id) ? "yes" : "no",
+      upload_filename);
   int transport_status = http_post_multipart_file(
       config,
       url,
@@ -2846,7 +3103,53 @@ int romm_http_upload_save_callback(
     return ROMM_CLIENT_ERR_CONFLICT;
   }
   if ((status_code == 200) || (status_code == 201) || (status_code == 204)) {
+    int remote_save_id = -1;
+    char remote_file_name[ROMM_HTTP_MAX_FILENAME];
+    remote_file_name[0] = '\0';
+    extract_json_int_field(response_body, "id", &remote_save_id);
+    extract_json_string_field(response_body, "file_name", remote_file_name, sizeof(remote_file_name));
+    if ((remote_save_id > 0) && has_text(remote_file_name)) {
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "http",
+          "response POST /api/saves status=%d game=%s rom_id=%d remote_id=%d file=%s",
+          status_code,
+          has_text(local_item->game_id) ? local_item->game_id : "(unknown)",
+          rom_id,
+          remote_save_id,
+          remote_file_name);
+    } else if (remote_save_id > 0) {
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "http",
+          "response POST /api/saves status=%d game=%s rom_id=%d remote_id=%d",
+          status_code,
+          has_text(local_item->game_id) ? local_item->game_id : "(unknown)",
+          rom_id,
+          remote_save_id);
+    } else {
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "http",
+          "response POST /api/saves status=%d game=%s rom_id=%d",
+          status_code,
+          has_text(local_item->game_id) ? local_item->game_id : "(unknown)",
+          rom_id);
+    }
     return ROMM_CLIENT_OK;
+  }
+
+  {
+    char body_preview[ROMM_HTTP_LOG_BODY_PREVIEW];
+    build_body_preview(response_body, body_preview, sizeof(body_preview));
+    app_log_write(
+        APP_LOG_LEVEL_WARN,
+        "http",
+        "upload save failed status=%d game=%s rom_id=%d body=%s",
+        status_code,
+        has_text(local_item->game_id) ? local_item->game_id : "(unknown)",
+        rom_id,
+        body_preview);
   }
   return ROMM_CLIENT_ERR_NETWORK;
 }
@@ -2882,6 +3185,13 @@ int romm_http_download_save_callback(
 
   char response_body[ROMM_HTTP_SMALL_BODY_SIZE];
   int status_code = 0;
+  app_log_write(
+      APP_LOG_LEVEL_INFO,
+      "http",
+      "request GET /api/saves/%d/content device_id=%s optimistic=%s",
+      remote_item->remote_id,
+      has_device_id ? "yes" : "no",
+      has_device_id ? "true" : "false");
   int transport_status = http_get_file(
       config,
       url,
@@ -2893,12 +3203,23 @@ int romm_http_download_save_callback(
     return transport_status;
   }
 
+  int retried_without_device_id = 0;
   if ((status_code == 404) && has_device_id) {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "http",
+        "response GET /api/saves/%d/content status=404 with device_id; retrying without device_id",
+        remote_item->remote_id);
     snprintf(path, sizeof(path), "/api/saves/%d/content", remote_item->remote_id);
     if (build_api_url(config->romm_url, path, url, sizeof(url)) < 0) {
       return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
     }
 
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "http",
+        "request GET /api/saves/%d/content retry_without_device_id=1",
+        remote_item->remote_id);
     transport_status = http_get_file(
         config,
         url,
@@ -2909,6 +3230,7 @@ int romm_http_download_save_callback(
     if (transport_status < 0) {
       return transport_status;
     }
+    retried_without_device_id = 1;
   }
 
   app_log_write(
@@ -2926,9 +3248,27 @@ int romm_http_download_save_callback(
     return ROMM_CLIENT_ERR_CONFLICT;
   }
   if (status_code == 200) {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "http",
+        "response GET /api/saves/%d/content status=200 file=%s retried_without_device_id=%d",
+        remote_item->remote_id,
+        has_text(remote_item->filename) ? remote_item->filename : "(unknown)",
+        retried_without_device_id);
     return ROMM_CLIENT_OK;
   }
 
+  {
+    char body_preview[ROMM_HTTP_LOG_BODY_PREVIEW];
+    build_body_preview(response_body, body_preview, sizeof(body_preview));
+    app_log_write(
+        APP_LOG_LEVEL_WARN,
+        "http",
+        "download save failed status=%d remote_id=%d body=%s",
+        status_code,
+        remote_item->remote_id,
+        body_preview);
+  }
   remove(destination_path);
   return ROMM_CLIENT_ERR_NETWORK;
 }
@@ -2993,6 +3333,14 @@ int romm_http_register_device_callback(
 
   int http_status_code = 0;
   char response_body[ROMM_HTTP_SMALL_BODY_SIZE];
+  app_log_write(
+      APP_LOG_LEVEL_INFO,
+      "http",
+      "request POST /api/devices name=%s platform=%s client=%s version=%s",
+      device_name,
+      device_platform,
+      client_name,
+      client_version);
   int transport_status = http_post_json(
       config,
       url,
@@ -3013,19 +3361,51 @@ int romm_http_register_device_callback(
     return ROMM_CLIENT_ERR_CONFLICT;
   }
   if ((http_status_code != 200) && (http_status_code != 201)) {
+    char body_preview[ROMM_HTTP_LOG_BODY_PREVIEW];
+    build_body_preview(response_body, body_preview, sizeof(body_preview));
+    app_log_write(
+        APP_LOG_LEVEL_WARN,
+        "http",
+        "register_device failed status=%d body=%s",
+        http_status_code,
+        body_preview);
     return ROMM_CLIENT_ERR_NETWORK;
   }
 
   if (extract_json_string_field(response_body, "device_id", out_device_id, out_device_id_size) == 0) {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "http",
+        "response POST /api/devices status=%d device_id=%s",
+        http_status_code,
+        out_device_id);
     return ROMM_CLIENT_OK;
   }
   if (extract_json_scalar_field(response_body, "device_id", out_device_id, out_device_id_size) == 0) {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "http",
+        "response POST /api/devices status=%d device_id=%s",
+        http_status_code,
+        out_device_id);
     return ROMM_CLIENT_OK;
   }
   if (extract_json_string_field(response_body, "id", out_device_id, out_device_id_size) == 0) {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "http",
+        "response POST /api/devices status=%d device_id=%s",
+        http_status_code,
+        out_device_id);
     return ROMM_CLIENT_OK;
   }
   if (extract_json_scalar_field(response_body, "id", out_device_id, out_device_id_size) == 0) {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "http",
+        "response POST /api/devices status=%d device_id=%s",
+        http_status_code,
+        out_device_id);
     return ROMM_CLIENT_OK;
   }
 
