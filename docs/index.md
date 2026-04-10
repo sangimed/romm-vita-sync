@@ -423,7 +423,7 @@ Notes:
 - `game_id` is extracted from the parent directory name
 - `game_title` is read from `PARAM.SFO` when available
 - `path` points directly to the detected `.VMP` file
-- `timestamp` is stored as a formatted local string (`YYYY-MM-DD HH:MM:SS`)
+- `timestamp` is stored as a formatted sync timestamp string (`YYYY-MM-DD HH:MM:SS`)
 
 ### Sync Inventory (`SyncSaveDescriptor`)
 
@@ -554,6 +554,95 @@ Candidate selection rule:
 - when both local timestamps are exactly equal, the app keeps `SCEVMC0.VMP`, skips `SCEVMC1.VMP`, and surfaces a warning to the user before continuing
 - if the remote/server save is newer and a download is selected, the app overwrites that already-selected local card; it does not switch to the other local slot during the restore path
 - backup behavior is unchanged: backups are still mandatory before any local overwrite during download/restore
+- sync logs now include the compared timestamps for each detected local save, each selected PS1 candidate, the matched remote candidate, and the remote save chosen for download so `remote_newer` / `local_newer` decisions can be inspected directly
+
+Current sync pseudo-code:
+
+```text
+manual_or_auto_sync():
+  local_items = scan_local_vmp_files()
+  log_detected_local_items(local_items)
+
+  selected_items = select_latest_local_card_per_game(local_items)
+  if selected_items is empty:
+    fail("no PS1 sync candidate selected")
+
+  ensure_romm_url_and_auth_are_present()
+  ensure_device_registration()
+
+  for each item in selected_items:
+    item.rom_id = resolve_rom_id_from_romm(item.serial, item.title, item.filename_patterns)
+    if item.rom_id is missing:
+      fail("unresolved rom_id")
+
+  sync_engine_run(selected_items)
+
+sync_engine_run(local_items):
+  selected_mask = select_latest_local_card_per_game(local_items)
+  selected_rom_ids = unique_rom_ids_from_selected_items(local_items, selected_mask)
+
+  state_store = load_sync_state_tsv()
+  active_device_id = config.device_id or state_store.device_id
+  remote_items = list_remote_saves_filtered_by_rom_id(selected_rom_ids)
+
+  for each local_item in local_items:
+    if local_item is not selected by selected_mask:
+      record_skip("skipped by PS1 latest-card rule")
+      continue
+
+    state_entry = find_state_entry(local_item.game_id, local_item.filename, local_item.slot)
+    remote_item = find_best_matching_remote(local_item, remote_items)
+
+    if remote_item does not exist:
+      if local_item.size and local_item.timestamp match state_entry:
+        record_skip("unchanged upload candidate")
+      else:
+        upload_local_save(local_item)
+      continue
+
+    if remote_item says this device is already current:
+      record_skip("remote already current for this device")
+      continue
+
+    conflict = compare_local_and_remote(local_item, remote_item, active_device_id)
+
+    if conflict == none:
+      record_skip("already synchronized")
+      continue
+
+    if conflict == same_origin_device:
+      record_skip("same-origin remote save")
+      continue
+
+    decision = default_decision_for(conflict)
+    if conflict requires confirmation:
+      decision = ui_or_auto_apply_conflict_resolution(conflict, default=decision)
+
+    if decision == upload:
+      upload_local_save(local_item)
+    else if decision == download:
+      download_remote_save(remote_item, local_item)
+    else:
+      record_skip("conflict skipped")
+
+  if not dry_run:
+    save_sync_state_tsv(state_store)
+
+upload_local_save(local_item):
+  if local_item is .VMP:
+    convert local VMP -> temporary SRM
+  POST /api/saves
+  update sync_state.tsv with local metadata and active device_id
+
+download_remote_save(remote_item, local_item):
+  create backup of local destination before overwrite
+  GET /api/saves/{id}/content
+  if destination is .VMP:
+    convert downloaded SRM -> VMP
+    re-sign VMP
+    restore remote timestamp on the local file
+  update sync_state.tsv with remote metadata and origin device
+```
 
 Upload flow:
 

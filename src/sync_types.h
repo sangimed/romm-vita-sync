@@ -105,6 +105,12 @@ int sync_extract_filename(const char *path, char *out_filename, size_t out_size)
 int sync_slot_from_filename(const char *filename, SyncSlot *out_slot);
 int sync_parse_local_timestamp(const char *timestamp, int64_t *out_timestamp_unix);
 /*
+ * Formats one deterministic sync timestamp back into "YYYY-MM-DD HH:MM:SS"
+ * using the same UTC-normalized basis as remote timestamp parsing and local
+ * file timestamp preservation.
+ */
+void sync_format_timestamp(int64_t timestamp_unix, char *out_timestamp, size_t out_size);
+/*
  * Selects at most one local PS1 save card per game before sync decisions.
  * The newest local timestamp wins; exact ties prefer slot 0 so behavior stays
  * deterministic and callers can warn the user about that fallback.

@@ -2484,6 +2484,25 @@ static const SyncSaveDescriptor *ui_find_slot1_tie_peer(
 }
 
 /*
+ * Returns one short label for the local latest-card selection outcome.
+ */
+static const char *ui_sync_local_selection_reason_str(SyncLocalSelectionReason reason) {
+  switch (reason) {
+    case SYNC_LOCAL_SELECTION_ONLY_ITEM:
+      return "only_item";
+    case SYNC_LOCAL_SELECTION_LATEST_TIMESTAMP:
+      return "latest_timestamp";
+    case SYNC_LOCAL_SELECTION_EQUAL_TIMESTAMP_PREFER_SLOT0:
+      return "equal_timestamp_prefer_slot0";
+    case SYNC_LOCAL_SELECTION_DETERMINISTIC_FALLBACK:
+      return "deterministic_fallback";
+    case SYNC_LOCAL_SELECTION_NOT_SELECTED:
+    default:
+      return "not_selected";
+  }
+}
+
+/*
  * Applies the PS1 latest-card rule to the current work list, logs the outcome
  * for the user, and compacts the selected items in place for mapping/sync.
  */
@@ -2524,15 +2543,31 @@ static int ui_prepare_ps1_sync_candidates(
       continue;
     }
 
+    char selected_timestamp[32];
+    sync_format_timestamp(items[i].timestamp_unix, selected_timestamp, sizeof(selected_timestamp));
+    ui_sync_log_write(
+        APP_LOG_LEVEL_INFO,
+        "PS1 candidate selected: game=%s file=%s slot=%s timestamp=%s unix=%lld reason=%s",
+        has_text(items[i].game_id) ? items[i].game_id : "(unknown)",
+        has_text(items[i].filename) ? items[i].filename : items[i].path,
+        sync_slot_str(items[i].slot),
+        selected_timestamp,
+        (long long)items[i].timestamp_unix,
+        ui_sync_local_selection_reason_str(selection_reasons[i]));
+
     if (selection_reasons[i] == SYNC_LOCAL_SELECTION_EQUAL_TIMESTAMP_PREFER_SLOT0) {
       const SyncSaveDescriptor *slot1_peer = ui_find_slot1_tie_peer(items, item_count, i);
       if (slot1_peer != NULL) {
+        char skipped_timestamp[32];
+        sync_format_timestamp(slot1_peer->timestamp_unix, skipped_timestamp, sizeof(skipped_timestamp));
         ui_sync_log_write(
             APP_LOG_LEVEL_WARN,
-            "Equal local timestamps for %s; defaulting to %s and skipping %s",
+            "Equal local timestamps for %s; defaulting to %s and skipping %s (selected_ts=%s skipped_ts=%s)",
             has_text(items[i].title) ? items[i].title : items[i].game_id,
             has_text(items[i].filename) ? items[i].filename : items[i].path,
-            has_text(slot1_peer->filename) ? slot1_peer->filename : slot1_peer->path);
+            has_text(slot1_peer->filename) ? slot1_peer->filename : slot1_peer->path,
+            selected_timestamp,
+            skipped_timestamp);
         if (out_warning_count != NULL) {
           *out_warning_count += 1;
         }
@@ -3465,7 +3500,15 @@ static int ui_run_sync_pipeline(
   for (int i = 0; i < preview_count; ++i) {
     const SyncSaveDescriptor *item = &work_items[i];
     const char *name = has_text(item->filename) ? item->filename : item->path;
-    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Save detected: %s", has_text(name) ? name : "(unknown)");
+    char timestamp[32];
+    sync_format_timestamp(item->timestamp_unix, timestamp, sizeof(timestamp));
+    ui_sync_log_write(
+        APP_LOG_LEVEL_INFO,
+        "Save detected: %s slot=%s timestamp=%s unix=%lld",
+        has_text(name) ? name : "(unknown)",
+        sync_slot_str(item->slot),
+        timestamp,
+        (long long)item->timestamp_unix);
   }
   if (detected_item_count > preview_count) {
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "... %d more local save(s) omitted", detected_item_count - preview_count);

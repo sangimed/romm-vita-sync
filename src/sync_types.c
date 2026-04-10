@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 /*
  * Converts an ASCII letter to lowercase.
@@ -310,6 +311,39 @@ int sync_parse_local_timestamp(const char *timestamp, int64_t *out_timestamp_uni
                         ((int64_t)minute * 60LL) +
                         (int64_t)second;
   return 0;
+}
+
+/*
+ * Formats one deterministic sync timestamp for logs and diagnostics.
+ * A zero/negative timestamp is rendered as "unknown".
+ */
+void sync_format_timestamp(int64_t timestamp_unix, char *out_timestamp, size_t out_size) {
+  if ((out_timestamp == NULL) || (out_size == 0U)) {
+    return;
+  }
+
+  if (timestamp_unix <= 0) {
+    snprintf(out_timestamp, out_size, "unknown");
+    return;
+  }
+
+  time_t raw = (time_t)timestamp_unix;
+  struct tm *utc = gmtime(&raw);
+  if (utc == NULL) {
+    snprintf(out_timestamp, out_size, "%lld", (long long)timestamp_unix);
+    return;
+  }
+
+  snprintf(
+      out_timestamp,
+      out_size,
+      "%04d-%02d-%02d %02d:%02d:%02d",
+      utc->tm_year + 1900,
+      utc->tm_mon + 1,
+      utc->tm_mday,
+      utc->tm_hour,
+      utc->tm_min,
+      utc->tm_sec);
 }
 
 /*

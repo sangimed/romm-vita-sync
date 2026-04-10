@@ -577,7 +577,9 @@ static int parse_uint64_value(const char *text, uint64_t *out_value) {
 }
 
 /*
- * Converts ISO-like timestamp to deterministic unix timestamp (seconds precision).
+ * Converts one ISO-like timestamp into the UTC-normalized deterministic sync
+ * timestamp basis used by the engine (seconds precision, no libc timezone
+ * dependency).
  */
 static int parse_iso_timestamp(const char *timestamp, int64_t *out_unix) {
   if (!has_text(timestamp) || (out_unix == NULL)) {
@@ -595,7 +597,66 @@ static int parse_iso_timestamp(const char *timestamp, int64_t *out_unix) {
     normalized[10] = ' ';
   }
 
-  return sync_parse_local_timestamp(normalized, out_unix);
+  int64_t parsed = 0;
+  if (sync_parse_local_timestamp(normalized, &parsed) < 0) {
+    return -1;
+  }
+
+  const char *suffix = timestamp + 19;
+  if (*suffix == '.') {
+    suffix += 1;
+    while (isdigit((unsigned char)*suffix)) {
+      suffix += 1;
+    }
+  }
+
+  if ((*suffix == '\0') || (*suffix == ' ')) {
+    *out_unix = parsed;
+    return 0;
+  }
+
+  int offset_seconds = 0;
+  if ((*suffix == 'Z') || (*suffix == 'z')) {
+    offset_seconds = 0;
+    suffix += 1;
+  } else if ((*suffix == '+') || (*suffix == '-')) {
+    int sign = (*suffix == '-') ? -1 : 1;
+    suffix += 1;
+
+    if (!isdigit((unsigned char)suffix[0]) || !isdigit((unsigned char)suffix[1])) {
+      return -1;
+    }
+
+    int hours = ((suffix[0] - '0') * 10) + (suffix[1] - '0');
+    suffix += 2;
+
+    int minutes = 0;
+    if (*suffix == ':') {
+      suffix += 1;
+    }
+    if (*suffix != '\0') {
+      if (!isdigit((unsigned char)suffix[0]) || !isdigit((unsigned char)suffix[1])) {
+        return -1;
+      }
+      minutes = ((suffix[0] - '0') * 10) + (suffix[1] - '0');
+      suffix += 2;
+    }
+
+    offset_seconds = sign * ((hours * 3600) + (minutes * 60));
+  } else {
+    *out_unix = parsed;
+    return 0;
+  }
+
+  while (isspace((unsigned char)*suffix)) {
+    suffix += 1;
+  }
+  if (*suffix != '\0') {
+    return -1;
+  }
+
+  *out_unix = parsed - (int64_t)offset_seconds;
+  return 0;
 }
 
 /*

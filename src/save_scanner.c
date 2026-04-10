@@ -156,7 +156,7 @@ static int has_vmp_extension(const char *name) {
 }
 
 /*
- * Converts a Vita date/time value to a readable local timestamp string.
+ * Converts a Vita date/time value to one readable sync timestamp string.
  */
 static void format_timestamp(const SceDateTime *dt, char *out, size_t out_size) {
   if ((dt == NULL) || (out == NULL) || (out_size == 0)) {

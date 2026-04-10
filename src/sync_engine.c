@@ -1,6 +1,7 @@
 #include "sync_engine.h"
 
 #include <ctype.h>
+#include <psp2/io/stat.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -47,6 +48,56 @@ static int file_exists(const char *path) {
 
   fclose(probe);
   return 1;
+}
+
+/*
+ * Converts one Unix timestamp back into the same broken-down UTC fields used by
+ * the scanner so downloaded files can keep the remote modification time.
+ */
+static int unix_timestamp_to_datetime(int64_t timestamp_unix, SceDateTime *out_datetime) {
+  if ((timestamp_unix <= 0) || (out_datetime == NULL)) {
+    return -1;
+  }
+
+  time_t raw = (time_t)timestamp_unix;
+  struct tm *utc = gmtime(&raw);
+  if (utc == NULL) {
+    return -1;
+  }
+
+  memset(out_datetime, 0, sizeof(*out_datetime));
+  out_datetime->year = (unsigned short)(utc->tm_year + 1900);
+  out_datetime->month = (unsigned short)(utc->tm_mon + 1);
+  out_datetime->day = (unsigned short)utc->tm_mday;
+  out_datetime->hour = (unsigned short)utc->tm_hour;
+  out_datetime->minute = (unsigned short)utc->tm_min;
+  out_datetime->second = (unsigned short)utc->tm_sec;
+  out_datetime->microsecond = 0U;
+  return 0;
+}
+
+/*
+ * Reapplies the remote save timestamp to the restored local file so the next
+ * scan does not interpret the write time as a fresh local modification.
+ */
+static int preserve_remote_timestamp_on_local_copy(
+    const char *local_path,
+    int64_t remote_timestamp_unix) {
+  if (!has_text(local_path) || (remote_timestamp_unix <= 0)) {
+    return -1;
+  }
+
+  SceIoStat stat;
+  memset(&stat, 0, sizeof(stat));
+  if (sceIoGetstat(local_path, &stat) < 0) {
+    return -1;
+  }
+
+  if (unix_timestamp_to_datetime(remote_timestamp_unix, &stat.st_mtime) < 0) {
+    return -1;
+  }
+
+  return sceIoChstat(local_path, &stat, SCE_CST_MT);
 }
 
 /*
@@ -300,6 +351,41 @@ static int same_content_signature(const SyncSaveDescriptor *local_item, const Sy
   }
 
   return 1;
+}
+
+/*
+ * Logs one concise local/remote metadata pair on the exact timestamp basis used
+ * by conflict detection so false "newer" decisions are easier to inspect.
+ */
+static void log_sync_match_metadata(
+    const SyncSaveDescriptor *local_item,
+    const SyncSaveDescriptor *remote_item) {
+  if ((local_item == NULL) || (remote_item == NULL)) {
+    return;
+  }
+
+  char local_timestamp[32];
+  char remote_timestamp[32];
+  sync_format_timestamp(local_item->timestamp_unix, local_timestamp, sizeof(local_timestamp));
+  sync_format_timestamp(remote_item->timestamp_unix, remote_timestamp, sizeof(remote_timestamp));
+
+  app_log_write(
+      APP_LOG_LEVEL_INFO,
+      "sync",
+      "match metadata game=%s file=%s local_ts=%s local_unix=%lld remote_id=%d remote_file=%s remote_ts=%s remote_unix=%lld local_size=%llu remote_size=%llu remote_slot=%s remote_origin=%s device_current=%d",
+      has_text(local_item->game_id) ? local_item->game_id : "(unknown)",
+      has_text(local_item->filename) ? local_item->filename : local_item->path,
+      local_timestamp,
+      (long long)local_item->timestamp_unix,
+      remote_item->remote_id,
+      has_text(remote_item->filename) ? remote_item->filename : "(unknown)",
+      remote_timestamp,
+      (long long)remote_item->timestamp_unix,
+      (unsigned long long)local_item->size_bytes,
+      (unsigned long long)remote_item->size_bytes,
+      sync_slot_str(remote_item->slot),
+      has_text(remote_item->origin_device) ? remote_item->origin_device : "(none)",
+      remote_item->device_is_current);
 }
 
 /*
@@ -621,6 +707,19 @@ static int execute_download(
       "downloading save: game=%s file=%s",
       local_item->game_id,
       has_text(action->filename) ? action->filename : local_item->filename);
+  {
+    char remote_timestamp[32];
+    sync_format_timestamp(remote_item->timestamp_unix, remote_timestamp, sizeof(remote_timestamp));
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "sync",
+        "download source remote_id=%d remote_file=%s remote_ts=%s remote_unix=%lld remote_origin=%s",
+        remote_item->remote_id,
+        has_text(remote_item->filename) ? remote_item->filename : "(unknown)",
+        remote_timestamp,
+        (long long)remote_item->timestamp_unix,
+        has_text(remote_item->origin_device) ? remote_item->origin_device : "(none)");
+  }
 
   if (file_exists(local_item->path)) {
     const char *backup_directory = has_text(config->backup_directory)
@@ -745,6 +844,20 @@ static int execute_download(
 
   if (has_conversion_temp) {
     remove(conversion_temp_path);
+  }
+
+  if (remote_item->timestamp_unix > 0) {
+    int preserve_status = preserve_remote_timestamp_on_local_copy(local_item->path, remote_item->timestamp_unix);
+    if (preserve_status < 0) {
+      app_log_write(
+          APP_LOG_LEVEL_WARN,
+          "sync",
+          "download timestamp preserve failed game=%s file=%s remote_ts=%lld status=%d",
+          local_item->game_id,
+          action->filename,
+          (long long)remote_item->timestamp_unix,
+          preserve_status);
+    }
   }
 
   action->status_code = status;
@@ -1165,6 +1278,7 @@ int sync_engine_run(
     }
 
     const SyncSaveDescriptor *remote_item = &remote_items[remote_index];
+    log_sync_match_metadata(local_item, remote_item);
     if (remote_reports_current_for_device(local_item, remote_item)) {
       action->action = SYNC_ACTION_SKIP;
       out_report->skipped += 1;
