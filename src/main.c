@@ -96,6 +96,7 @@ typedef struct UiGameEntry {
   char game_id[ROMM_GAME_ID_LEN];
   char title[ROMM_GAME_TITLE_LEN];
   int save_count;
+  int card_count;
 } UiGameEntry;
 
 typedef enum UiSyncTrigger {
@@ -815,6 +816,18 @@ static void ui_sort_game_entries(UiGameEntry *games, int game_count) {
 }
 
 /*
+ * Returns non-zero when one UI inventory item corresponds to an actual local
+ * VMP card file, not just a synthetic restore target.
+ */
+static int ui_item_has_local_memory_card(const SyncSaveDescriptor *item) {
+  if (item == NULL) {
+    return 0;
+  }
+
+  return item->size_bytes > 0U;
+}
+
+/*
  * Builds unique PS1 game entries from the current local save descriptor list.
  */
 static int ui_build_game_entries(
@@ -838,6 +851,9 @@ static int ui_build_game_entries(
     int existing = ui_find_game_entry(out_games, game_count, key);
     if (existing >= 0) {
       out_games[existing].save_count += 1;
+      if (ui_item_has_local_memory_card(item)) {
+        out_games[existing].card_count += 1;
+      }
       if (!has_text(out_games[existing].title) && has_text(item->title)) {
         snprintf(out_games[existing].title, sizeof(out_games[existing].title), "%s", item->title);
       }
@@ -854,6 +870,7 @@ static int ui_build_game_entries(
     snprintf(entry->game_id, sizeof(entry->game_id), "%s", has_text(item->game_id) ? item->game_id : "(unknown)");
     snprintf(entry->title, sizeof(entry->title), "%s", item->title);
     entry->save_count = 1;
+    entry->card_count = ui_item_has_local_memory_card(item) ? 1 : 0;
     game_count += 1;
   }
 
@@ -1967,7 +1984,7 @@ static void ui_draw_game_row(
     int focused,
     int active,
     const char *title,
-    int save_count) {
+    int card_count) {
   unsigned int fill = focused ? UI_COLOR_FIELD_ACTIVE : (active ? UI_COLOR_ACCENT_SOFT : UI_COLOR_PANEL_ALT);
   unsigned int border = focused ? UI_COLOR_PANEL_BORDER_ACTIVE : (active ? UI_COLOR_BUTTON_BORDER : UI_COLOR_PANEL_BORDER);
   unsigned int title_color = focused ? UI_COLOR_TEXT : (active ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED);
@@ -1979,7 +1996,7 @@ static void ui_draw_game_row(
   }
 
   char count_text[32];
-  snprintf(count_text, sizeof(count_text), "%d card%s", save_count, (save_count == 1) ? "" : "s");
+  snprintf(count_text, sizeof(count_text), "%d card%s", card_count, (card_count == 1) ? "" : "s");
 
   float count_scale = 0.64f;
   float count_width = ui_estimate_text_width(count_text, count_scale);
@@ -2113,7 +2130,21 @@ static void ui_render_sync_panel(const UiAppState *state) {
   if (game != NULL) {
     const char *resolved_title = has_text(game->title) ? game->title : game->game_id;
     snprintf(title_display, sizeof(title_display), "%s", resolved_title);
-    snprintf(detail, sizeof(detail), "%s | %d save card%s", game->game_id, game->save_count, (game->save_count == 1) ? "" : "s");
+    if (game->card_count == game->save_count) {
+      snprintf(detail, sizeof(detail), "%s | %d card%s", game->game_id, game->card_count, (game->card_count == 1) ? "" : "s");
+    } else if (game->card_count == 0) {
+      snprintf(detail, sizeof(detail), "%s | 0 cards | restore target", game->game_id);
+    } else {
+      snprintf(
+          detail,
+          sizeof(detail),
+          "%s | %d card%s | %d target%s",
+          game->game_id,
+          game->card_count,
+          (game->card_count == 1) ? "" : "s",
+          game->save_count,
+          (game->save_count == 1) ? "" : "s");
+    }
   } else {
     snprintf(title_display, sizeof(title_display), "No PS1 game selected");
     snprintf(detail, sizeof(detail), "Rescan local saves after copying memory cards to the Vita.");
@@ -2214,7 +2245,7 @@ static void ui_render_game_panel(const UiAppState *state) {
         layout.game_w - 32.0f,
         UI_COLOR_TEXT_MUTED,
         0.72f,
-        "No PS1 memory card files were detected on this Vita.");
+        "No PS1 save targets were detected on this Vita.");
     return;
   }
 
@@ -2243,7 +2274,7 @@ static void ui_render_game_panel(const UiAppState *state) {
         state->selected_index == (UI_SELECT_GAME_BASE + i),
         state->active_game_index == i,
         full_title,
-        game->save_count);
+        game->card_count);
     row_y += UI_GAME_ROW_HEIGHT;
   }
 }
@@ -2366,9 +2397,10 @@ static int ui_refresh_local_inventory(UiAppState *state) {
   state->game_scroll = 0;
   ui_set_status(
       state,
-      "Scan complete: %d PS1 games (%d memory card files)",
+      "Scan complete: %d PS1 games (%d local target%s)",
       state->game_count,
-      state->local_count);
+      state->local_count,
+      (state->local_count == 1) ? "" : "s");
   app_log_write(
       APP_LOG_LEVEL_INFO,
       "ui",
@@ -2532,7 +2564,7 @@ static int ui_prepare_ps1_sync_candidates(
   if ((item_count > 0) && (selected_count != item_count)) {
     ui_sync_log_write(
         APP_LOG_LEVEL_INFO,
-        "PS1 latest-card rule active: %d sync candidate(s) selected from %d local save card(s)",
+        "PS1 latest-card rule active: %d sync candidate(s) selected from %d local target(s)",
         selected_count,
         item_count);
   }
@@ -3732,7 +3764,7 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
   snprintf(
       confirm_msg,
       sizeof(confirm_msg),
-      "Synchronize %s?\n%d sync candidate(s) selected from %d save card(s).",
+      "Synchronize %s?\n%d sync candidate(s) selected from %d local target(s).",
       has_text(game->title) ? game->title : game->game_id,
       sync_candidate_count,
       game_item_count);
@@ -3804,7 +3836,7 @@ static void ui_run_sync_all_saves(UiAppState *state) {
   snprintf(
       confirm_msg,
       sizeof(confirm_msg),
-      "Synchronize all detected PS1 saves?\n%d sync candidate(s) selected from %d save card(s) across %d game(s).",
+      "Synchronize all detected PS1 saves?\n%d sync candidate(s) selected from %d local target(s) across %d game(s).",
       sync_candidate_count,
       work_item_count,
       state->game_count);

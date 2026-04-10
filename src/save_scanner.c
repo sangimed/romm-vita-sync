@@ -156,6 +156,31 @@ static int has_vmp_extension(const char *name) {
 }
 
 /*
+ * Returns 1 when the provided file name is CONFIG.BIN (case-insensitive).
+ */
+static int is_config_bin_filename(const char *name) {
+  if (name == NULL) {
+    return 0;
+  }
+
+  if (strlen(name) != 10U) {
+    return 0;
+  }
+
+  return ((name[0] == 'C') || (name[0] == 'c')) &&
+         ((name[1] == 'O') || (name[1] == 'o')) &&
+         ((name[2] == 'N') || (name[2] == 'n')) &&
+         ((name[3] == 'F') || (name[3] == 'f')) &&
+         ((name[4] == 'I') || (name[4] == 'i')) &&
+         ((name[5] == 'G') || (name[5] == 'g')) &&
+         (name[6] == '.') &&
+         ((name[7] == 'B') || (name[7] == 'b')) &&
+         ((name[8] == 'I') || (name[8] == 'i')) &&
+         ((name[9] == 'N') || (name[9] == 'n')) &&
+         (name[10] == '\0');
+}
+
+/*
  * Converts a Vita date/time value to one readable sync timestamp string.
  */
 static void format_timestamp(const SceDateTime *dt, char *out, size_t out_size) {
@@ -181,6 +206,36 @@ static void format_timestamp(const SceDateTime *dt, char *out, size_t out_size) 
 }
 
 /*
+ * Reads PARAM.SFO title metadata from one PS1 save directory when available.
+ */
+static void populate_game_title_from_directory(
+    const char *dir_path,
+    char *out_title,
+    size_t out_title_size,
+    int verbose) {
+  if ((out_title == NULL) || (out_title_size == 0U)) {
+    return;
+  }
+
+  out_title[0] = '\0';
+  if (dir_path == NULL) {
+    return;
+  }
+
+  char sfo_path[ROMM_MAX_PATH_LEN];
+  int wrote = snprintf(sfo_path, sizeof(sfo_path), "%s/PARAM.SFO", dir_path);
+  if ((wrote < 0) || (wrote >= (int)sizeof(sfo_path))) {
+    return;
+  }
+
+  int sfo_status = sfo_read_title(sfo_path, out_title, out_title_size);
+  if (sfo_status < 0) {
+    scan_log(verbose, "PARAM.SFO unreadable status=%d (%s) path=%s",
+             sfo_status, sfo_status_str(sfo_status), sfo_path);
+  }
+}
+
+/*
  * Appends one detected VMP file to the result buffer if capacity allows.
  */
 static void try_add_vmp_file(const char *path, const SceIoStat *st, int verbose, ScanResult *result) {
@@ -199,20 +254,15 @@ static void try_add_vmp_file(const char *path, const SceIoStat *st, int verbose,
   format_timestamp(&st->st_mtime, item->timestamp, sizeof(item->timestamp));
 
   /* Try to read game title from PARAM.SFO in the same directory */
-  item->game_title[0] = '\0';
   if (item->game_id[0] != '\0') {
     const char *last_sep = strrchr(path, '/');
     if (last_sep != NULL) {
-      char sfo_path[ROMM_MAX_PATH_LEN];
       size_t dir_len = (size_t)(last_sep - path);
-      if (dir_len + sizeof("/PARAM.SFO") <= sizeof(sfo_path)) {
-        memcpy(sfo_path, path, dir_len);
-        memcpy(sfo_path + dir_len, "/PARAM.SFO", sizeof("/PARAM.SFO"));
-        int sfo_status = sfo_read_title(sfo_path, item->game_title, sizeof(item->game_title));
-        if (sfo_status < 0) {
-          scan_log(verbose, "PARAM.SFO unreadable status=%d (%s) path=%s",
-                   sfo_status, sfo_status_str(sfo_status), sfo_path);
-        }
+      char dir_path[ROMM_MAX_PATH_LEN];
+      if (dir_len < sizeof(dir_path)) {
+        memcpy(dir_path, path, dir_len);
+        dir_path[dir_len] = '\0';
+        populate_game_title_from_directory(dir_path, item->game_title, sizeof(item->game_title), verbose);
       }
     }
   }
@@ -222,6 +272,45 @@ static void try_add_vmp_file(const char *path, const SceIoStat *st, int verbose,
   scan_log(verbose, "VMP detected: game=%s file=%s",
            item->game_id[0] != '\0' ? item->game_id : "unknown",
            item->path);
+}
+
+/*
+ * Appends one synthetic slot-0 restore target when only CONFIG.BIN exists.
+ * This keeps the game visible in the UI and lets sync restore the newest RomM
+ * save into SCEVMC0.VMP even when both local cards were deleted.
+ */
+static void try_add_config_restore_target(
+    const char *dir_path,
+    const SceIoStat *config_stat,
+    int verbose,
+    ScanResult *result) {
+  if ((dir_path == NULL) || (config_stat == NULL) || (result == NULL)) {
+    return;
+  }
+
+  if (result->count >= ROMM_MAX_VMP_ITEMS) {
+    return;
+  }
+
+  SaveItem *item = &result->items[result->count];
+  memset(item, 0, sizeof(*item));
+
+  int wrote = snprintf(item->path, sizeof(item->path), "%s/SCEVMC0.VMP", dir_path);
+  if ((wrote < 0) || (wrote >= (int)sizeof(item->path))) {
+    return;
+  }
+
+  extract_parent_folder_name(item->path, item->game_id, sizeof(item->game_id));
+  item->size_bytes = 0U;
+  format_timestamp(&config_stat->st_mtime, item->timestamp, sizeof(item->timestamp));
+  populate_game_title_from_directory(dir_path, item->game_title, sizeof(item->game_title), verbose);
+
+  result->count += 1;
+  scan_log(
+      verbose,
+      "restore target detected: game=%s config_only=1 slot=slot0 path=%s",
+      item->game_id[0] != '\0' ? item->game_id : "unknown",
+      item->path);
 }
 
 /*
@@ -246,6 +335,10 @@ static int scan_directory_recursive(const char *root, int depth, int max_depth, 
 
   SceIoDirent entry;
   memset(&entry, 0, sizeof(entry));
+  int vmp_files_in_directory = 0;
+  int has_config_bin = 0;
+  SceIoStat config_stat;
+  memset(&config_stat, 0, sizeof(config_stat));
 
   for (;;) {
     memset(&entry, 0, sizeof(entry));
@@ -279,11 +372,18 @@ static int scan_directory_recursive(const char *root, int depth, int max_depth, 
 
     result->stats.files_scanned += 1;
     if (has_vmp_extension(name)) {
+      vmp_files_in_directory += 1;
       try_add_vmp_file(full_path, &entry.d_stat, verbose, result);
+    } else if (is_config_bin_filename(name)) {
+      has_config_bin = 1;
+      config_stat = entry.d_stat;
     }
   }
 
   sceIoDclose(dfd);
+  if (has_config_bin && (vmp_files_in_directory == 0)) {
+    try_add_config_restore_target(root, &config_stat, verbose, result);
+  }
   return 0;
 }
 

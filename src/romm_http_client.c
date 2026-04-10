@@ -722,7 +722,30 @@ static void build_upload_filename(const SyncSaveDescriptor *local_item, char *ou
     slot = "slot1";
   }
 
-  snprintf(out_filename, out_size, "%s_%s.srm", normalized_game_id, slot);
+  char timestamp_token[32];
+  timestamp_token[0] = '\0';
+  if (strlen(local_item->timestamp_text) >= 19U) {
+    const char *text = local_item->timestamp_text;
+    if ((text[4] == '-') && (text[7] == '-') && (text[10] == ' ') &&
+        (text[13] == ':') && (text[16] == ':')) {
+      snprintf(
+          timestamp_token,
+          sizeof(timestamp_token),
+          "%.4s%.2s%.2s-%.2s%.2s%.2s",
+          text + 0,
+          text + 5,
+          text + 8,
+          text + 11,
+          text + 14,
+          text + 17);
+    }
+  }
+
+  if (has_text(timestamp_token)) {
+    snprintf(out_filename, out_size, "%s_%s_%s.srm", normalized_game_id, slot, timestamp_token);
+  } else {
+    snprintf(out_filename, out_size, "%s_%s.srm", normalized_game_id, slot);
+  }
 }
 
 /*

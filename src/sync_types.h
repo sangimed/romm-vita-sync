@@ -48,6 +48,7 @@ typedef struct SyncSaveDescriptor {
   int remote_id;
   char game_id[ROMM_GAME_ID_LEN];
   char title[ROMM_GAME_TITLE_LEN];
+  char timestamp_text[ROMM_TIMESTAMP_LEN];
   char filename[ROMM_SYNC_MAX_FILENAME_LEN];
   char path[ROMM_MAX_PATH_LEN];
   char remote_path[ROMM_MAX_PATH_LEN];

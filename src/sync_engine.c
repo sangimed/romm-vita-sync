@@ -18,6 +18,8 @@
 
 #define SYNC_DEFAULT_BACKUP_DIRECTORY "ux0:data/romm-vita-sync/backups"
 #define SYNC_DEFAULT_CONVERSION_DIRECTORY "ux0:data/romm-vita-sync/cache/conversion"
+#define SYNC_DEFAULT_APP_TEMPLATE_SLOT0 "app0:templates/SCEVMC0.VMP"
+#define SYNC_DEFAULT_APP_TEMPLATE_SLOT1 "app0:templates/SCEVMC1.VMP"
 
 /*
  * Default clock provider used when caller does not inject one.
@@ -285,6 +287,16 @@ static int resolve_template_vmp_path(
     return 0;
   }
 
+  {
+    const char *app_template = (local_item->slot == SYNC_SLOT_1)
+                                   ? SYNC_DEFAULT_APP_TEMPLATE_SLOT1
+                                   : SYNC_DEFAULT_APP_TEMPLATE_SLOT0;
+    if (file_exists(app_template)) {
+      snprintf(out_template_path, out_template_path_size, "%s", app_template);
+      return 0;
+    }
+  }
+
   out_template_path[0] = '\0';
   return -1;
 }
@@ -483,6 +495,23 @@ static int remote_reports_current_for_device(
   }
 
   return file_exists(local_item->path);
+}
+
+/*
+ * Returns non-zero when the local descriptor is only a restore target.
+ * The scanner synthesizes these entries from CONFIG.BIN when both VMP cards are
+ * absent, so they should download from RomM instead of attempting an upload.
+ */
+static int local_item_is_missing_restore_target(const SyncSaveDescriptor *local_item) {
+  if (local_item == NULL) {
+    return 0;
+  }
+
+  if (!has_text(local_item->path) || !path_has_extension(local_item->path, ".vmp")) {
+    return 0;
+  }
+
+  return !file_exists(local_item->path);
 }
 
 /*
@@ -1229,6 +1258,29 @@ int sync_engine_run(
 
     int remote_index = game_matcher_find_remote_index(local_item, remote_items, remote_count);
     if (remote_index < 0) {
+      if (local_item_is_missing_restore_target(local_item)) {
+        action->action = SYNC_ACTION_SKIP;
+        out_report->skipped += 1;
+        set_reason(action, "skip missing local slot: no remote save found to restore");
+        app_log_write(
+            APP_LOG_LEVEL_INFO,
+            "sync",
+            "missing local restore target skipped game=%s file=%s: no remote match",
+            local_item->game_id,
+            display_filename);
+        completed_engine_units = 2 + i;
+        emit_progress(
+            config,
+            completed_engine_units,
+            total_engine_units,
+            i,
+            local_count,
+            "%s: %s",
+            display_filename,
+            action->reason);
+        continue;
+      }
+
       if (should_skip_redundant_upload(local_item, state_entry)) {
         action->action = SYNC_ACTION_SKIP;
         out_report->skipped += 1;
@@ -1279,6 +1331,39 @@ int sync_engine_run(
 
     const SyncSaveDescriptor *remote_item = &remote_items[remote_index];
     log_sync_match_metadata(local_item, remote_item);
+    if (local_item_is_missing_restore_target(local_item)) {
+      action->action = SYNC_ACTION_DOWNLOAD;
+      out_report->downloads_planned += 1;
+      set_reason(action, "restoring missing local slot from remote");
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "sync",
+          "missing local slot detected: restoring from remote game=%s file=%s remote_id=%d",
+          local_item->game_id,
+          action->filename,
+          remote_item->remote_id);
+      execute_download(
+          config,
+          romm_client,
+          local_item,
+          remote_item,
+          state_entry,
+          state_store,
+          action,
+          out_report);
+      completed_engine_units = 2 + i;
+      emit_progress(
+          config,
+          completed_engine_units,
+          total_engine_units,
+          i,
+          local_count,
+          "%s: %s",
+          display_filename,
+          action->reason);
+      continue;
+    }
+
     if (remote_reports_current_for_device(local_item, remote_item)) {
       action->action = SYNC_ACTION_SKIP;
       out_report->skipped += 1;

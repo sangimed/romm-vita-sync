@@ -90,4 +90,6 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} ${PROJECT_NAME}.self
   FILE sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
   FILE sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
   FILE sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
+  FILE samples/vmp-templates/SCEVMC0.VMP templates/SCEVMC0.VMP
+  FILE samples/vmp-templates/SCEVMC1.VMP templates/SCEVMC1.VMP
 )

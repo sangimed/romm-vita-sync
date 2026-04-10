@@ -7,7 +7,8 @@
 #define printf psvDebugScreenPrintf
 
 /*
- * Prints a human-readable summary of scan statistics and each detected VMP.
+ * Prints a human-readable summary of scan statistics and each detected PS1
+ * save target, including synthetic slot-0 restore targets.
  */
 void render_inventory(const ScanResult *result) {
   if (result == NULL) {
@@ -24,11 +25,11 @@ void render_inventory(const ScanResult *result) {
   printf("  access errors   : %d\n\n", result->stats.access_errors);
 
   if (result->count == 0) {
-    printf("No .VMP file found in candidate paths.\n");
+    printf("No PS1 save target found in candidate paths.\n");
     return;
   }
 
-  printf("Detected VMP files\n");
+  printf("Detected PS1 save targets\n");
   for (int i = 0; i < result->count; ++i) {
     const SaveItem *item = &result->items[i];
     printf("[%03d] %s\n", i + 1, item->path);
