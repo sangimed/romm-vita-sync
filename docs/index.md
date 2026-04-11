@@ -219,7 +219,9 @@ Authentication rule:
 - `username` and `password` are required for all authenticated RomM requests
 - if `[Device].device_id` is empty, startup calls the `RommClient` registration flow and persists the returned `device_id` into `settings.ini`
 - recommended logging for troubleshooting: `level=debug` and keep `scan_verbose=false` first; enable `scan_verbose=true` only when debugging scanner issues
-- at `level=info`, RomM HTTP logs summarize request/response flow for `/api/platforms`, `/api/roms`, `/api/saves`, and `/api/devices`; `level=debug` still keeps the raw response-body details
+- at `level=info`, RomM HTTP logs summarize request/response flow for `/api/platforms`, `/api/roms`, `/api/saves`, and `/api/devices`
+- HTTP error responses now log richer diagnostics automatically: effective URL/scheme, selected response headers (`Content-Type`, `Server`, `Via`, `Location`, `CF-Ray` when present), and a longer body preview
+- at `level=debug`, additional raw response-body details remain available for troubleshooting unsupported API payloads
 - file logging remains available only through `settings.ini`; the home screen no longer exposes a dedicated file logging row
 - when enabled manually, file logging path is fixed to `ux0:data/romm-vita-sync/romm-vita-sync.log` with 3 rotated files max (`.log`, `.log.1`, `.log.2`), 10MB each
 
@@ -385,20 +387,26 @@ RomM does not store `.VMP` containers directly. Instead, it uses emulator-facing
 Observed sizes:
 
 - `SCEVMC0.VMP = 131200 bytes`
-- `SAVE.SRM = 131072 bytes`
-- Difference: `128 bytes`
+- Standard `SAVE.SRM = 131072 bytes` (pcsx_rearmed, DuckStation, and most PS1 emulators)
+- Dual-card `SAVE.SRM = 262144 bytes` (mednafen_psx_hw / beetle_psx only)
 
 Working model:
 
-- VMP = 128-byte header + raw memory card data
-- SRM = raw memory card data
+- VMP = 128-byte header + raw memory card data (one card, 131072 bytes)
+- SRM = raw memory card data; standard format is 131072 bytes (single card)
 
 Conversion strategy:
 
 | Direction | Operation |
 |-----------|-----------|
-| Vita → RomM | Remove first 128 bytes |
-| RomM → Vita | Prepend valid VMP header |
+| Vita → RomM | Remove 128-byte VMP header, producing a standard 131072-byte SRM |
+| RomM → Vita | Single-card SRM: rebuild one VMP. Dual-card SRM: split into card 1 + card 2 and rebuild both `SCEVMC0.VMP` and `SCEVMC1.VMP` |
+
+The upload produces the standard 131072-byte single-card SRM format, which is compatible
+with pcsx_rearmed (EmulatorJS default), DuckStation, and other PS1 emulators.
+The download path accepts both 131072-byte and 262144-byte SRM files for compatibility
+with saves created by mednafen_psx_hw users. When a dual-card SRM is downloaded,
+the app restores both PS1 memory cards on Vita instead of dropping card 2.
 
 ## Save Models (Current Implementation)
 
@@ -799,7 +807,8 @@ Conversion is now wired in the app sync flow:
 - upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback
 - download path: remote `.SRM` is reconstructed to local `.VMP` and re-signed in-app
 - when one game has both local PS1 cards, only the newest local card is mapped and synchronized; exact timestamp ties keep `SCEVMC0.VMP` and warn the user
-- if the server copy is newer, the download target remains that selected local card, so the restore does not hop from `SCEVMC0.VMP` to `SCEVMC1.VMP` or the reverse
+- if the server copy is newer and the remote save is a standard single-card SRM, the download target remains that selected local card
+- if the server copy is newer and the remote save is a dual-card SRM, the app restores both `SCEVMC0.VMP` and `SCEVMC1.VMP`
 
 ## End-to-End Sync Sequence Diagram
 

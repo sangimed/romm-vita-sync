@@ -32,7 +32,8 @@
 #define ROMM_HTTP_MAX_FILENAME 128
 #define ROMM_HTTP_MAX_PLATFORM_SLUG 64
 #define ROMM_HTTP_MAX_SEARCH_TERM ROMM_GAME_TITLE_LEN
-#define ROMM_HTTP_LOG_BODY_PREVIEW 96
+#define ROMM_HTTP_LOG_BODY_PREVIEW 160
+#define ROMM_HTTP_LOG_BODY_DEBUG 224
 #define ROMM_HTTP_FALLBACK_URL_BUFFER_SIZE (APP_CONFIG_MAX_URL_LEN + 256)
 #define ROMM_HTTP_SSL_TRANSPORT_ERROR 0x80431075u
 #define ROMM_HTTP_TLS_DISABLE_UNSUPPORTED 0x8043506Bu
@@ -59,9 +60,21 @@ typedef struct HttpRuntimeState {
   int module_https_loaded;
 } HttpRuntimeState;
 
+typedef struct HttpResponseMeta {
+  int has_content_length;
+  unsigned long long content_length;
+  char content_type[64];
+  char server[64];
+  char via[64];
+  char location[96];
+  char cf_ray[64];
+} HttpResponseMeta;
+
 typedef GameMatcherRomCandidate RomCatalogEntry;
 
 static void http_runtime_term(HttpRuntimeState *state);
+static int url_is_https(const char *url);
+static void build_body_preview(const char *input, char *output, size_t output_size);
 static int g_logged_https_verify_fallback_notice = 0;
 
 /*
@@ -80,6 +93,19 @@ static int url_is_https(const char *url) {
   }
 
   return strncmp(url, "https://", 8) == 0;
+}
+
+/*
+ * Returns the URL scheme as a short label for diagnostics.
+ */
+static const char *url_scheme_label(const char *url) {
+  if (url_is_https(url)) {
+    return "https";
+  }
+  if (has_text(url) && (strncmp(url, "http://", 7) == 0)) {
+    return "http";
+  }
+  return "(unknown)";
 }
 
 /*
@@ -369,6 +395,190 @@ static void safe_copy(char *destination, size_t destination_size, const char *so
     return;
   }
   snprintf(destination, destination_size, "%s", source);
+}
+
+/*
+ * Copies one trimmed substring into a bounded destination.
+ */
+static int copy_trimmed_range(
+    const char *start,
+    const char *end,
+    char *output,
+    size_t output_size) {
+  if ((start == NULL) || (end == NULL) || (output == NULL) || (output_size == 0U) || (start > end)) {
+    return -1;
+  }
+
+  while ((start < end) && isspace((unsigned char)*start)) {
+    start++;
+  }
+  while ((end > start) && isspace((unsigned char)*(end - 1))) {
+    end--;
+  }
+
+  size_t length = (size_t)(end - start);
+  if ((length == 0U) || (length >= output_size)) {
+    output[0] = '\0';
+    return -1;
+  }
+
+  memcpy(output, start, length);
+  output[length] = '\0';
+  return 0;
+}
+
+/*
+ * Compares one header-name slice against an expected field name, case-insensitively.
+ */
+static int header_name_matches(const char *start, size_t length, const char *expected) {
+  if ((start == NULL) || (expected == NULL)) {
+    return 0;
+  }
+
+  size_t expected_length = strlen(expected);
+  if (length != expected_length) {
+    return 0;
+  }
+
+  for (size_t index = 0U; index < length; ++index) {
+    unsigned char lhs = (unsigned char)start[index];
+    unsigned char rhs = (unsigned char)expected[index];
+    if (tolower(lhs) != tolower(rhs)) {
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
+/*
+ * Extracts one response header value from the raw Vita header block.
+ */
+static int extract_response_header_value(
+    const char *headers,
+    unsigned int headers_size,
+    const char *field_name,
+    char *output,
+    size_t output_size) {
+  if ((headers == NULL) || (headers_size == 0U) || !has_text(field_name) ||
+      (output == NULL) || (output_size == 0U)) {
+    return -1;
+  }
+
+  output[0] = '\0';
+
+  const char *cursor = headers;
+  const char *headers_end = headers + headers_size;
+  while (cursor < headers_end) {
+    const char *line_end = memchr(cursor, '\n', (size_t)(headers_end - cursor));
+    if (line_end == NULL) {
+      line_end = headers_end;
+    }
+
+    const char *trimmed_end = line_end;
+    while ((trimmed_end > cursor) &&
+           ((trimmed_end[-1] == '\r') || (trimmed_end[-1] == '\n'))) {
+      trimmed_end--;
+    }
+
+    const char *colon = memchr(cursor, ':', (size_t)(trimmed_end - cursor));
+    if ((colon != NULL) &&
+        header_name_matches(cursor, (size_t)(colon - cursor), field_name) &&
+        (copy_trimmed_range(colon + 1, trimmed_end, output, output_size) == 0)) {
+      return 0;
+    }
+
+    cursor = line_end;
+    if ((cursor < headers_end) && (*cursor == '\n')) {
+      cursor++;
+    }
+  }
+
+  return -1;
+}
+
+/*
+ * Reads response metadata exposed by the Vita HTTP API for richer diagnostics.
+ */
+static void collect_http_response_meta(int request_id, HttpResponseMeta *meta) {
+  if ((request_id < 0) || (meta == NULL)) {
+    return;
+  }
+
+  memset(meta, 0, sizeof(*meta));
+
+  unsigned long long content_length = 0ULL;
+  if (sceHttpGetResponseContentLength(request_id, &content_length) >= 0) {
+    meta->has_content_length = 1;
+    meta->content_length = content_length;
+  }
+
+  char *raw_headers = NULL;
+  unsigned int raw_headers_size = 0U;
+  if (sceHttpGetAllResponseHeaders(request_id, &raw_headers, &raw_headers_size) < 0) {
+    return;
+  }
+
+  extract_response_header_value(raw_headers, raw_headers_size, "Content-Type", meta->content_type, sizeof(meta->content_type));
+  extract_response_header_value(raw_headers, raw_headers_size, "Server", meta->server, sizeof(meta->server));
+  extract_response_header_value(raw_headers, raw_headers_size, "Via", meta->via, sizeof(meta->via));
+  extract_response_header_value(raw_headers, raw_headers_size, "Location", meta->location, sizeof(meta->location));
+  extract_response_header_value(raw_headers, raw_headers_size, "CF-Ray", meta->cf_ray, sizeof(meta->cf_ray));
+}
+
+/*
+ * Logs one richer HTTP error summary with the effective URL and returned metadata.
+ */
+static void log_http_error_response(
+    int request_id,
+    const char *url,
+    int status_code,
+    const char *body) {
+  HttpResponseMeta meta;
+  collect_http_response_meta(request_id, &meta);
+
+  char content_length[32];
+  if (meta.has_content_length) {
+    snprintf(content_length, sizeof(content_length), "%llu", meta.content_length);
+  } else {
+    safe_copy(content_length, sizeof(content_length), "(unknown)");
+  }
+
+  app_log_write(
+      APP_LOG_LEVEL_WARN,
+      "http",
+      "response meta status=%d scheme=%s content_type=%s content_length=%s",
+      status_code,
+      url_scheme_label(url),
+      has_text(meta.content_type) ? meta.content_type : "(unknown)",
+      content_length);
+  app_log_write(
+      APP_LOG_LEVEL_WARN,
+      "http",
+      "response target status=%d url=%s",
+      status_code,
+      has_text(url) ? url : "(unknown)");
+
+  if (has_text(meta.server) || has_text(meta.via) || has_text(meta.location) || has_text(meta.cf_ray)) {
+    app_log_write(
+        APP_LOG_LEVEL_WARN,
+        "http",
+        "response headers status=%d server=%s via=%s location=%s cf_ray=%s",
+        status_code,
+        has_text(meta.server) ? meta.server : "(none)",
+        has_text(meta.via) ? meta.via : "(none)",
+        has_text(meta.location) ? meta.location : "(none)",
+        has_text(meta.cf_ray) ? meta.cf_ray : "(none)");
+  }
+
+  char body_preview[ROMM_HTTP_LOG_BODY_DEBUG];
+  build_body_preview(body, body_preview, sizeof(body_preview));
+  app_log_write(
+      APP_LOG_LEVEL_WARN,
+      "http",
+      "response body status=%d body=%s",
+      status_code,
+      body_preview);
 }
 
 /*
@@ -1746,7 +1956,8 @@ static int http_send_request(
       app_log_write(
           APP_LOG_LEVEL_INFO,
           "http",
-          "Using HTTP fallback because HTTPS verify override is unavailable and verify_tls=false");
+          "Using HTTP fallback because HTTPS verify override is unavailable and verify_tls=false target=%s",
+          fallback_url);
       g_logged_https_verify_fallback_notice = 1;
     }
     return http_send_request(
@@ -1867,6 +2078,9 @@ static int http_send_request(
           out_body[0] = '\0';
         }
       }
+      if ((*out_status_code < 200) || (*out_status_code >= 400)) {
+        log_http_error_response(request_id, url, *out_status_code, out_body);
+      }
       result = ROMM_CLIENT_OK;
       goto cleanup;
     }
@@ -1905,6 +2119,9 @@ static int http_send_request(
   } else {
     if (read_response_body(request_id, out_body, out_body_size) < 0) {
       app_log_write(APP_LOG_LEVEL_WARN, "http", "Failed to read full response body");
+    }
+    if ((*out_status_code < 200) || (*out_status_code >= 400)) {
+      log_http_error_response(request_id, url, *out_status_code, out_body);
     }
   }
 
@@ -2277,14 +2494,21 @@ static int resolve_platform_id(
   }
 
   int parse_status = parse_platform_id_from_list(body, platform_slug, out_platform_id);
-  free(body);
   if (parse_status < 0) {
     app_log_write(
         APP_LOG_LEVEL_WARN,
         "http",
-        "platform lookup returned unsupported response format; falling back to legacy rom query");
+        "platform lookup returned unsupported response format for slug=%s; falling back to legacy rom query",
+        platform_slug);
+    {
+      char body_preview[ROMM_HTTP_LOG_BODY_DEBUG];
+      build_body_preview(body, body_preview, sizeof(body_preview));
+      app_log_write(APP_LOG_LEVEL_DEBUG, "http", "platform raw response slug=%s body=%s", platform_slug, body_preview);
+    }
+    free(body);
     return ROMM_CLIENT_OK;
   }
+  free(body);
 
   if (*out_platform_id > 0) {
     app_log_write(
@@ -2487,6 +2711,24 @@ static int fetch_rom_catalog(
     int remaining = max_catalog - catalog_count;
     int parsed = parse_rom_catalog_entries(body, &out_catalog[catalog_count], remaining, &page_total);
     if (parsed < 0) {
+      char body_preview[ROMM_HTTP_LOG_BODY_DEBUG];
+      build_body_preview(body, body_preview, sizeof(body_preview));
+      if (has_text(search_term)) {
+        app_log_write(
+            APP_LOG_LEVEL_WARN,
+            "http",
+            "rom search returned unsupported response format offset=%d term=%s body=%s",
+            offset,
+            search_term,
+            body_preview);
+      } else {
+        app_log_write(
+            APP_LOG_LEVEL_WARN,
+            "http",
+            "rom catalog returned unsupported response format offset=%d body=%s",
+            offset,
+            body_preview);
+      }
       return ROMM_CLIENT_ERR_NETWORK;
     }
 

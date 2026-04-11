@@ -196,7 +196,30 @@ int srm_build_default_vmp_path(const char *srm_path, char *out_path, size_t out_
 }
 
 /*
+ * Maps one SRM payload size to the number of contained memory cards.
+ */
+static int srm_card_count_from_size(long input_size, int *out_card_count) {
+  if (out_card_count == NULL) {
+    return ROMM_VMP_SRM_ERR_INVALID_ARGUMENT;
+  }
+
+  *out_card_count = 0;
+  if ((unsigned long)input_size == (unsigned long)ROMM_PS1_SRM_SIZE) {
+    *out_card_count = 1;
+    return ROMM_VMP_SRM_OK;
+  }
+  if ((unsigned long)input_size == (unsigned long)ROMM_PS1_DUAL_SRM_SIZE) {
+    *out_card_count = 2;
+    return ROMM_VMP_SRM_OK;
+  }
+
+  return ROMM_VMP_SRM_ERR_UNSUPPORTED_SIZE;
+}
+
+/*
  * Converts a standard 131200-byte VMP container into a 131072-byte SRM payload.
+ * This is the standard single-card raw PS1 memory card format expected by
+ * pcsx_rearmed, DuckStation, and other PS1 emulators.
  */
 int vmp_to_srm_file(const char *vmp_path, const char *srm_path) {
   if ((vmp_path == NULL) || (srm_path == NULL) || (vmp_path[0] == '\0') || (srm_path[0] == '\0')) {
@@ -261,11 +284,45 @@ int vmp_to_srm_file(const char *vmp_path, const char *srm_path) {
 }
 
 /*
- * Rebuilds a VMP file from SRM payload using header bytes from a trusted template.
+ * Returns the number of memory cards stored in an SRM payload.
  */
-int srm_to_vmp_file(const char *srm_path, const char *template_vmp_path, const char *vmp_path) {
+int srm_get_card_count(const char *srm_path, int *out_card_count) {
+  if ((srm_path == NULL) || (out_card_count == NULL) || (srm_path[0] == '\0')) {
+    return ROMM_VMP_SRM_ERR_INVALID_ARGUMENT;
+  }
+
+  FILE *input = fopen(srm_path, "rb");
+  if (input == NULL) {
+    return ROMM_VMP_SRM_ERR_OPEN_INPUT;
+  }
+
+  int status = ROMM_VMP_SRM_OK;
+  do {
+    long input_size = 0;
+    status = get_file_size(input, &input_size);
+    if (status != ROMM_VMP_SRM_OK) {
+      break;
+    }
+
+    status = srm_card_count_from_size(input_size, out_card_count);
+  } while (0);
+
+  fclose(input);
+  return status;
+}
+
+/*
+ * Rebuilds one VMP file from a selected SRM card using header bytes from a
+ * trusted template.
+ */
+int srm_card_to_vmp_file(
+    const char *srm_path,
+    int card_index,
+    const char *template_vmp_path,
+    const char *vmp_path) {
   if ((srm_path == NULL) || (template_vmp_path == NULL) || (vmp_path == NULL) ||
-      (srm_path[0] == '\0') || (template_vmp_path[0] == '\0') || (vmp_path[0] == '\0')) {
+      (srm_path[0] == '\0') || (template_vmp_path[0] == '\0') || (vmp_path[0] == '\0') ||
+      (card_index < 0)) {
     return ROMM_VMP_SRM_ERR_INVALID_ARGUMENT;
   }
 
@@ -289,8 +346,14 @@ int srm_to_vmp_file(const char *srm_path, const char *template_vmp_path, const c
       break;
     }
 
-    if ((unsigned long)input_size != (unsigned long)ROMM_PS1_SRM_SIZE) {
-      status = ROMM_VMP_SRM_ERR_UNSUPPORTED_SIZE;
+    int card_count = 0;
+    status = srm_card_count_from_size(input_size, &card_count);
+    if (status != ROMM_VMP_SRM_OK) {
+      break;
+    }
+
+    if (card_index >= card_count) {
+      status = ROMM_VMP_SRM_ERR_INVALID_ARGUMENT;
       break;
     }
 
@@ -329,6 +392,12 @@ int srm_to_vmp_file(const char *srm_path, const char *template_vmp_path, const c
       break;
     }
 
+    long payload_offset = (long)(card_index * (int)ROMM_PS1_SRM_SIZE);
+    if (fseek(input, payload_offset, SEEK_SET) != 0) {
+      status = ROMM_VMP_SRM_ERR_READ;
+      break;
+    }
+
     status = copy_payload(input, output, ROMM_PS1_SRM_SIZE);
     if (status != ROMM_VMP_SRM_OK) {
       break;
@@ -353,4 +422,12 @@ int srm_to_vmp_file(const char *srm_path, const char *template_vmp_path, const c
 
   fclose(input);
   return status;
+}
+
+/*
+ * Rebuilds the first VMP file from an SRM payload using header bytes from a
+ * trusted template.
+ */
+int srm_to_vmp_file(const char *srm_path, const char *template_vmp_path, const char *vmp_path) {
+  return srm_card_to_vmp_file(srm_path, 0, template_vmp_path, vmp_path);
 }
