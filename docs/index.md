@@ -219,7 +219,9 @@ Authentication rule:
 - `username` and `password` are required for all authenticated RomM requests
 - if `[Device].device_id` is empty, startup calls the `RommClient` registration flow and persists the returned `device_id` into `settings.ini`
 - recommended logging for troubleshooting: `level=debug` and keep `scan_verbose=false` first; enable `scan_verbose=true` only when debugging scanner issues
-- at `level=info`, RomM HTTP logs summarize request/response flow for `/api/platforms`, `/api/roms`, `/api/saves`, and `/api/devices`; `level=debug` still keeps the raw response-body details
+- at `level=info`, RomM HTTP logs summarize request/response flow for `/api/platforms`, `/api/roms`, `/api/saves`, and `/api/devices`
+- HTTP error responses now log richer diagnostics automatically: effective URL/scheme, selected response headers (`Content-Type`, `Server`, `Via`, `Location`, `CF-Ray` when present), and a longer body preview
+- at `level=debug`, additional raw response-body details remain available for troubleshooting unsupported API payloads
 - file logging remains available only through `settings.ini`; the home screen no longer exposes a dedicated file logging row
 - when enabled manually, file logging path is fixed to `ux0:data/romm-vita-sync/romm-vita-sync.log` with 3 rotated files max (`.log`, `.log.1`, `.log.2`), 10MB each
 
