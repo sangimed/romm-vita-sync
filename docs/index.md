@@ -385,20 +385,25 @@ RomM does not store `.VMP` containers directly. Instead, it uses emulator-facing
 Observed sizes:
 
 - `SCEVMC0.VMP = 131200 bytes`
-- `SAVE.SRM = 131072 bytes`
-- Difference: `128 bytes`
+- Standard `SAVE.SRM = 131072 bytes` (pcsx_rearmed, DuckStation, and most PS1 emulators)
+- Dual-card `SAVE.SRM = 262144 bytes` (mednafen_psx_hw / beetle_psx only)
 
 Working model:
 
-- VMP = 128-byte header + raw memory card data
-- SRM = raw memory card data
+- VMP = 128-byte header + raw memory card data (one card, 131072 bytes)
+- SRM = raw memory card data; standard format is 131072 bytes (single card)
 
 Conversion strategy:
 
 | Direction | Operation |
 |-----------|-----------|
-| Vita → RomM | Remove first 128 bytes |
-| RomM → Vita | Prepend valid VMP header |
+| Vita → RomM | Remove 128-byte VMP header, producing a standard 131072-byte SRM |
+| RomM → Vita | Read only the first 131072 bytes from the SRM, prepend valid VMP header |
+
+The upload produces the standard 131072-byte single-card SRM format, which is compatible
+with pcsx_rearmed (EmulatorJS default), DuckStation, and other PS1 emulators.
+The download path accepts both 131072-byte and 262144-byte SRM files for compatibility
+with saves created by mednafen_psx_hw users.
 
 ## Save Models (Current Implementation)
 

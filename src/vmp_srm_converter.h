@@ -5,6 +5,7 @@
 
 #define ROMM_VMP_HEADER_SIZE 128U
 #define ROMM_PS1_SRM_SIZE 131072U
+#define ROMM_PS1_DUAL_SRM_SIZE (ROMM_PS1_SRM_SIZE * 2U)
 #define ROMM_PS1_VMP_SIZE (ROMM_VMP_HEADER_SIZE + ROMM_PS1_SRM_SIZE)
 
 #define ROMM_VMP_SRM_OK 0
@@ -34,16 +35,18 @@ int vmp_build_default_srm_path(const char *vmp_path, char *out_path, size_t out_
 int srm_build_default_vmp_path(const char *srm_path, char *out_path, size_t out_path_size);
 
 /*
- * Converts a VMP memory card file to its raw SRM payload.
- * Version 1 is intentionally strict and only accepts standard 131200-byte VMP files.
+ * Converts a VMP memory card file to a standard 131072-byte SRM payload.
+ * This is the raw PS1 memory card format expected by pcsx_rearmed, DuckStation,
+ * and other PS1 emulators. Only accepts standard 131200-byte VMP files.
  */
 int vmp_to_srm_file(const char *vmp_path, const char *srm_path);
 
 /*
  * Converts a raw SRM payload back to a VMP memory card file by reusing the
  * first 128 bytes from a known-good template VMP file.
- * Version 1 is intentionally strict and only accepts standard 131072-byte SRM
- * files and 131200-byte template VMP files.
+ * Accepts both 131072-byte (single-card) and 262144-byte (dual-card) SRM
+ * files. When a dual-card SRM is provided, only the first 131072 bytes
+ * (memory card 1) are used for VMP reconstruction.
  */
 int srm_to_vmp_file(const char *srm_path, const char *template_vmp_path, const char *vmp_path);
 

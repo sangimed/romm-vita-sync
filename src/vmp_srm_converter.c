@@ -197,6 +197,8 @@ int srm_build_default_vmp_path(const char *srm_path, char *out_path, size_t out_
 
 /*
  * Converts a standard 131200-byte VMP container into a 131072-byte SRM payload.
+ * This is the standard single-card raw PS1 memory card format expected by
+ * pcsx_rearmed, DuckStation, and other PS1 emulators.
  */
 int vmp_to_srm_file(const char *vmp_path, const char *srm_path) {
   if ((vmp_path == NULL) || (srm_path == NULL) || (vmp_path[0] == '\0') || (srm_path[0] == '\0')) {
@@ -262,6 +264,9 @@ int vmp_to_srm_file(const char *vmp_path, const char *srm_path) {
 
 /*
  * Rebuilds a VMP file from SRM payload using header bytes from a trusted template.
+ * Accepts both 131072-byte (single-card) and 262144-byte (dual-card) SRM files.
+ * When a dual-card SRM is provided, only the first 131072 bytes (memory card 1)
+ * are used for VMP reconstruction.
  */
 int srm_to_vmp_file(const char *srm_path, const char *template_vmp_path, const char *vmp_path) {
   if ((srm_path == NULL) || (template_vmp_path == NULL) || (vmp_path == NULL) ||
@@ -289,7 +294,8 @@ int srm_to_vmp_file(const char *srm_path, const char *template_vmp_path, const c
       break;
     }
 
-    if ((unsigned long)input_size != (unsigned long)ROMM_PS1_SRM_SIZE) {
+    if (((unsigned long)input_size != (unsigned long)ROMM_PS1_SRM_SIZE) &&
+        ((unsigned long)input_size != (unsigned long)ROMM_PS1_DUAL_SRM_SIZE)) {
       status = ROMM_VMP_SRM_ERR_UNSUPPORTED_SIZE;
       break;
     }
