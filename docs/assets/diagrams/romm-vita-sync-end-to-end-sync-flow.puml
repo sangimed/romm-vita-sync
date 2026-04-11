@@ -78,12 +78,18 @@ group Rom ID mapping
 end
 
 group Sync engine run
-  UI -> SE: sync_engine_run(...)
+  UI -> UI: select latest local PS1 card per game
+  alt local M0 and M1 timestamps are equal
+    UI -> User: warn and keep M0 only
+  end
+  UI -> SE: sync_engine_run(selected_items)
   SE -> FS: load sync state
-  SE -> RC: romm_client_list_remote_saves()
+  SE -> RC: romm_client_list_remote_saves(mapped rom_ids)
   RC -> HTTP: list_remote_saves_callback()
-  HTTP -> API: GET /api/saves?limit&offset&emulator=...
-  API --> HTTP: remote saves
+  loop per mapped rom_id
+    HTTP -> API: GET /api/saves?limit&offset&emulator=...&rom_id=...
+    API --> HTTP: current-user saves for that rom
+  end
   HTTP --> SE: parsed + deduped list
 
   loop per local save

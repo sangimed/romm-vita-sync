@@ -2,12 +2,17 @@
 
 /*
  * Delegates remote save listing to the configured RomM client callback.
+ * rom_ids optionally narrows the request to the mapped remote games needed by
+ * the current sync batch; pass NULL/0 to keep the legacy unfiltered behavior.
  */
 int romm_client_list_remote_saves(
     const RommClient *client,
+    const int *rom_ids,
+    int rom_id_count,
     SyncSaveDescriptor *out_items,
     int max_items) {
-  if ((client == NULL) || (out_items == NULL) || (max_items <= 0)) {
+  if ((client == NULL) || (out_items == NULL) || (max_items <= 0) ||
+      (rom_id_count < 0) || ((rom_id_count > 0) && (rom_ids == NULL))) {
     return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
   }
 
@@ -15,7 +20,7 @@ int romm_client_list_remote_saves(
     return ROMM_CLIENT_ERR_NOT_IMPLEMENTED;
   }
 
-  return client->list_remote_saves(client->context, out_items, max_items);
+  return client->list_remote_saves(client->context, rom_ids, rom_id_count, out_items, max_items);
 }
 
 /*

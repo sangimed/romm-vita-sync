@@ -21,7 +21,8 @@ typedef struct ScanResult {
 } ScanResult;
 
 /*
- * Scan candidate root directories for .VMP files.
+ * Scan candidate root directories for .VMP files and CONFIG.BIN-only PS1 save
+ * folders that need a synthetic slot-0 restore target.
  * roots: list of directories to probe
  * root_count: number of entries in roots
  * max_depth: recursive depth limit per root

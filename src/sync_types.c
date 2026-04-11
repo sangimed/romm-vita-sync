@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 /*
  * Converts an ASCII letter to lowercase.
@@ -13,6 +14,13 @@ static char ascii_lower(char value) {
     return (char)(value - 'A' + 'a');
   }
   return value;
+}
+
+/*
+ * Returns non-zero when the given text is non-null and non-empty.
+ */
+static int has_text(const char *text) {
+  return (text != NULL) && (text[0] != '\0');
 }
 
 /*
@@ -79,6 +87,65 @@ static int64_t days_from_civil(int year, int month, int day) {
   unsigned day_of_year = (unsigned)((153 * (month + ((month > 2) ? -3 : 9)) + 2) / 5 + day - 1);
   unsigned day_of_era = (year_of_era * 365U) + (year_of_era / 4U) - (year_of_era / 100U) + day_of_year;
   return ((int64_t)era * 146097LL) + (int64_t)day_of_era - 719468LL;
+}
+
+/*
+ * Returns non-zero when both descriptors belong to the same PS1 game bucket.
+ * Empty game identifiers are intentionally not grouped so unrelated saves do
+ * not collapse into one selection when scanner metadata is incomplete.
+ */
+static int local_items_share_game_group(
+    const SyncSaveDescriptor *lhs,
+    const SyncSaveDescriptor *rhs) {
+  if ((lhs == NULL) || (rhs == NULL)) {
+    return 0;
+  }
+
+  if (!has_text(lhs->game_id) || !has_text(rhs->game_id)) {
+    return 0;
+  }
+
+  return sync_string_ieq(lhs->game_id, rhs->game_id);
+}
+
+/*
+ * Scores slot priority used only for deterministic equal-timestamp fallback.
+ * Slot 0 must win ties so callers can warn when M0 is chosen over M1.
+ */
+static int slot_selection_priority(SyncSlot slot) {
+  switch (slot) {
+    case SYNC_SLOT_0:
+      return 2;
+    case SYNC_SLOT_1:
+      return 1;
+    case SYNC_SLOT_UNKNOWN:
+    default:
+      return 0;
+  }
+}
+
+/*
+ * Returns non-zero when candidate should replace current_best for one game.
+ * The newest timestamp wins first; exact ties fall back to slot priority.
+ */
+static int local_item_is_better_sync_candidate(
+    const SyncSaveDescriptor *candidate,
+    const SyncSaveDescriptor *current_best) {
+  if (candidate == NULL) {
+    return 0;
+  }
+  if (current_best == NULL) {
+    return 1;
+  }
+
+  if (candidate->timestamp_unix > current_best->timestamp_unix) {
+    return 1;
+  }
+  if (candidate->timestamp_unix < current_best->timestamp_unix) {
+    return 0;
+  }
+
+  return slot_selection_priority(candidate->slot) > slot_selection_priority(current_best->slot);
 }
 
 /*
@@ -244,6 +311,129 @@ int sync_parse_local_timestamp(const char *timestamp, int64_t *out_timestamp_uni
                         ((int64_t)minute * 60LL) +
                         (int64_t)second;
   return 0;
+}
+
+/*
+ * Formats one deterministic sync timestamp for logs and diagnostics.
+ * A zero/negative timestamp is rendered as "unknown".
+ */
+void sync_format_timestamp(int64_t timestamp_unix, char *out_timestamp, size_t out_size) {
+  if ((out_timestamp == NULL) || (out_size == 0U)) {
+    return;
+  }
+
+  if (timestamp_unix <= 0) {
+    snprintf(out_timestamp, out_size, "unknown");
+    return;
+  }
+
+  time_t raw = (time_t)timestamp_unix;
+  struct tm *utc = gmtime(&raw);
+  if (utc == NULL) {
+    snprintf(out_timestamp, out_size, "%lld", (long long)timestamp_unix);
+    return;
+  }
+
+  snprintf(
+      out_timestamp,
+      out_size,
+      "%04d-%02d-%02d %02d:%02d:%02d",
+      utc->tm_year + 1900,
+      utc->tm_mon + 1,
+      utc->tm_mday,
+      utc->tm_hour,
+      utc->tm_min,
+      utc->tm_sec);
+}
+
+/*
+ * Selects one local PS1 sync candidate per game using deterministic rules.
+ * This prevents both local memory cards from being synchronized independently:
+ * the newest local timestamp wins, and an exact tie falls back to slot 0 so
+ * callers can surface a warning before mapping and transfer decisions begin.
+ */
+int sync_select_latest_local_per_game(
+    const SyncSaveDescriptor *items,
+    int item_count,
+    int *out_selected_mask,
+    SyncLocalSelectionReason *out_selection_reasons) {
+  if ((items == NULL) || (item_count < 0) || (out_selected_mask == NULL)) {
+    return -1;
+  }
+
+  for (int i = 0; i < item_count; ++i) {
+    out_selected_mask[i] = 0;
+    if (out_selection_reasons != NULL) {
+      out_selection_reasons[i] = SYNC_LOCAL_SELECTION_NOT_SELECTED;
+    }
+  }
+
+  int selected_count = 0;
+  for (int i = 0; i < item_count; ++i) {
+    int already_grouped = 0;
+    for (int j = 0; j < i; ++j) {
+      if (local_items_share_game_group(&items[i], &items[j])) {
+        already_grouped = 1;
+        break;
+      }
+    }
+    if (already_grouped) {
+      continue;
+    }
+
+    int best_index = i;
+    int group_size = 1;
+    for (int j = i + 1; j < item_count; ++j) {
+      if (!local_items_share_game_group(&items[i], &items[j])) {
+        continue;
+      }
+
+      group_size += 1;
+      if (local_item_is_better_sync_candidate(&items[j], &items[best_index])) {
+        best_index = j;
+      }
+    }
+
+    SyncLocalSelectionReason reason = SYNC_LOCAL_SELECTION_ONLY_ITEM;
+    if (group_size > 1) {
+      int has_different_timestamp = 0;
+      int has_equal_timestamp_slot1_peer = 0;
+      for (int j = i; j < item_count; ++j) {
+        if (j == best_index) {
+          continue;
+        }
+        if (!local_items_share_game_group(&items[best_index], &items[j])) {
+          continue;
+        }
+
+        if (items[j].timestamp_unix != items[best_index].timestamp_unix) {
+          has_different_timestamp = 1;
+          continue;
+        }
+
+        if ((items[best_index].slot == SYNC_SLOT_0) &&
+            (items[j].slot == SYNC_SLOT_1)) {
+          has_equal_timestamp_slot1_peer = 1;
+        }
+      }
+
+      if (has_equal_timestamp_slot1_peer) {
+        reason = SYNC_LOCAL_SELECTION_EQUAL_TIMESTAMP_PREFER_SLOT0;
+      } else if (has_different_timestamp) {
+        reason = SYNC_LOCAL_SELECTION_LATEST_TIMESTAMP;
+      } else {
+        reason = SYNC_LOCAL_SELECTION_DETERMINISTIC_FALLBACK;
+      }
+    }
+
+    out_selected_mask[best_index] = 1;
+    if (out_selection_reasons != NULL) {
+      out_selection_reasons[best_index] = reason;
+    }
+    selected_count += 1;
+  }
+
+  return selected_count;
 }
 
 /*

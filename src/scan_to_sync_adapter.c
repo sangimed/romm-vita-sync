@@ -25,6 +25,7 @@ int scan_result_to_sync_saves(
 
     snprintf(sync_item->game_id, sizeof(sync_item->game_id), "%s", scan_item->game_id);
     snprintf(sync_item->title, sizeof(sync_item->title), "%s", scan_item->game_title);
+    snprintf(sync_item->timestamp_text, sizeof(sync_item->timestamp_text), "%s", scan_item->timestamp);
     snprintf(sync_item->path, sizeof(sync_item->path), "%s", scan_item->path);
     sync_item->size_bytes = scan_item->size_bytes;
 

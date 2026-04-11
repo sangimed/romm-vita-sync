@@ -96,6 +96,7 @@ typedef struct UiGameEntry {
   char game_id[ROMM_GAME_ID_LEN];
   char title[ROMM_GAME_TITLE_LEN];
   int save_count;
+  int card_count;
 } UiGameEntry;
 
 typedef enum UiSyncTrigger {
@@ -815,6 +816,18 @@ static void ui_sort_game_entries(UiGameEntry *games, int game_count) {
 }
 
 /*
+ * Returns non-zero when one UI inventory item corresponds to an actual local
+ * VMP card file, not just a synthetic restore target.
+ */
+static int ui_item_has_local_memory_card(const SyncSaveDescriptor *item) {
+  if (item == NULL) {
+    return 0;
+  }
+
+  return item->size_bytes > 0U;
+}
+
+/*
  * Builds unique PS1 game entries from the current local save descriptor list.
  */
 static int ui_build_game_entries(
@@ -838,6 +851,9 @@ static int ui_build_game_entries(
     int existing = ui_find_game_entry(out_games, game_count, key);
     if (existing >= 0) {
       out_games[existing].save_count += 1;
+      if (ui_item_has_local_memory_card(item)) {
+        out_games[existing].card_count += 1;
+      }
       if (!has_text(out_games[existing].title) && has_text(item->title)) {
         snprintf(out_games[existing].title, sizeof(out_games[existing].title), "%s", item->title);
       }
@@ -854,6 +870,7 @@ static int ui_build_game_entries(
     snprintf(entry->game_id, sizeof(entry->game_id), "%s", has_text(item->game_id) ? item->game_id : "(unknown)");
     snprintf(entry->title, sizeof(entry->title), "%s", item->title);
     entry->save_count = 1;
+    entry->card_count = ui_item_has_local_memory_card(item) ? 1 : 0;
     game_count += 1;
   }
 
@@ -1967,7 +1984,7 @@ static void ui_draw_game_row(
     int focused,
     int active,
     const char *title,
-    int save_count) {
+    int card_count) {
   unsigned int fill = focused ? UI_COLOR_FIELD_ACTIVE : (active ? UI_COLOR_ACCENT_SOFT : UI_COLOR_PANEL_ALT);
   unsigned int border = focused ? UI_COLOR_PANEL_BORDER_ACTIVE : (active ? UI_COLOR_BUTTON_BORDER : UI_COLOR_PANEL_BORDER);
   unsigned int title_color = focused ? UI_COLOR_TEXT : (active ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED);
@@ -1979,7 +1996,7 @@ static void ui_draw_game_row(
   }
 
   char count_text[32];
-  snprintf(count_text, sizeof(count_text), "%d card%s", save_count, (save_count == 1) ? "" : "s");
+  snprintf(count_text, sizeof(count_text), "%d card%s", card_count, (card_count == 1) ? "" : "s");
 
   float count_scale = 0.64f;
   float count_width = ui_estimate_text_width(count_text, count_scale);
@@ -2113,7 +2130,21 @@ static void ui_render_sync_panel(const UiAppState *state) {
   if (game != NULL) {
     const char *resolved_title = has_text(game->title) ? game->title : game->game_id;
     snprintf(title_display, sizeof(title_display), "%s", resolved_title);
-    snprintf(detail, sizeof(detail), "%s | %d save card%s", game->game_id, game->save_count, (game->save_count == 1) ? "" : "s");
+    if (game->card_count == game->save_count) {
+      snprintf(detail, sizeof(detail), "%s | %d card%s", game->game_id, game->card_count, (game->card_count == 1) ? "" : "s");
+    } else if (game->card_count == 0) {
+      snprintf(detail, sizeof(detail), "%s | 0 cards | restore target", game->game_id);
+    } else {
+      snprintf(
+          detail,
+          sizeof(detail),
+          "%s | %d card%s | %d target%s",
+          game->game_id,
+          game->card_count,
+          (game->card_count == 1) ? "" : "s",
+          game->save_count,
+          (game->save_count == 1) ? "" : "s");
+    }
   } else {
     snprintf(title_display, sizeof(title_display), "No PS1 game selected");
     snprintf(detail, sizeof(detail), "Rescan local saves after copying memory cards to the Vita.");
@@ -2214,7 +2245,7 @@ static void ui_render_game_panel(const UiAppState *state) {
         layout.game_w - 32.0f,
         UI_COLOR_TEXT_MUTED,
         0.72f,
-        "No PS1 memory card files were detected on this Vita.");
+        "No PS1 save targets were detected on this Vita.");
     return;
   }
 
@@ -2243,7 +2274,7 @@ static void ui_render_game_panel(const UiAppState *state) {
         state->selected_index == (UI_SELECT_GAME_BASE + i),
         state->active_game_index == i,
         full_title,
-        game->save_count);
+        game->card_count);
     row_y += UI_GAME_ROW_HEIGHT;
   }
 }
@@ -2366,9 +2397,10 @@ static int ui_refresh_local_inventory(UiAppState *state) {
   state->game_scroll = 0;
   ui_set_status(
       state,
-      "Scan complete: %d PS1 games (%d memory card files)",
+      "Scan complete: %d PS1 games (%d local target%s)",
       state->game_count,
-      state->local_count);
+      state->local_count,
+      (state->local_count == 1) ? "" : "s");
   app_log_write(
       APP_LOG_LEVEL_INFO,
       "ui",
@@ -2419,6 +2451,168 @@ static int ui_collect_game_items(
   }
 
   return count;
+}
+
+/*
+ * Estimates how many local PS1 cards remain after the latest-card rule is
+ * applied per game. This keeps confirmation copy aligned with actual sync work.
+ */
+static int ui_estimate_ps1_sync_candidate_count(
+    const SyncSaveDescriptor *items,
+    int item_count) {
+  if ((items == NULL) || (item_count <= 0) || (item_count > ROMM_SYNC_MAX_ITEMS)) {
+    return 0;
+  }
+
+  int selected_mask[ROMM_SYNC_MAX_ITEMS];
+  int selected_count = sync_select_latest_local_per_game(
+      items,
+      item_count,
+      selected_mask,
+      NULL);
+  if (selected_count < 0) {
+    return item_count;
+  }
+
+  return selected_count;
+}
+
+/*
+ * Finds the slot 1 peer that lost an equal-timestamp tie against a selected
+ * slot 0 item so the UI can explain the deterministic fallback to the user.
+ */
+static const SyncSaveDescriptor *ui_find_slot1_tie_peer(
+    const SyncSaveDescriptor *items,
+    int item_count,
+    int selected_index) {
+  if ((items == NULL) || (selected_index < 0) || (selected_index >= item_count)) {
+    return NULL;
+  }
+
+  const SyncSaveDescriptor *selected = &items[selected_index];
+  if ((selected->slot != SYNC_SLOT_0) || !has_text(selected->game_id)) {
+    return NULL;
+  }
+
+  for (int i = 0; i < item_count; ++i) {
+    if (i == selected_index) {
+      continue;
+    }
+
+    const SyncSaveDescriptor *candidate = &items[i];
+    if (!has_text(candidate->game_id) ||
+        !sync_string_ieq(candidate->game_id, selected->game_id)) {
+      continue;
+    }
+    if ((candidate->slot != SYNC_SLOT_1) ||
+        (candidate->timestamp_unix != selected->timestamp_unix)) {
+      continue;
+    }
+
+    return candidate;
+  }
+
+  return NULL;
+}
+
+/*
+ * Returns one short label for the local latest-card selection outcome.
+ */
+static const char *ui_sync_local_selection_reason_str(SyncLocalSelectionReason reason) {
+  switch (reason) {
+    case SYNC_LOCAL_SELECTION_ONLY_ITEM:
+      return "only_item";
+    case SYNC_LOCAL_SELECTION_LATEST_TIMESTAMP:
+      return "latest_timestamp";
+    case SYNC_LOCAL_SELECTION_EQUAL_TIMESTAMP_PREFER_SLOT0:
+      return "equal_timestamp_prefer_slot0";
+    case SYNC_LOCAL_SELECTION_DETERMINISTIC_FALLBACK:
+      return "deterministic_fallback";
+    case SYNC_LOCAL_SELECTION_NOT_SELECTED:
+    default:
+      return "not_selected";
+  }
+}
+
+/*
+ * Applies the PS1 latest-card rule to the current work list, logs the outcome
+ * for the user, and compacts the selected items in place for mapping/sync.
+ */
+static int ui_prepare_ps1_sync_candidates(
+    SyncSaveDescriptor *items,
+    int item_count,
+    int *out_warning_count) {
+  if ((items == NULL) || (item_count < 0) || (item_count > ROMM_SYNC_MAX_ITEMS)) {
+    return 0;
+  }
+
+  int selected_mask[ROMM_SYNC_MAX_ITEMS];
+  SyncLocalSelectionReason selection_reasons[ROMM_SYNC_MAX_ITEMS];
+  int selected_count = sync_select_latest_local_per_game(
+      items,
+      item_count,
+      selected_mask,
+      selection_reasons);
+  if (selected_count < 0) {
+    return item_count;
+  }
+
+  if (out_warning_count != NULL) {
+    *out_warning_count = 0;
+  }
+
+  if ((item_count > 0) && (selected_count != item_count)) {
+    ui_sync_log_write(
+        APP_LOG_LEVEL_INFO,
+        "PS1 latest-card rule active: %d sync candidate(s) selected from %d local target(s)",
+        selected_count,
+        item_count);
+  }
+
+  int write_index = 0;
+  for (int i = 0; i < item_count; ++i) {
+    if (!selected_mask[i]) {
+      continue;
+    }
+
+    char selected_timestamp[32];
+    sync_format_timestamp(items[i].timestamp_unix, selected_timestamp, sizeof(selected_timestamp));
+    ui_sync_log_write(
+        APP_LOG_LEVEL_INFO,
+        "PS1 candidate selected: game=%s file=%s slot=%s timestamp=%s unix=%lld reason=%s",
+        has_text(items[i].game_id) ? items[i].game_id : "(unknown)",
+        has_text(items[i].filename) ? items[i].filename : items[i].path,
+        sync_slot_str(items[i].slot),
+        selected_timestamp,
+        (long long)items[i].timestamp_unix,
+        ui_sync_local_selection_reason_str(selection_reasons[i]));
+
+    if (selection_reasons[i] == SYNC_LOCAL_SELECTION_EQUAL_TIMESTAMP_PREFER_SLOT0) {
+      const SyncSaveDescriptor *slot1_peer = ui_find_slot1_tie_peer(items, item_count, i);
+      if (slot1_peer != NULL) {
+        char skipped_timestamp[32];
+        sync_format_timestamp(slot1_peer->timestamp_unix, skipped_timestamp, sizeof(skipped_timestamp));
+        ui_sync_log_write(
+            APP_LOG_LEVEL_WARN,
+            "Equal local timestamps for %s; defaulting to %s and skipping %s (selected_ts=%s skipped_ts=%s)",
+            has_text(items[i].title) ? items[i].title : items[i].game_id,
+            has_text(items[i].filename) ? items[i].filename : items[i].path,
+            has_text(slot1_peer->filename) ? slot1_peer->filename : slot1_peer->path,
+            selected_timestamp,
+            skipped_timestamp);
+        if (out_warning_count != NULL) {
+          *out_warning_count += 1;
+        }
+      }
+    }
+
+    if (write_index != i) {
+      memmove(&items[write_index], &items[i], sizeof(items[write_index]));
+    }
+    write_index += 1;
+  }
+
+  return write_index;
 }
 
 /*
@@ -3327,6 +3521,47 @@ static int ui_run_sync_pipeline(
   app_log_clear_history();
   ui_sync_feedback_reset(&state->sync_feedback, trigger, title, context);
 
+  int detected_item_count = work_item_count;
+  int selection_warning_count = 0;
+
+  ui_sync_log_write(APP_LOG_LEVEL_INFO, "Scanning local saves...");
+  int preview_count = detected_item_count;
+  if (preview_count > 24) {
+    preview_count = 24;
+  }
+  for (int i = 0; i < preview_count; ++i) {
+    const SyncSaveDescriptor *item = &work_items[i];
+    const char *name = has_text(item->filename) ? item->filename : item->path;
+    char timestamp[32];
+    sync_format_timestamp(item->timestamp_unix, timestamp, sizeof(timestamp));
+    ui_sync_log_write(
+        APP_LOG_LEVEL_INFO,
+        "Save detected: %s slot=%s timestamp=%s unix=%lld",
+        has_text(name) ? name : "(unknown)",
+        sync_slot_str(item->slot),
+        timestamp,
+        (long long)item->timestamp_unix);
+  }
+  if (detected_item_count > preview_count) {
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "... %d more local save(s) omitted", detected_item_count - preview_count);
+  }
+
+  work_item_count = ui_prepare_ps1_sync_candidates(
+      work_items,
+      detected_item_count,
+      &selection_warning_count);
+  if (work_item_count <= 0) {
+    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync failed: no PS1 sync candidate was selected");
+    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: no sync candidate selected");
+    state->sync_feedback.running = 0;
+    state->sync_feedback.completed = 1;
+    state->sync_feedback.success = 0;
+    state->sync_feedback.sync_status = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+    ui_sync_feedback_set_progress(&state->sync_feedback, 1, 1);
+    ui_sync_render_live(state);
+    return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+  }
+
   int engine_units = work_item_count + 1;
   if (engine_units < 1) {
     engine_units = 1;
@@ -3334,20 +3569,6 @@ static int ui_run_sync_pipeline(
   int total_units = 3 + engine_units;
   ui_sync_feedback_set_progress(&state->sync_feedback, 0, total_units);
   ui_sync_render_live(state);
-
-  ui_sync_log_write(APP_LOG_LEVEL_INFO, "Scanning local saves...");
-  int preview_count = work_item_count;
-  if (preview_count > 24) {
-    preview_count = 24;
-  }
-  for (int i = 0; i < preview_count; ++i) {
-    const SyncSaveDescriptor *item = &work_items[i];
-    const char *name = has_text(item->filename) ? item->filename : item->path;
-    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Save detected: %s", has_text(name) ? name : "(unknown)");
-  }
-  if (work_item_count > preview_count) {
-    ui_sync_log_write(APP_LOG_LEVEL_INFO, "... %d more local save(s) omitted", work_item_count - preview_count);
-  }
 
   ui_sync_feedback_set_message(&state->sync_feedback, "Validating RomM configuration...");
   ui_sync_render_live(state);
@@ -3497,7 +3718,11 @@ static int ui_run_sync_pipeline(
   if (sync_status == SYNC_ENGINE_OK) {
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "Sync completed");
     ui_sync_append_report_logs(&state->sync_report);
-    ui_sync_feedback_set_message(&state->sync_feedback, "Sync completed successfully.");
+    if (selection_warning_count > 0) {
+      ui_sync_feedback_set_message(&state->sync_feedback, "Sync completed with warnings.");
+    } else {
+      ui_sync_feedback_set_message(&state->sync_feedback, "Sync completed successfully.");
+    }
   } else {
     char failure_message[96];
     snprintf(
@@ -3531,13 +3756,17 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
       game,
       state->sync_work_items,
       (int)(sizeof(state->sync_work_items) / sizeof(state->sync_work_items[0])));
+  int sync_candidate_count = ui_estimate_ps1_sync_candidate_count(
+      state->sync_work_items,
+      game_item_count);
 
   char confirm_msg[256];
   snprintf(
       confirm_msg,
       sizeof(confirm_msg),
-      "Synchronize %s?\n%d save card(s) will be checked.",
+      "Synchronize %s?\n%d sync candidate(s) selected from %d local target(s).",
       has_text(game->title) ? game->title : game->game_id,
+      sync_candidate_count,
       game_item_count);
   if (ui_dialog_confirm(confirm_msg) != 1) {
     ui_set_status(state, "Sync canceled for %s", game->game_id);
@@ -3553,10 +3782,10 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
   snprintf(
       context,
       sizeof(context),
-      "Game: %s (%d save card%s)",
+      "Game: %s (%d sync candidate%s)",
       game->game_id,
-      game_item_count,
-      (game_item_count == 1) ? "" : "s");
+      sync_candidate_count,
+      (sync_candidate_count == 1) ? "" : "s");
 
   int sync_status = ui_run_sync_pipeline(
       state,
@@ -3599,12 +3828,16 @@ static void ui_run_sync_all_saves(UiAppState *state) {
     work_item_count = (int)(sizeof(state->sync_work_items) / sizeof(state->sync_work_items[0]));
   }
   memcpy(state->sync_work_items, state->local_items, sizeof(state->sync_work_items[0]) * (size_t)work_item_count);
+  int sync_candidate_count = ui_estimate_ps1_sync_candidate_count(
+      state->sync_work_items,
+      work_item_count);
 
   char confirm_msg[256];
   snprintf(
       confirm_msg,
       sizeof(confirm_msg),
-      "Synchronize all detected PS1 saves?\n%d save card(s) across %d game(s) will be checked.",
+      "Synchronize all detected PS1 saves?\n%d sync candidate(s) selected from %d local target(s) across %d game(s).",
+      sync_candidate_count,
       work_item_count,
       state->game_count);
   if (ui_dialog_confirm(confirm_msg) != 1) {
@@ -3616,9 +3849,9 @@ static void ui_run_sync_all_saves(UiAppState *state) {
   snprintf(
       context,
       sizeof(context),
-      "All games: %d save card%s across %d game(s)",
-      work_item_count,
-      (work_item_count == 1) ? "" : "s",
+      "All games: %d sync candidate%s across %d game(s)",
+      sync_candidate_count,
+      (sync_candidate_count == 1) ? "" : "s",
       state->game_count);
 
   int sync_status = ui_run_sync_pipeline(
@@ -3668,14 +3901,17 @@ static void ui_run_pending_auto_sync(UiAppState *state) {
     work_item_count = (int)(sizeof(state->sync_work_items) / sizeof(state->sync_work_items[0]));
   }
   memcpy(state->sync_work_items, state->local_items, sizeof(state->sync_work_items[0]) * (size_t)work_item_count);
+  int sync_candidate_count = ui_estimate_ps1_sync_candidate_count(
+      state->sync_work_items,
+      work_item_count);
 
   char context[UI_STATUS_LINE_LEN];
   snprintf(
       context,
       sizeof(context),
-      "Startup auto sync: %d save card%s",
-      work_item_count,
-      (work_item_count == 1) ? "" : "s");
+      "Startup auto sync: %d sync candidate%s",
+      sync_candidate_count,
+      (sync_candidate_count == 1) ? "" : "s");
 
   int sync_status = ui_run_sync_pipeline(
       state,

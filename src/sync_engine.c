@@ -1,6 +1,7 @@
 #include "sync_engine.h"
 
 #include <ctype.h>
+#include <psp2/io/stat.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -17,6 +18,8 @@
 
 #define SYNC_DEFAULT_BACKUP_DIRECTORY "ux0:data/romm-vita-sync/backups"
 #define SYNC_DEFAULT_CONVERSION_DIRECTORY "ux0:data/romm-vita-sync/cache/conversion"
+#define SYNC_DEFAULT_APP_TEMPLATE_SLOT0 "app0:templates/SCEVMC0.VMP"
+#define SYNC_DEFAULT_APP_TEMPLATE_SLOT1 "app0:templates/SCEVMC1.VMP"
 
 /*
  * Default clock provider used when caller does not inject one.
@@ -47,6 +50,83 @@ static int file_exists(const char *path) {
 
   fclose(probe);
   return 1;
+}
+
+/*
+ * Converts one Unix timestamp back into the same broken-down UTC fields used by
+ * the scanner so downloaded files can keep the remote modification time.
+ */
+static int unix_timestamp_to_datetime(int64_t timestamp_unix, SceDateTime *out_datetime) {
+  if ((timestamp_unix <= 0) || (out_datetime == NULL)) {
+    return -1;
+  }
+
+  time_t raw = (time_t)timestamp_unix;
+  struct tm *utc = gmtime(&raw);
+  if (utc == NULL) {
+    return -1;
+  }
+
+  memset(out_datetime, 0, sizeof(*out_datetime));
+  out_datetime->year = (unsigned short)(utc->tm_year + 1900);
+  out_datetime->month = (unsigned short)(utc->tm_mon + 1);
+  out_datetime->day = (unsigned short)utc->tm_mday;
+  out_datetime->hour = (unsigned short)utc->tm_hour;
+  out_datetime->minute = (unsigned short)utc->tm_min;
+  out_datetime->second = (unsigned short)utc->tm_sec;
+  out_datetime->microsecond = 0U;
+  return 0;
+}
+
+/*
+ * Reapplies the remote save timestamp to the restored local file so the next
+ * scan does not interpret the write time as a fresh local modification.
+ */
+static int preserve_remote_timestamp_on_local_copy(
+    const char *local_path,
+    int64_t remote_timestamp_unix) {
+  if (!has_text(local_path) || (remote_timestamp_unix <= 0)) {
+    return -1;
+  }
+
+  SceIoStat stat;
+  memset(&stat, 0, sizeof(stat));
+  if (sceIoGetstat(local_path, &stat) < 0) {
+    return -1;
+  }
+
+  if (unix_timestamp_to_datetime(remote_timestamp_unix, &stat.st_mtime) < 0) {
+    return -1;
+  }
+
+  return sceIoChstat(local_path, &stat, SCE_CST_MT);
+}
+
+/*
+ * Appends one positive rom_id to a small unique set used for remote filtering.
+ */
+static int append_unique_rom_id(
+    int rom_id,
+    int *rom_ids,
+    int *in_out_count,
+    int max_count) {
+  if ((rom_ids == NULL) || (in_out_count == NULL) || (*in_out_count < 0) || (max_count < 0) || (rom_id <= 0)) {
+    return -1;
+  }
+
+  for (int i = 0; i < *in_out_count; ++i) {
+    if (rom_ids[i] == rom_id) {
+      return 0;
+    }
+  }
+
+  if (*in_out_count >= max_count) {
+    return -1;
+  }
+
+  rom_ids[*in_out_count] = rom_id;
+  *in_out_count += 1;
+  return 0;
 }
 
 /*
@@ -207,6 +287,16 @@ static int resolve_template_vmp_path(
     return 0;
   }
 
+  {
+    const char *app_template = (local_item->slot == SYNC_SLOT_1)
+                                   ? SYNC_DEFAULT_APP_TEMPLATE_SLOT1
+                                   : SYNC_DEFAULT_APP_TEMPLATE_SLOT0;
+    if (file_exists(app_template)) {
+      snprintf(out_template_path, out_template_path_size, "%s", app_template);
+      return 0;
+    }
+  }
+
   out_template_path[0] = '\0';
   return -1;
 }
@@ -276,6 +366,79 @@ static int same_content_signature(const SyncSaveDescriptor *local_item, const Sy
 }
 
 /*
+ * Logs one concise local/remote metadata pair on the exact timestamp basis used
+ * by conflict detection so false "newer" decisions are easier to inspect.
+ */
+static void log_sync_match_metadata(
+    const SyncSaveDescriptor *local_item,
+    const SyncSaveDescriptor *remote_item) {
+  if ((local_item == NULL) || (remote_item == NULL)) {
+    return;
+  }
+
+  char local_timestamp[32];
+  char remote_timestamp[32];
+  sync_format_timestamp(local_item->timestamp_unix, local_timestamp, sizeof(local_timestamp));
+  sync_format_timestamp(remote_item->timestamp_unix, remote_timestamp, sizeof(remote_timestamp));
+
+  app_log_write(
+      APP_LOG_LEVEL_INFO,
+      "sync",
+      "match metadata game=%s file=%s local_ts=%s local_unix=%lld remote_id=%d remote_file=%s remote_ts=%s remote_unix=%lld local_size=%llu remote_size=%llu remote_slot=%s remote_origin=%s device_current=%d",
+      has_text(local_item->game_id) ? local_item->game_id : "(unknown)",
+      has_text(local_item->filename) ? local_item->filename : local_item->path,
+      local_timestamp,
+      (long long)local_item->timestamp_unix,
+      remote_item->remote_id,
+      has_text(remote_item->filename) ? remote_item->filename : "(unknown)",
+      remote_timestamp,
+      (long long)remote_item->timestamp_unix,
+      (unsigned long long)local_item->size_bytes,
+      (unsigned long long)remote_item->size_bytes,
+      sync_slot_str(remote_item->slot),
+      has_text(remote_item->origin_device) ? remote_item->origin_device : "(none)",
+      remote_item->device_is_current);
+}
+
+/*
+ * Finds the slot 1 peer that lost an equal-timestamp tie against a selected
+ * slot 0 item so callers can log the deterministic fallback explicitly.
+ */
+static const SyncSaveDescriptor *find_slot1_tie_peer(
+    const SyncSaveDescriptor *items,
+    int item_count,
+    int selected_index) {
+  if ((items == NULL) || (selected_index < 0) || (selected_index >= item_count)) {
+    return NULL;
+  }
+
+  const SyncSaveDescriptor *selected = &items[selected_index];
+  if ((selected->slot != SYNC_SLOT_0) || !has_text(selected->game_id)) {
+    return NULL;
+  }
+
+  for (int i = 0; i < item_count; ++i) {
+    if (i == selected_index) {
+      continue;
+    }
+
+    const SyncSaveDescriptor *candidate = &items[i];
+    if (!has_text(candidate->game_id) ||
+        !sync_string_ieq(candidate->game_id, selected->game_id)) {
+      continue;
+    }
+    if ((candidate->slot != SYNC_SLOT_1) ||
+        (candidate->timestamp_unix != selected->timestamp_unix)) {
+      continue;
+    }
+
+    return candidate;
+  }
+
+  return NULL;
+}
+
+/*
  * Adds a new action entry to the run report and pre-fills identity fields.
  */
 static SyncActionRecord *append_action_record(SyncRunReport *report, const SyncSaveDescriptor *local_item) {
@@ -332,6 +495,23 @@ static int remote_reports_current_for_device(
   }
 
   return file_exists(local_item->path);
+}
+
+/*
+ * Returns non-zero when the local descriptor is only a restore target.
+ * The scanner synthesizes these entries from CONFIG.BIN when both VMP cards are
+ * absent, so they should download from RomM instead of attempting an upload.
+ */
+static int local_item_is_missing_restore_target(const SyncSaveDescriptor *local_item) {
+  if (local_item == NULL) {
+    return 0;
+  }
+
+  if (!has_text(local_item->path) || !path_has_extension(local_item->path, ".vmp")) {
+    return 0;
+  }
+
+  return !file_exists(local_item->path);
 }
 
 /*
@@ -556,6 +736,19 @@ static int execute_download(
       "downloading save: game=%s file=%s",
       local_item->game_id,
       has_text(action->filename) ? action->filename : local_item->filename);
+  {
+    char remote_timestamp[32];
+    sync_format_timestamp(remote_item->timestamp_unix, remote_timestamp, sizeof(remote_timestamp));
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "sync",
+        "download source remote_id=%d remote_file=%s remote_ts=%s remote_unix=%lld remote_origin=%s",
+        remote_item->remote_id,
+        has_text(remote_item->filename) ? remote_item->filename : "(unknown)",
+        remote_timestamp,
+        (long long)remote_item->timestamp_unix,
+        has_text(remote_item->origin_device) ? remote_item->origin_device : "(none)");
+  }
 
   if (file_exists(local_item->path)) {
     const char *backup_directory = has_text(config->backup_directory)
@@ -682,6 +875,20 @@ static int execute_download(
     remove(conversion_temp_path);
   }
 
+  if (remote_item->timestamp_unix > 0) {
+    int preserve_status = preserve_remote_timestamp_on_local_copy(local_item->path, remote_item->timestamp_unix);
+    if (preserve_status < 0) {
+      app_log_write(
+          APP_LOG_LEVEL_WARN,
+          "sync",
+          "download timestamp preserve failed game=%s file=%s remote_ts=%lld status=%d",
+          local_item->game_id,
+          action->filename,
+          (long long)remote_item->timestamp_unix,
+          preserve_status);
+    }
+  }
+
   action->status_code = status;
 
   action->executed = 1;
@@ -740,7 +947,8 @@ void sync_engine_config_init(SyncEngineConfig *config) {
 
 /*
  * Runs one deterministic synchronization pass:
- * local scan -> remote compare -> action decisions -> optional execution.
+ * local scan -> latest local card selection per game -> remote compare ->
+ * action decisions -> optional execution.
  */
 int sync_engine_run(
     const SyncEngineConfig *config,
@@ -764,6 +972,11 @@ int sync_engine_run(
   int status = SYNC_ENGINE_OK;
   SyncStateStore *state_store = NULL;
   SyncSaveDescriptor *remote_items = NULL;
+  int *selected_mask = NULL;
+  SyncLocalSelectionReason *selection_reasons = NULL;
+  int *selected_rom_ids = NULL;
+  int selected_local_count = local_count;
+  int selected_rom_id_count = 0;
   emit_progress(
       config,
       completed_engine_units,
@@ -772,7 +985,69 @@ int sync_engine_run(
       local_count,
       "Listing remote saves...");
 
+  if (local_count > 0) {
+    selected_mask = (int *)malloc(sizeof(*selected_mask) * (size_t)local_count);
+    selection_reasons =
+        (SyncLocalSelectionReason *)malloc(sizeof(*selection_reasons) * (size_t)local_count);
+    if ((selected_mask == NULL) || (selection_reasons == NULL)) {
+      app_log_write(APP_LOG_LEVEL_ERROR, "sync", "out of memory allocating local selection buffers");
+      emit_progress(
+          config,
+          completed_engine_units,
+          total_engine_units,
+          -1,
+          local_count,
+          "Sync failed: insufficient memory");
+      status = SYNC_ENGINE_ERR_OUT_OF_MEMORY;
+      goto cleanup;
+    }
+
+    int selected_count = sync_select_latest_local_per_game(
+        local_items,
+        local_count,
+        selected_mask,
+        selection_reasons);
+    if (selected_count < 0) {
+      status = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+      goto cleanup;
+    }
+    selected_local_count = selected_count;
+
+    if (selected_count != local_count) {
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "sync",
+          "ps1 latest-card rule selected %d sync candidate(s) from %d local card(s)",
+          selected_count,
+          local_count);
+    }
+
+    for (int i = 0; i < local_count; ++i) {
+      if (!selected_mask[i] ||
+          (selection_reasons[i] != SYNC_LOCAL_SELECTION_EQUAL_TIMESTAMP_PREFER_SLOT0)) {
+        continue;
+      }
+
+      const SyncSaveDescriptor *slot1_peer = find_slot1_tie_peer(local_items, local_count, i);
+      if (slot1_peer == NULL) {
+        continue;
+      }
+
+      app_log_write(
+          APP_LOG_LEVEL_WARN,
+          "sync",
+          "equal local timestamps for game=%s; defaulting to %s and skipping %s",
+          has_text(local_items[i].game_id) ? local_items[i].game_id : "(unknown)",
+          has_text(local_items[i].filename) ? local_items[i].filename : local_items[i].path,
+          has_text(slot1_peer->filename) ? slot1_peer->filename : slot1_peer->path);
+    }
+  }
+
   for (int i = 0; i < local_count; ++i) {
+    if ((selected_mask != NULL) && !selected_mask[i]) {
+      continue;
+    }
+
     const SyncSaveDescriptor *local_item = &local_items[i];
     if (local_item->rom_id > 0) {
       continue;
@@ -792,7 +1067,47 @@ int sync_engine_run(
         local_count,
         "Sync failed: unresolved rom_id for %s",
         has_text(local_item->game_id) ? local_item->game_id : "(unknown)");
-    return SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID;
+    status = SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID;
+    goto cleanup;
+  }
+
+  if (selected_local_count > 0) {
+    selected_rom_ids = (int *)malloc(sizeof(*selected_rom_ids) * (size_t)selected_local_count);
+    if (selected_rom_ids == NULL) {
+      app_log_write(APP_LOG_LEVEL_ERROR, "sync", "out of memory allocating remote filter rom_id buffer");
+      emit_progress(
+          config,
+          completed_engine_units,
+          total_engine_units,
+          -1,
+          local_count,
+          "Sync failed: insufficient memory");
+      status = SYNC_ENGINE_ERR_OUT_OF_MEMORY;
+      goto cleanup;
+    }
+
+    for (int i = 0; i < local_count; ++i) {
+      if ((selected_mask != NULL) && !selected_mask[i]) {
+        continue;
+      }
+
+      if (append_unique_rom_id(
+              local_items[i].rom_id,
+              selected_rom_ids,
+              &selected_rom_id_count,
+              selected_local_count) < 0) {
+        app_log_write(APP_LOG_LEVEL_ERROR, "sync", "failed to build remote filter rom_id set");
+        emit_progress(
+            config,
+            completed_engine_units,
+            total_engine_units,
+            -1,
+            local_count,
+            "Sync failed: remote filter preparation failed");
+        status = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+        goto cleanup;
+      }
+    }
   }
 
   state_store = (SyncStateStore *)malloc(sizeof(*state_store));
@@ -805,7 +1120,8 @@ int sync_engine_run(
         -1,
         local_count,
         "Sync failed: insufficient memory");
-    return SYNC_ENGINE_ERR_OUT_OF_MEMORY;
+    status = SYNC_ENGINE_ERR_OUT_OF_MEMORY;
+    goto cleanup;
   }
   sync_state_store_init(state_store);
 
@@ -851,9 +1167,17 @@ int sync_engine_run(
     sync_save_descriptor_init(&remote_items[i]);
   }
 
-  app_log_write(APP_LOG_LEVEL_INFO, "sync", "scanning remote saves...");
+  app_log_write(
+      APP_LOG_LEVEL_INFO,
+      "sync",
+      "scanning remote saves for %d mapped rom_id filter(s)...",
+      selected_rom_id_count);
   int remote_count = romm_client_list_remote_saves(
-      romm_client, remote_items, ROMM_SYNC_MAX_ITEMS);
+      romm_client,
+      selected_rom_ids,
+      selected_rom_id_count,
+      remote_items,
+      ROMM_SYNC_MAX_ITEMS);
   if (remote_count < 0) {
     app_log_write(APP_LOG_LEVEL_ERROR, "sync", "remote listing failed: %s (%d)", romm_client_status_str(remote_count), remote_count);
     emit_progress(
@@ -868,7 +1192,7 @@ int sync_engine_run(
     goto cleanup;
   }
   out_report->remote_count = remote_count;
-  app_log_write(APP_LOG_LEVEL_INFO, "sync", "remote listing returned %d items", remote_count);
+  app_log_write(APP_LOG_LEVEL_INFO, "sync", "remote listing returned %d unique remote save entries", remote_count);
   completed_engine_units = 1;
   emit_progress(
       config,
@@ -884,6 +1208,23 @@ int sync_engine_run(
     SyncActionRecord *action = append_action_record(out_report, local_item);
     if (action == NULL) {
       break;
+    }
+
+    if ((selected_mask != NULL) && !selected_mask[i]) {
+      action->action = SYNC_ACTION_SKIP;
+      out_report->skipped += 1;
+      set_reason(action, "skipped by PS1 latest-card rule");
+      completed_engine_units = 2 + i;
+      emit_progress(
+          config,
+          completed_engine_units,
+          total_engine_units,
+          i,
+          local_count,
+          "%s: %s",
+          has_text(action->filename) ? action->filename : "(unnamed)",
+          action->reason);
+      continue;
     }
 
     char filename_fallback[ROMM_SYNC_MAX_FILENAME_LEN];
@@ -917,6 +1258,29 @@ int sync_engine_run(
 
     int remote_index = game_matcher_find_remote_index(local_item, remote_items, remote_count);
     if (remote_index < 0) {
+      if (local_item_is_missing_restore_target(local_item)) {
+        action->action = SYNC_ACTION_SKIP;
+        out_report->skipped += 1;
+        set_reason(action, "skip missing local slot: no remote save found to restore");
+        app_log_write(
+            APP_LOG_LEVEL_INFO,
+            "sync",
+            "missing local restore target skipped game=%s file=%s: no remote match",
+            local_item->game_id,
+            display_filename);
+        completed_engine_units = 2 + i;
+        emit_progress(
+            config,
+            completed_engine_units,
+            total_engine_units,
+            i,
+            local_count,
+            "%s: %s",
+            display_filename,
+            action->reason);
+        continue;
+      }
+
       if (should_skip_redundant_upload(local_item, state_entry)) {
         action->action = SYNC_ACTION_SKIP;
         out_report->skipped += 1;
@@ -966,6 +1330,40 @@ int sync_engine_run(
     }
 
     const SyncSaveDescriptor *remote_item = &remote_items[remote_index];
+    log_sync_match_metadata(local_item, remote_item);
+    if (local_item_is_missing_restore_target(local_item)) {
+      action->action = SYNC_ACTION_DOWNLOAD;
+      out_report->downloads_planned += 1;
+      set_reason(action, "restoring missing local slot from remote");
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "sync",
+          "missing local slot detected: restoring from remote game=%s file=%s remote_id=%d",
+          local_item->game_id,
+          action->filename,
+          remote_item->remote_id);
+      execute_download(
+          config,
+          romm_client,
+          local_item,
+          remote_item,
+          state_entry,
+          state_store,
+          action,
+          out_report);
+      completed_engine_units = 2 + i;
+      emit_progress(
+          config,
+          completed_engine_units,
+          total_engine_units,
+          i,
+          local_count,
+          "%s: %s",
+          display_filename,
+          action->reason);
+      continue;
+    }
+
     if (remote_reports_current_for_device(local_item, remote_item)) {
       action->action = SYNC_ACTION_SKIP;
       out_report->skipped += 1;
@@ -1164,6 +1562,9 @@ int sync_engine_run(
       "Sync engine completed");
 
 cleanup:
+  free(selected_rom_ids);
+  free(selection_reasons);
+  free(selected_mask);
   free(remote_items);
   free(state_store);
   return status;
