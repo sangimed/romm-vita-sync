@@ -28,3 +28,10 @@ All detailed information is available in the project documentation:
 ## Contributing
 
 Issues and pull requests are welcome.
+
+## Acknowledgements
+
+Special thanks to the projects and maintainers this work builds on:
+
+- [`vita-mcr2vmp`](https://github.com/dots-tb/vita-mcr2vmp) by `@dots_tb`, included as a submodule under `tools/vita-mcr2vmp` and used for Vita/PS1 memory card conversion support.
+- [`vitasdk-docker`](https://github.com/gnuton/vitasdk-docker) by `@gnuton`, whose Docker image work was used as the basis for this repository's `Dockerfile`.
