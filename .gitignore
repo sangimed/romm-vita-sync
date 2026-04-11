@@ -6,6 +6,7 @@
 *.sfo
 build
 build-tools/
+local_context/
 *.VMP
 *.vmp
 *.SRM

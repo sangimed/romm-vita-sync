@@ -165,7 +165,7 @@ Coverage:
 - per-game sync triggering from the Vita UI
 - visible sync/log output on-device
 - in-app conversion path wiring (`VMP->SRM` for upload, `SRM->VMP` + signing for download)
-- real save transfer integration (`GET /api/saves`, `POST /api/saves`, `GET /api/saves/{id}/content`)
+- real save transfer integration (`GET /api/saves`, `POST /api/saves`, `PUT /api/saves/{id}`, `GET /api/saves/{id}/content`)
 
 ### 1. Build And Install
 
@@ -210,7 +210,7 @@ Coverage:
 
 1. Default is `dry_run = true` for safety-first runs.
 2. Set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
-3. Upload flow sends `.SRM` through `POST /api/saves`; download flow pulls `GET /api/saves/{id}/content` then rebuilds/signs `.VMP`.
+3. Upload flow sends `.SRM` through `POST /api/saves` for new remote saves and `PUT /api/saves/{id}` when a matching remote save already exists; download flow pulls `GET /api/saves/{id}/content` then rebuilds/signs `.VMP`.
 
 ## Why This Project Exists
 
@@ -536,11 +536,11 @@ Initial goals:
 - display save inventory UI
 
 RomM device registration is now wired to the real HTTP endpoint (`POST /api/devices`).
-Save listing/upload/download are now wired to real HTTP callbacks in `main.c` (`/api/saves` endpoints).
+Save listing/upload/download are now wired to real HTTP callbacks in `main.c` (`/api/saves` endpoints, with upload replacement via `PUT /api/saves/{id}` when a remote save is already matched).
 Local Vita items are resolved to server `rom_id` via `/api/roms` metadata before sync decisions.
 Conversion is now wired in the app sync flow:
 
-- upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback
+- upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback, then either creates a new remote save or overwrites the matched remote save
 - download path: remote `.SRM` is reconstructed to local `.VMP` and re-signed in-app
 
 ## Contributing

@@ -326,12 +326,16 @@ static void build_state_entry_from_item(
 
 /*
  * Executes (or plans in dry-run mode) an upload and updates sync state.
+ * When remote_item points to an already matched RomM save, its remote_id is
+ * propagated so the transport layer can overwrite that save instead of
+ * creating a new versioned entry on the server.
  */
 static int execute_upload(
     const SyncEngineConfig *config,
     const RommClient *romm_client,
     const char *device_id,
     const SyncSaveDescriptor *local_item,
+    const SyncSaveDescriptor *remote_item,
     SyncStateStore *state_store,
     SyncActionRecord *action,
     SyncRunReport *report) {
@@ -349,6 +353,9 @@ static int execute_upload(
 
   SyncSaveDescriptor upload_item;
   memcpy(&upload_item, local_item, sizeof(upload_item));
+  if ((remote_item != NULL) && (remote_item->remote_id > 0)) {
+    upload_item.remote_id = remote_item->remote_id;
+  }
 
   int has_conversion_temp = 0;
   char conversion_temp_path[ROMM_MAX_PATH_LEN];
@@ -737,7 +744,15 @@ int sync_engine_run(
           local_item->game_id,
           action->filename,
           sync_slot_str(local_item->slot));
-      int upload_status = execute_upload(config, romm_client, active_device_id, local_item, &state_store, action, out_report);
+      int upload_status = execute_upload(
+          config,
+          romm_client,
+          active_device_id,
+          local_item,
+          NULL,
+          &state_store,
+          action,
+          out_report);
       if (upload_status == ROMM_CLIENT_ERR_CONFLICT) {
         action->action = SYNC_ACTION_SKIP;
         action->conflict = SYNC_CONFLICT_REMOTE_NEWER;
@@ -817,7 +832,15 @@ int sync_engine_run(
       out_report->uploads_planned += 1;
       set_reason(action, "upload selected for conflict=%s", sync_conflict_type_str(conflict));
       app_log_write(APP_LOG_LEVEL_INFO, "sync", "decision=upload game=%s file=%s", local_item->game_id, action->filename);
-      int upload_status = execute_upload(config, romm_client, active_device_id, local_item, &state_store, action, out_report);
+      int upload_status = execute_upload(
+          config,
+          romm_client,
+          active_device_id,
+          local_item,
+          remote_item,
+          &state_store,
+          action,
+          out_report);
       if (upload_status == ROMM_CLIENT_ERR_CONFLICT) {
         action->action = SYNC_ACTION_SKIP;
         action->conflict = SYNC_CONFLICT_REMOTE_NEWER;

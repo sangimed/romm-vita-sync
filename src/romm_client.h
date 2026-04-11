@@ -50,6 +50,8 @@ int romm_client_list_remote_saves(
 
 /*
  * Upload callbacks should return ROMM_CLIENT_ERR_CONFLICT when RomM answers 409.
+ * When local_item->remote_id is set, callbacks should overwrite that existing
+ * remote save instead of creating a new server entry.
  */
 int romm_client_upload_save(
     const RommClient *client,
