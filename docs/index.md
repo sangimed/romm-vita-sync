@@ -400,12 +400,13 @@ Conversion strategy:
 | Direction | Operation |
 |-----------|-----------|
 | Vita → RomM | Remove 128-byte VMP header, producing a standard 131072-byte SRM |
-| RomM → Vita | Read only the first 131072 bytes from the SRM, prepend valid VMP header |
+| RomM → Vita | Single-card SRM: rebuild one VMP. Dual-card SRM: split into card 1 + card 2 and rebuild both `SCEVMC0.VMP` and `SCEVMC1.VMP` |
 
 The upload produces the standard 131072-byte single-card SRM format, which is compatible
 with pcsx_rearmed (EmulatorJS default), DuckStation, and other PS1 emulators.
 The download path accepts both 131072-byte and 262144-byte SRM files for compatibility
-with saves created by mednafen_psx_hw users.
+with saves created by mednafen_psx_hw users. When a dual-card SRM is downloaded,
+the app restores both PS1 memory cards on Vita instead of dropping card 2.
 
 ## Save Models (Current Implementation)
 
@@ -806,7 +807,8 @@ Conversion is now wired in the app sync flow:
 - upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback
 - download path: remote `.SRM` is reconstructed to local `.VMP` and re-signed in-app
 - when one game has both local PS1 cards, only the newest local card is mapped and synchronized; exact timestamp ties keep `SCEVMC0.VMP` and warn the user
-- if the server copy is newer, the download target remains that selected local card, so the restore does not hop from `SCEVMC0.VMP` to `SCEVMC1.VMP` or the reverse
+- if the server copy is newer and the remote save is a standard single-card SRM, the download target remains that selected local card
+- if the server copy is newer and the remote save is a dual-card SRM, the app restores both `SCEVMC0.VMP` and `SCEVMC1.VMP`
 
 ## End-to-End Sync Sequence Diagram
 

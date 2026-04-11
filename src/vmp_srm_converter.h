@@ -42,11 +42,30 @@ int srm_build_default_vmp_path(const char *srm_path, char *out_path, size_t out_
 int vmp_to_srm_file(const char *vmp_path, const char *srm_path);
 
 /*
- * Converts a raw SRM payload back to a VMP memory card file by reusing the
- * first 128 bytes from a known-good template VMP file.
+ * Returns the number of memory cards stored in an SRM payload.
+ * Supported values are 1 (131072 bytes) and 2 (262144 bytes).
+ */
+int srm_get_card_count(const char *srm_path, int *out_card_count);
+
+/*
+ * Converts one card from a raw SRM payload back to a VMP memory card file by
+ * reusing the first 128 bytes from a known-good template VMP file.
+ * card_index is zero-based:
+ * - 0 = memory card 1
+ * - 1 = memory card 2
  * Accepts both 131072-byte (single-card) and 262144-byte (dual-card) SRM
- * files. When a dual-card SRM is provided, only the first 131072 bytes
- * (memory card 1) are used for VMP reconstruction.
+ * files, but rejects card indexes that are not present in the payload.
+ */
+int srm_card_to_vmp_file(
+    const char *srm_path,
+    int card_index,
+    const char *template_vmp_path,
+    const char *vmp_path);
+
+/*
+ * Converts the first card from a raw SRM payload back to a VMP memory card
+ * file by reusing the first 128 bytes from a known-good template VMP file.
+ * This convenience wrapper behaves like srm_card_to_vmp_file(..., 0, ...).
  */
 int srm_to_vmp_file(const char *srm_path, const char *template_vmp_path, const char *vmp_path);
 

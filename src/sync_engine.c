@@ -21,6 +21,8 @@
 #define SYNC_DEFAULT_APP_TEMPLATE_SLOT0 "app0:templates/SCEVMC0.VMP"
 #define SYNC_DEFAULT_APP_TEMPLATE_SLOT1 "app0:templates/SCEVMC1.VMP"
 
+static int extract_parent_directory(const char *path, char *out_directory, size_t out_directory_size);
+
 /*
  * Default clock provider used when caller does not inject one.
  */
@@ -100,6 +102,109 @@ static int preserve_remote_timestamp_on_local_copy(
   }
 
   return sceIoChstat(local_path, &stat, SCE_CST_MT);
+}
+
+/*
+ * Returns the current file size in bytes for one local path.
+ */
+static int get_local_file_size_bytes(const char *path, uint64_t *out_size_bytes) {
+  if (!has_text(path) || (out_size_bytes == NULL)) {
+    return -1;
+  }
+
+  SceIoStat stat;
+  memset(&stat, 0, sizeof(stat));
+  if (sceIoGetstat(path, &stat) < 0) {
+    return -1;
+  }
+
+  *out_size_bytes = (uint64_t)stat.st_size;
+  return 0;
+}
+
+/*
+ * Creates a backup only when the local file currently exists.
+ */
+static int backup_existing_local_file(
+    const char *path,
+    const char *backup_directory,
+    int64_t now) {
+  if (!has_text(path) || !has_text(backup_directory)) {
+    return BACKUP_MANAGER_ERR_INVALID_ARGUMENT;
+  }
+
+  if (!file_exists(path)) {
+    return BACKUP_MANAGER_OK;
+  }
+
+  return backup_manager_backup_file(path, backup_directory, now, NULL, 0U);
+}
+
+/*
+ * Builds a canonical PS1 VMP target for one slot in the same directory.
+ */
+static int build_ps1_slot_vmp_target(
+    const SyncSaveDescriptor *anchor_item,
+    SyncSlot slot,
+    SyncSaveDescriptor *out_target) {
+  if ((anchor_item == NULL) || !has_text(anchor_item->path) || (out_target == NULL)) {
+    return -1;
+  }
+
+  if ((slot != SYNC_SLOT_0) && (slot != SYNC_SLOT_1)) {
+    return -1;
+  }
+
+  char directory[ROMM_MAX_PATH_LEN];
+  if (extract_parent_directory(anchor_item->path, directory, sizeof(directory)) < 0) {
+    return -1;
+  }
+
+  const char *filename = (slot == SYNC_SLOT_1) ? "SCEVMC1.VMP" : "SCEVMC0.VMP";
+
+  sync_save_descriptor_init(out_target);
+  snprintf(out_target->game_id, sizeof(out_target->game_id), "%s", anchor_item->game_id);
+  snprintf(out_target->title, sizeof(out_target->title), "%s", anchor_item->title);
+  snprintf(out_target->filename, sizeof(out_target->filename), "%s", filename);
+  out_target->slot = slot;
+  out_target->size_bytes = ROMM_PS1_VMP_SIZE;
+
+  int written = snprintf(out_target->path, sizeof(out_target->path), "%s/%s", directory, filename);
+  return ((written > 0) && ((size_t)written < sizeof(out_target->path))) ? 0 : -1;
+}
+
+/*
+ * Builds one sync-state entry for a local file restored from a remote save.
+ */
+static int build_download_state_entry_for_target(
+    SyncStateEntry *entry,
+    const SyncSaveDescriptor *local_target,
+    const SyncSaveDescriptor *remote_item,
+    int64_t last_upload_unix) {
+  if ((entry == NULL) || (local_target == NULL) || (remote_item == NULL)) {
+    return -1;
+  }
+
+  sync_state_entry_init(entry);
+
+  char filename[ROMM_SYNC_MAX_FILENAME_LEN];
+  if (has_text(local_target->filename)) {
+    snprintf(filename, sizeof(filename), "%s", local_target->filename);
+  } else if (sync_extract_filename(local_target->path, filename, sizeof(filename)) < 0) {
+    return -1;
+  }
+
+  snprintf(entry->game_id, sizeof(entry->game_id), "%s", local_target->game_id);
+  snprintf(entry->filename, sizeof(entry->filename), "%s", filename);
+  entry->slot = local_target->slot;
+  entry->size_bytes = local_target->size_bytes;
+  if (get_local_file_size_bytes(local_target->path, &entry->size_bytes) < 0) {
+    entry->size_bytes = local_target->size_bytes;
+  }
+  entry->timestamp_unix = remote_item->timestamp_unix;
+  snprintf(entry->origin_device, sizeof(entry->origin_device), "%s", remote_item->origin_device);
+  entry->last_upload_unix = last_upload_unix;
+  return 0;
 }
 
 /*
@@ -750,12 +855,13 @@ static int execute_download(
         has_text(remote_item->origin_device) ? remote_item->origin_device : "(none)");
   }
 
+  const char *backup_directory = has_text(config->backup_directory)
+                                     ? config->backup_directory
+                                     : SYNC_DEFAULT_BACKUP_DIRECTORY;
+  int64_t now = (config->now_callback != NULL) ? config->now_callback() : default_now_callback();
+
   if (file_exists(local_item->path)) {
-    const char *backup_directory = has_text(config->backup_directory)
-                                       ? config->backup_directory
-                                       : SYNC_DEFAULT_BACKUP_DIRECTORY;
     app_log_write(APP_LOG_LEVEL_INFO, "sync", "creating backup before overwrite");
-    int64_t now = (config->now_callback != NULL) ? config->now_callback() : default_now_callback();
     int backup_status = backup_manager_backup_file(local_item->path, backup_directory, now, NULL, 0U);
     if (backup_status != BACKUP_MANAGER_OK) {
       action->status_code = backup_status;
@@ -769,6 +875,8 @@ static int execute_download(
   int has_conversion_temp = 0;
   char conversion_temp_path[ROMM_MAX_PATH_LEN];
   conversion_temp_path[0] = '\0';
+  SyncSaveDescriptor restored_targets[2];
+  int restored_target_count = 0;
 
   if (path_has_extension(local_item->path, ".vmp")) {
     app_log_write(
@@ -783,7 +891,6 @@ static int execute_download(
       return ensure_status;
     }
 
-    int64_t now = (config->now_callback != NULL) ? config->now_callback() : default_now_callback();
     if (build_conversion_temp_path(
             local_item,
             "download",
@@ -809,57 +916,187 @@ static int execute_download(
 
     has_conversion_temp = 1;
 
-    char template_vmp_path[ROMM_MAX_PATH_LEN];
-    if (resolve_template_vmp_path(local_item, template_vmp_path, sizeof(template_vmp_path)) < 0) {
+    int card_count = 0;
+    int card_count_status = srm_get_card_count(conversion_temp_path, &card_count);
+    if (card_count_status != ROMM_VMP_SRM_OK) {
       action->executed = 0;
-      action->status_code = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+      action->status_code = card_count_status;
       report->transfer_errors += 1;
-      set_reason(action, "no trusted template VMP available for SRM->VMP reconstruction");
-      remove(conversion_temp_path);
-      return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
-    }
-
-    int convert_status = srm_to_vmp_file(conversion_temp_path, template_vmp_path, local_item->path);
-    if (convert_status != ROMM_VMP_SRM_OK) {
-      action->executed = 0;
-      action->status_code = convert_status;
-      report->transfer_errors += 1;
-      set_reason(action, "srm->vmp conversion failed (%s)", vmp_srm_status_str(convert_status));
+      set_reason(action, "srm inspection failed (%s)", vmp_srm_status_str(card_count_status));
       app_log_write(
           APP_LOG_LEVEL_WARN,
           "sync",
-          "download conversion failed game=%s file=%s status=%s",
+          "download SRM inspection failed game=%s file=%s status=%s",
           local_item->game_id,
           action->filename,
-          vmp_srm_status_str(convert_status));
+          vmp_srm_status_str(card_count_status));
       remove(conversion_temp_path);
-      return convert_status;
+      return card_count_status;
     }
 
-    int sign_status = vmp_sign_file_in_place(local_item->path);
-    if (sign_status != ROMM_VMP_SIGNER_OK) {
-      action->executed = 0;
-      action->status_code = sign_status;
-      report->transfer_errors += 1;
-      set_reason(action, "vmp signing failed (%s)", vmp_signer_status_str(sign_status));
+    if (card_count == 2) {
+      SyncSaveDescriptor slot0_target;
+      SyncSaveDescriptor slot1_target;
+      if ((build_ps1_slot_vmp_target(local_item, SYNC_SLOT_0, &slot0_target) < 0) ||
+          (build_ps1_slot_vmp_target(local_item, SYNC_SLOT_1, &slot1_target) < 0)) {
+        action->executed = 0;
+        action->status_code = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+        report->transfer_errors += 1;
+        set_reason(action, "cannot derive dual-card PS1 restore targets");
+        remove(conversion_temp_path);
+        return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+      }
+
       app_log_write(
-          APP_LOG_LEVEL_WARN,
+          APP_LOG_LEVEL_INFO,
           "sync",
-          "download signing failed game=%s file=%s status=%s",
+          "dual-card SRM detected for game=%s; restoring both PS1 cards to %s and %s",
           local_item->game_id,
-          action->filename,
-          vmp_signer_status_str(sign_status));
-      remove(conversion_temp_path);
-      return sign_status;
-    }
+          slot0_target.filename,
+          slot1_target.filename);
 
-    app_log_write(
-        APP_LOG_LEVEL_DEBUG,
-        "sync",
-        "download conversion success game=%s tmp=%s dst=%s",
-        local_item->game_id,
-        conversion_temp_path,
-        local_item->path);
+      if (strcmp(slot0_target.path, local_item->path) != 0) {
+        int backup_status = backup_existing_local_file(slot0_target.path, backup_directory, now);
+        if (backup_status != BACKUP_MANAGER_OK) {
+          action->status_code = backup_status;
+          set_reason(action, "backup failed for %s (%s)", slot0_target.filename, backup_manager_status_str(backup_status));
+          report->transfer_errors += 1;
+          remove(conversion_temp_path);
+          return backup_status;
+        }
+      }
+
+      if (strcmp(slot1_target.path, local_item->path) != 0) {
+        int backup_status = backup_existing_local_file(slot1_target.path, backup_directory, now);
+        if (backup_status != BACKUP_MANAGER_OK) {
+          action->status_code = backup_status;
+          set_reason(action, "backup failed for %s (%s)", slot1_target.filename, backup_manager_status_str(backup_status));
+          report->transfer_errors += 1;
+          remove(conversion_temp_path);
+          return backup_status;
+        }
+      }
+
+      char template_slot0[ROMM_MAX_PATH_LEN];
+      char template_slot1[ROMM_MAX_PATH_LEN];
+      if ((resolve_template_vmp_path(&slot0_target, template_slot0, sizeof(template_slot0)) < 0) ||
+          (resolve_template_vmp_path(&slot1_target, template_slot1, sizeof(template_slot1)) < 0)) {
+        action->executed = 0;
+        action->status_code = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+        report->transfer_errors += 1;
+        set_reason(action, "no trusted template VMP available for dual-card SRM->VMP reconstruction");
+        remove(conversion_temp_path);
+        return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+      }
+
+      int convert_status = srm_card_to_vmp_file(conversion_temp_path, 0, template_slot0, slot0_target.path);
+      if (convert_status == ROMM_VMP_SRM_OK) {
+        convert_status = srm_card_to_vmp_file(conversion_temp_path, 1, template_slot1, slot1_target.path);
+      }
+      if (convert_status != ROMM_VMP_SRM_OK) {
+        action->executed = 0;
+        action->status_code = convert_status;
+        report->transfer_errors += 1;
+        set_reason(action, "dual-card srm->vmp conversion failed (%s)", vmp_srm_status_str(convert_status));
+        app_log_write(
+            APP_LOG_LEVEL_WARN,
+            "sync",
+            "dual-card download conversion failed game=%s file=%s status=%s",
+            local_item->game_id,
+            action->filename,
+            vmp_srm_status_str(convert_status));
+        remove(conversion_temp_path);
+        return convert_status;
+      }
+
+      int sign_status = vmp_sign_file_in_place(slot0_target.path);
+      if (sign_status == ROMM_VMP_SIGNER_OK) {
+        sign_status = vmp_sign_file_in_place(slot1_target.path);
+      }
+      if (sign_status != ROMM_VMP_SIGNER_OK) {
+        action->executed = 0;
+        action->status_code = sign_status;
+        report->transfer_errors += 1;
+        set_reason(action, "dual-card vmp signing failed (%s)", vmp_signer_status_str(sign_status));
+        app_log_write(
+            APP_LOG_LEVEL_WARN,
+            "sync",
+            "dual-card download signing failed game=%s file=%s status=%s",
+            local_item->game_id,
+            action->filename,
+            vmp_signer_status_str(sign_status));
+        remove(conversion_temp_path);
+        return sign_status;
+      }
+
+      restored_targets[0] = slot0_target;
+      restored_targets[1] = slot1_target;
+      restored_target_count = 2;
+
+      app_log_write(
+          APP_LOG_LEVEL_DEBUG,
+          "sync",
+          "dual-card download conversion success game=%s tmp=%s dst0=%s dst1=%s",
+          local_item->game_id,
+          conversion_temp_path,
+          slot0_target.path,
+          slot1_target.path);
+    } else {
+      char template_vmp_path[ROMM_MAX_PATH_LEN];
+      if (resolve_template_vmp_path(local_item, template_vmp_path, sizeof(template_vmp_path)) < 0) {
+        action->executed = 0;
+        action->status_code = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+        report->transfer_errors += 1;
+        set_reason(action, "no trusted template VMP available for SRM->VMP reconstruction");
+        remove(conversion_temp_path);
+        return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+      }
+
+      int convert_status = srm_to_vmp_file(conversion_temp_path, template_vmp_path, local_item->path);
+      if (convert_status != ROMM_VMP_SRM_OK) {
+        action->executed = 0;
+        action->status_code = convert_status;
+        report->transfer_errors += 1;
+        set_reason(action, "srm->vmp conversion failed (%s)", vmp_srm_status_str(convert_status));
+        app_log_write(
+            APP_LOG_LEVEL_WARN,
+            "sync",
+            "download conversion failed game=%s file=%s status=%s",
+            local_item->game_id,
+            action->filename,
+            vmp_srm_status_str(convert_status));
+        remove(conversion_temp_path);
+        return convert_status;
+      }
+
+      int sign_status = vmp_sign_file_in_place(local_item->path);
+      if (sign_status != ROMM_VMP_SIGNER_OK) {
+        action->executed = 0;
+        action->status_code = sign_status;
+        report->transfer_errors += 1;
+        set_reason(action, "vmp signing failed (%s)", vmp_signer_status_str(sign_status));
+        app_log_write(
+            APP_LOG_LEVEL_WARN,
+            "sync",
+            "download signing failed game=%s file=%s status=%s",
+            local_item->game_id,
+            action->filename,
+            vmp_signer_status_str(sign_status));
+        remove(conversion_temp_path);
+        return sign_status;
+      }
+
+      restored_targets[0] = *local_item;
+      restored_target_count = 1;
+
+      app_log_write(
+          APP_LOG_LEVEL_DEBUG,
+          "sync",
+          "download conversion success game=%s tmp=%s dst=%s",
+          local_item->game_id,
+          conversion_temp_path,
+          local_item->path);
+    }
   } else {
     status = romm_client_download_save(romm_client, remote_item, local_item->path);
     action->status_code = status;
@@ -876,16 +1113,34 @@ static int execute_download(
   }
 
   if (remote_item->timestamp_unix > 0) {
-    int preserve_status = preserve_remote_timestamp_on_local_copy(local_item->path, remote_item->timestamp_unix);
-    if (preserve_status < 0) {
-      app_log_write(
-          APP_LOG_LEVEL_WARN,
-          "sync",
-          "download timestamp preserve failed game=%s file=%s remote_ts=%lld status=%d",
-          local_item->game_id,
-          action->filename,
-          (long long)remote_item->timestamp_unix,
-          preserve_status);
+    if (restored_target_count > 0) {
+      for (int i = 0; i < restored_target_count; ++i) {
+        int preserve_status = preserve_remote_timestamp_on_local_copy(
+            restored_targets[i].path,
+            remote_item->timestamp_unix);
+        if (preserve_status < 0) {
+          app_log_write(
+              APP_LOG_LEVEL_WARN,
+              "sync",
+              "download timestamp preserve failed game=%s file=%s remote_ts=%lld status=%d",
+              local_item->game_id,
+              restored_targets[i].filename,
+              (long long)remote_item->timestamp_unix,
+              preserve_status);
+        }
+      }
+    } else {
+      int preserve_status = preserve_remote_timestamp_on_local_copy(local_item->path, remote_item->timestamp_unix);
+      if (preserve_status < 0) {
+        app_log_write(
+            APP_LOG_LEVEL_WARN,
+            "sync",
+            "download timestamp preserve failed game=%s file=%s remote_ts=%lld status=%d",
+            local_item->game_id,
+            action->filename,
+            (long long)remote_item->timestamp_unix,
+            preserve_status);
+      }
     }
   }
 
@@ -894,40 +1149,92 @@ static int execute_download(
   action->executed = 1;
   report->downloads_executed += 1;
   if (action->conflict != SYNC_CONFLICT_NONE) {
-    set_reason(action, "downloaded after conflict review (%s)", sync_conflict_type_str(action->conflict));
+    if (restored_target_count == 2) {
+      set_reason(action, "downloaded dual-card restore after conflict review (%s)", sync_conflict_type_str(action->conflict));
+    } else {
+      set_reason(action, "downloaded after conflict review (%s)", sync_conflict_type_str(action->conflict));
+    }
   } else {
-    set_reason(action, "downloaded");
+    set_reason(action, (restored_target_count == 2) ? "downloaded dual-card restore" : "downloaded");
   }
-  app_log_write(APP_LOG_LEVEL_INFO, "sync", "download complete: game=%s file=%s", local_item->game_id, action->filename);
-
-  int64_t last_upload = 0;
-  if (previous_state_entry != NULL) {
-    last_upload = previous_state_entry->last_upload_unix;
-  }
-
-  SyncStateEntry state_entry;
-  build_state_entry_from_item(
-      &state_entry,
-      remote_item,
-      remote_item->origin_device,
-      last_upload);
-
-  if (has_text(local_item->game_id)) {
-    snprintf(state_entry.game_id, sizeof(state_entry.game_id), "%s", local_item->game_id);
-  }
-  if (has_text(local_item->filename)) {
-    snprintf(state_entry.filename, sizeof(state_entry.filename), "%s", local_item->filename);
-  }
-  if (local_item->slot != SYNC_SLOT_UNKNOWN) {
-    state_entry.slot = local_item->slot;
+  if (restored_target_count == 2) {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "sync",
+        "download complete: game=%s restored=%s,%s",
+        local_item->game_id,
+        restored_targets[0].filename,
+        restored_targets[1].filename);
+  } else {
+    app_log_write(APP_LOG_LEVEL_INFO, "sync", "download complete: game=%s file=%s", local_item->game_id, action->filename);
   }
 
-  int upsert_status = sync_state_store_upsert(state_store, &state_entry);
-  if (upsert_status != SYNC_STATE_STORE_OK) {
-    report->transfer_errors += 1;
-    action->status_code = upsert_status;
-    set_reason(action, "downloaded but state update failed (%s)", sync_state_store_status_str(upsert_status));
-    return upsert_status;
+  if (restored_target_count > 0) {
+    for (int i = 0; i < restored_target_count; ++i) {
+      const SyncStateEntry *target_previous_state = previous_state_entry;
+      if ((strcmp(restored_targets[i].path, local_item->path) != 0) || (previous_state_entry == NULL)) {
+        target_previous_state = sync_state_store_find_const(
+            state_store,
+            restored_targets[i].game_id,
+            restored_targets[i].filename,
+            restored_targets[i].slot);
+      }
+
+      int64_t last_upload = 0;
+      if (target_previous_state != NULL) {
+        last_upload = target_previous_state->last_upload_unix;
+      }
+
+      SyncStateEntry state_entry;
+      if (build_download_state_entry_for_target(
+              &state_entry,
+              &restored_targets[i],
+              remote_item,
+              last_upload) < 0) {
+        report->transfer_errors += 1;
+        action->status_code = SYNC_STATE_STORE_ERR_INVALID_ARGUMENT;
+        set_reason(action, "downloaded but state update failed (%s)", sync_state_store_status_str(SYNC_STATE_STORE_ERR_INVALID_ARGUMENT));
+        return SYNC_STATE_STORE_ERR_INVALID_ARGUMENT;
+      }
+
+      int upsert_status = sync_state_store_upsert(state_store, &state_entry);
+      if (upsert_status != SYNC_STATE_STORE_OK) {
+        report->transfer_errors += 1;
+        action->status_code = upsert_status;
+        set_reason(action, "downloaded but state update failed (%s)", sync_state_store_status_str(upsert_status));
+        return upsert_status;
+      }
+    }
+  } else {
+    int64_t last_upload = 0;
+    if (previous_state_entry != NULL) {
+      last_upload = previous_state_entry->last_upload_unix;
+    }
+
+    SyncStateEntry state_entry;
+    build_state_entry_from_item(
+        &state_entry,
+        remote_item,
+        remote_item->origin_device,
+        last_upload);
+
+    if (has_text(local_item->game_id)) {
+      snprintf(state_entry.game_id, sizeof(state_entry.game_id), "%s", local_item->game_id);
+    }
+    if (has_text(local_item->filename)) {
+      snprintf(state_entry.filename, sizeof(state_entry.filename), "%s", local_item->filename);
+    }
+    if (local_item->slot != SYNC_SLOT_UNKNOWN) {
+      state_entry.slot = local_item->slot;
+    }
+
+    int upsert_status = sync_state_store_upsert(state_store, &state_entry);
+    if (upsert_status != SYNC_STATE_STORE_OK) {
+      report->transfer_errors += 1;
+      action->status_code = upsert_status;
+      set_reason(action, "downloaded but state update failed (%s)", sync_state_store_status_str(upsert_status));
+      return upsert_status;
+    }
   }
 
   return SYNC_ENGINE_OK;
