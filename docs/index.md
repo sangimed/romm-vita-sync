@@ -55,7 +55,7 @@ Current integration status:
 - real HTTP device registration is implemented (`POST /api/devices`)
 - upload/download conversion logic is integrated in `SyncEngine`
 - real HTTP save transfer callbacks are wired (`list/upload/download`)
-- local Vita saves are now mapped to RomM `rom_id` by trying `/api/platforms` first, then querying `/api/roms` with targeted `search_term` requests using `GAME_ID` first and `title` as fallback
+- local Vita saves are now mapped to RomM `rom_id` by trying `/api/platforms` first, then querying `/api/roms` with bounded, normalized `search_term` variants (`GAME_ID`, title raw/normalized, alias-stripped title, significant tokens) and local scoring (serial, title fuzzy, filename fallback)
 
 
 ## Execution Model (Version 1)
@@ -219,6 +219,7 @@ Authentication rule:
 - if `[Device].device_id` is empty, startup calls the `RommClient` registration flow and persists the returned `device_id` into `settings.ini`
 - recommended logging for troubleshooting: `level=debug` and keep `scan_verbose=false` first; enable `scan_verbose=true` only when debugging scanner issues
 - at `level=info`, RomM HTTP logs summarize request/response flow for `/api/platforms`, `/api/roms`, `/api/saves`, and `/api/devices`
+- at `level=debug`, Rom ID mapping logs include generated search variants, per-candidate title scores (exact/fuzzy/token/sequel penalty components), and explicit winner/ambiguous/reject reasons
 - HTTP error responses now log richer diagnostics automatically: effective URL/scheme, selected response headers (`Content-Type`, `Server`, `Via`, `Location`, `CF-Ray` when present), and a longer body preview
 - at `level=debug`, additional raw response-body details remain available for troubleshooting unsupported API payloads
 - file logging remains available only through `settings.ini`; the home screen no longer exposes a dedicated file logging row
@@ -793,8 +794,11 @@ Local Vita items are resolved to server `rom_id` before sync decisions by:
 
 - resolving the configured platform through `/api/platforms` when available, otherwise falling back to the legacy RomM `platform=` query
 - trying a targeted RomM lookup first through `/api/roms` with `search_term`, using `platform_ids=...` when a numeric platform id is available and `platform=...` otherwise
-- preferring local `GAME_ID` as the primary search term, then retrying with the local title when needed
-- matching candidates by serial metadata first, then title (`fs_name_no_tags`, `name`, `fs_name_no_ext`), then filename patterns
+- generating bounded, deduplicated search-term variants per local save (`GAME_ID`, title raw, title normalized, alias-stripped title, significant-title tokens)
+- normalizing titles with unicode-aware cleanup (lowercase, diacritics folding, symbol/punctuation cleanup, whitespace collapse, roman/arabic number compatibility)
+- matching candidates by serial metadata first, then title scoring across `fs_name_no_tags`, `name`, `fs_name_no_ext`, and `alternative_names`
+- using composite title scoring (exact match, token-set/token-sort similarity, Levenshtein, serial bonus, sequel mismatch penalty) with confidence threshold and ambiguity margin
+- falling back to filename-pattern scoring only when serial/title stages do not produce a safe deterministic match
 - surfacing unresolved mappings to the UI when no targeted candidate set yields a unique `rom_id`
 - listing remote saves only for the mapped `rom_id` set required by the current sync batch, scoped to the authenticated RomM user rather than the full save inventory
 Conversion is now wired in the app sync flow:
@@ -813,12 +817,18 @@ Current Rom ID mapping flow:
 
 1. The app tries to resolve the configured RomM platform through `/api/platforms`.
 2. If `/api/platforms` is unavailable or returns an unsupported response, Rom ID lookup falls back to the legacy `/api/roms?...&platform=...` query path.
-3. For each local save, the app first narrows candidates with a targeted `/api/roms?...&search_term=...` request using the local `GAME_ID` when present.
-4. If the targeted `GAME_ID` search does not yield a unique match, the app retries the targeted lookup with the local title when available.
-5. Each targeted candidate set is matched by serial metadata first.
-6. If serial matching is not unique, the matcher tries title-based candidates in this order: `fs_name_no_tags`, `name`, `fs_name_no_ext`.
-7. If title matching is still not unique, the matcher falls back to filename-pattern scoring inside the targeted candidate set.
-8. If no targeted candidate set yields a unique match, the UI reports the save as unresolved and aborts sync before transfer decisions.
+3. For each local save without `rom_id`, the app builds a bounded list of search-term variants:
+   - local `GAME_ID` (when available)
+   - title raw (compact punctuation-normalized form)
+   - title normalized (unicode-aware lowercase/diacritics cleanup)
+   - title without short alias prefix (example: `R4 RIDGE RACER TYPE 4` -> `RIDGE RACER TYPE 4`)
+   - significant title tokens (noise words removed)
+4. The app queries `/api/roms?...&search_term=...` for each variant (deduplicated, capped), using `platform_ids=...` when available and `platform=...` otherwise.
+5. For each candidate set returned by RomM, stage 1 tries exact serial metadata matches (`serial`, `serials`, related aliases).
+6. If serial stage is not deterministically unique, stage 2 computes title scores against `fs_name_no_tags`, `name`, `fs_name_no_ext`, and `alternative_names`.
+7. Title scoring combines exact/containment checks, token-based fuzzy similarity (set/sort), Levenshtein similarity, serial coherence bonus, and strong sequel-number mismatch penalty (`3` vs `4`, including roman/arabic variants).
+8. A candidate is accepted only if title confidence passes threshold and ambiguity margin checks; otherwise stage 3 fallback evaluates filename-pattern similarity.
+9. If no variant yields a unique safe result, the mapping is reported as unresolved and sync stops before transfer decisions.
 
 ## Contributing
 
