@@ -86,7 +86,7 @@ static void ui_initialize_state(UiAppState *state) {
 
   if (state->config_status == APP_CONFIG_ERR_NOT_FOUND) {
     app_log_write(APP_LOG_LEVEL_WARN, "main", "settings.ini not found, using defaults");
-    ui_set_status(state, "Connection settings not found. Enter the server URL, username, and password.");
+    ui_set_status(state, "Connection settings not found. Enter the server URL and API token (or username/password).");
   } else if (state->config_status == APP_CONFIG_OK) {
     ui_set_status(state, "Configuration loaded from %s", APP_CONFIG_DEFAULT_PATH);
   } else {

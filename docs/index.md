@@ -83,7 +83,7 @@ This section summarizes the practical setup for both end users and developers.
 - VitaShell (or equivalent method to install VPK files)
 - Adrenaline installed (for PS1 save support)
 - Network access from Vita to your RomM server
-- Valid RomM username/password credentials
+- Valid RomM auth (`romm_api_token` preferred, or username/password)
 
 ### Developer Build Prerequisites (Recommended: Docker)
 
@@ -143,7 +143,7 @@ Commands:
 
 1. Launch the app on Vita
 2. The app automatically creates `ux0:data/romm-vita-sync/`
-3. Select the connection fields and enter the RomM `url`, `username`, and `password`
+3. Select the connection fields and enter the RomM `url`, `username`, and `password` (or set `romm_api_token` manually in `settings.ini`)
 4. Optionally toggle `Dry-run mode` before the first sync
 5. Confirm each field saves immediately after closing the system keyboard
 
@@ -156,7 +156,7 @@ Commands:
 
 Notes:
 
-- The RomM URL, username, and password are currently stored in plain text (no encryption) in `settings.ini`.
+- The RomM URL, API token, username, and password are currently stored in plain text (no encryption) in `settings.ini`.
 - Default `dry_run = true`; you can disable it directly from the home screen or set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
 - Conflict auto-apply is always enabled internally so recommended conflict actions run automatically.
 
@@ -170,6 +170,7 @@ Format is INI-style (conventional in C/C++ desktop and embedded projects).
 
 The app now creates `ux0:data/romm-vita-sync/` automatically on startup.
 You can configure the URL, username, password, and dry-run mode directly in the in-app UI; manual file creation is not required.
+`romm_api_token` is currently configured through `settings.ini`.
 
 Reference template (optional, for manual editing/debug):
 
@@ -177,7 +178,7 @@ Reference template (optional, for manual editing/debug):
 
 Supported sections:
 
-- `[RomM]`: `url`, `username`, `password`, `platform`, `emulator`, `verify_tls`, `timeout_seconds`
+- `[RomM]`: `url`, `romm_api_token`, `username`, `password`, `platform`, `emulator`, `verify_tls`, `timeout_seconds`
 - `[Device]`: `device_id`, `device_name`, `device_platform`, `client`, `client_version`
 - `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`, `auto_sync_on_startup`
 - `[Log]`: `level` (`error|warn|info|debug`), `file_enabled` (`true|false`), `scan_verbose` (`true|false`)
@@ -210,12 +211,14 @@ Operational notes:
 
 Security notice:
 
-- The RomM URL, username, and password are currently stored locally in `settings.ini` **without encryption** (plain text).
+- The RomM URL, API token, username, and password are currently stored locally in `settings.ini` **without encryption** (plain text).
 - This is intentional for the current milestone and will be hardened in a later iteration.
 
 Authentication rule:
 
-- `username` and `password` are required for all authenticated RomM requests
+- `romm_api_token` is used first when present and non-empty (`Authorization: Bearer <token>`)
+- when `romm_api_token` is empty, username/password are used as HTTP Basic auth
+- if neither method is configured, authenticated RomM operations fail with auth/config errors
 - if `[Device].device_id` is empty, startup calls the `RommClient` registration flow and persists the returned `device_id` into `settings.ini`
 - recommended logging for troubleshooting: `level=debug` and keep `scan_verbose=false` first; enable `scan_verbose=true` only when debugging scanner issues
 - at `level=info`, RomM HTTP logs summarize request/response flow for `/api/platforms`, `/api/roms`, `/api/saves`, and `/api/devices`
@@ -228,6 +231,7 @@ Authentication rule:
 Current in-app UI behavior:
 
 - The home screen exposes dedicated fields for the RomM `url`, `username`, and `password`.
+- `romm_api_token` is currently set via manual `settings.ini` editing.
 - The home screen includes a `Dry-run mode` toggle with immediate save.
 - Editing those fields opens the official PS Vita system keyboard (`SceImeDialog`).
 - Confirming keyboard input persists values immediately to `ux0:data/romm-vita-sync/settings.ini`.
@@ -277,14 +281,14 @@ Host toolchain alternative:
 
 1. Launch the app on Vita.
 2. Confirm the app creates `ux0:data/romm-vita-sync/`.
-3. Select each connection field and enter the RomM `url`, `username`, and `password`.
+3. Select each connection field and enter the RomM `url`, `username`, and `password` (or set `romm_api_token` manually in `settings.ini`).
 4. Confirm that each field saves immediately after closing the system keyboard.
 5. Toggle `Dry-run mode` directly from the home screen if you want to execute real transfers immediately.
 
 ### 3. Network And Auth Preconditions
 
 1. Ensure Vita can reach the RomM URL on the same network.
-2. Use valid RomM username/password credentials.
+2. Use valid RomM authentication (`romm_api_token` preferred, or username/password).
 3. For self-signed HTTPS certificates, use `verify_tls = false` only for local testing.
 
 ### 4. Sync Validation
@@ -298,12 +302,12 @@ Host toolchain alternative:
 ### 5. Persistence Validation
 
 1. Restart the app.
-2. Confirm URL/username/password are still present and `Dry-run mode` keeps its saved value.
+2. Confirm URL/auth settings (`romm_api_token` or username/password) are still present and `Dry-run mode` keeps its saved value.
 3. Confirm `device_id` remains stable across launches.
 
 ### 6. Negative Path Validation
 
-1. Invalid username/password: expect `authentication failed`.
+1. Invalid credentials (`romm_api_token` or username/password): expect `authentication failed`.
 2. Unreachable URL/network issue: expect `network error`.
 3. HTTPS with invalid cert and `verify_tls = true`: expect request failure.
 
