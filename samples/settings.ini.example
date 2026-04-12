@@ -1,10 +1,12 @@
 ; romm-vita-sync configuration example
 ; Copy this file to: ux0:data/romm-vita-sync/settings.ini
-; SECURITY NOTICE: url/username/password are currently stored as plain text (no encryption).
+; SECURITY NOTICE: url/romm_api_token/username/password are currently stored as plain text (no encryption).
 
 [RomM]
 ; Base URL of your RomM instance (without trailing slash preferred)
 url =
+; Preferred auth method. When set, Bearer token auth is used and username/password are ignored.
+romm_api_token =
 username =
 password =
 platform = psx

@@ -14,6 +14,7 @@
 #define APP_CONFIG_ERR_WRITE -7
 
 #define APP_CONFIG_MAX_URL_LEN 256
+#define APP_CONFIG_MAX_API_TOKEN_LEN 512
 #define APP_CONFIG_MAX_USERNAME_LEN 96
 #define APP_CONFIG_MAX_PASSWORD_LEN 160
 #define APP_CONFIG_MAX_PLATFORM_FILTER_LEN 32
@@ -34,6 +35,7 @@
 
 typedef struct AppConfig {
   char romm_url[APP_CONFIG_MAX_URL_LEN];
+  char romm_api_token[APP_CONFIG_MAX_API_TOKEN_LEN];
   char romm_username[APP_CONFIG_MAX_USERNAME_LEN];
   char romm_password[APP_CONFIG_MAX_PASSWORD_LEN];
   char romm_platform_filter[APP_CONFIG_MAX_PLATFORM_FILTER_LEN];
@@ -85,7 +87,8 @@ int app_config_set_device_id(AppConfig *config, const char *device_id);
 int app_config_has_server_url(const AppConfig *config);
 
 /*
- * Returns non-zero when username/password authentication is configured.
+ * Returns non-zero when either romm_api_token or username/password
+ * authentication is configured.
  */
 int app_config_has_auth(const AppConfig *config);
 

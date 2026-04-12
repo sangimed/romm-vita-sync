@@ -780,8 +780,8 @@ int ui_run_sync_pipeline(
     return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
   }
   if (!app_config_has_auth(&state->config)) {
-    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync failed: username/password is missing");
-    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: username/password is missing");
+    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync failed: RomM auth is missing (API token or username/password)");
+    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: auth is missing");
     state->sync_feedback.running = 0;
     state->sync_feedback.completed = 1;
     state->sync_feedback.success = 0;
@@ -791,7 +791,7 @@ int ui_run_sync_pipeline(
     return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
   }
   ui_sync_feedback_set_progress(&state->sync_feedback, 1, total_units);
-  ui_sync_log_write(APP_LOG_LEVEL_INFO, "Username/password present in configuration");
+  ui_sync_log_write(APP_LOG_LEVEL_INFO, "RomM auth present in configuration");
   ui_sync_render_live(state);
 
   ui_sync_feedback_set_message(&state->sync_feedback, "Ensuring device registration...");
@@ -1017,7 +1017,7 @@ void ui_run_pending_auto_sync(UiAppState *state) {
   }
 
   if (!app_config_has_server_url(&state->config) || !app_config_has_auth(&state->config)) {
-    ui_set_status(state, "Auto sync skipped: configure the RomM URL, username, and password first");
+    ui_set_status(state, "Auto sync skipped: configure the RomM URL and API token (or username/password) first");
     return;
   }
 

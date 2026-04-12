@@ -155,7 +155,7 @@ void ui_render_sync_panel(const UiAppState *state) {
     snprintf(readiness, sizeof(readiness), "Enter the RoMM server address first.");
     readiness_color = UI_COLOR_WARNING;
   } else if (!app_config_has_auth(&state->config)) {
-    snprintf(readiness, sizeof(readiness), "Enter your RoMM username and password to enable sync.");
+    snprintf(readiness, sizeof(readiness), "Enter your RoMM API token or username/password to enable sync.");
     readiness_color = UI_COLOR_WARNING;
   } else {
     snprintf(readiness, sizeof(readiness), "Connection details look complete.");

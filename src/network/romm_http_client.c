@@ -357,7 +357,8 @@ static int base64_encode(const unsigned char *input, size_t input_size, char *ou
 }
 
 /*
- * Builds Authorization header value from username/password configuration.
+ * Builds Authorization header value from configuration.
+ * Prefers Bearer token auth, then falls back to Basic auth.
  */
 static int build_auth_value(const AppConfig *config, char *out_value, size_t out_value_size) {
   if ((config == NULL) || (out_value == NULL) || (out_value_size == 0U)) {
@@ -365,6 +366,11 @@ static int build_auth_value(const AppConfig *config, char *out_value, size_t out
   }
 
   out_value[0] = '\0';
+  if (has_text(config->romm_api_token)) {
+    int written = snprintf(out_value, out_value_size, "Bearer %s", config->romm_api_token);
+    return ((written > 0) && ((size_t)written < out_value_size)) ? 0 : -1;
+  }
+
   if (has_text(config->romm_username) && has_text(config->romm_password)) {
     char credentials[APP_CONFIG_MAX_USERNAME_LEN + APP_CONFIG_MAX_PASSWORD_LEN + 2];
     int credentials_written = snprintf(credentials, sizeof(credentials), "%s:%s", config->romm_username, config->romm_password);

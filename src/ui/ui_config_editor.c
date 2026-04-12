@@ -511,7 +511,7 @@ void ui_activate_selection(UiAppState *state) {
       return;
     }
     if (!app_config_has_auth(&state->config)) {
-      ui_set_status(state, "Enter the RoMM username and password before synchronizing");
+      ui_set_status(state, "Enter the RoMM API token or username/password before synchronizing");
       return;
     }
     ui_run_sync_for_selected_games(state);
@@ -530,7 +530,7 @@ void ui_activate_selection(UiAppState *state) {
       return;
     }
     if (!app_config_has_auth(&state->config)) {
-      ui_set_status(state, "Enter the RoMM username and password before synchronizing");
+      ui_set_status(state, "Enter the RoMM API token or username/password before synchronizing");
       return;
     }
     ui_run_sync_all_saves(state);

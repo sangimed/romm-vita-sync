@@ -307,6 +307,8 @@ static void apply_key_value(
   if (section == APP_CONFIG_SECTION_ROMM) {
     if (string_ieq(key, "url") || string_ieq(key, "base_url")) {
       safe_copy(config->romm_url, sizeof(config->romm_url), value);
+    } else if (string_ieq(key, "romm_api_token")) {
+      safe_copy(config->romm_api_token, sizeof(config->romm_api_token), value);
     } else if (string_ieq(key, "username")) {
       safe_copy(config->romm_username, sizeof(config->romm_username), value);
     } else if (string_ieq(key, "password")) {
@@ -510,6 +512,9 @@ int app_config_save(const char *path, const AppConfig *config) {
   if ((status == APP_CONFIG_OK) && (fprintf(file, "url = %s\n", config->romm_url) < 0)) {
     status = APP_CONFIG_ERR_WRITE;
   }
+  if ((status == APP_CONFIG_OK) && (fprintf(file, "romm_api_token = %s\n", config->romm_api_token) < 0)) {
+    status = APP_CONFIG_ERR_WRITE;
+  }
   if ((status == APP_CONFIG_OK) && (fprintf(file, "username = %s\n", config->romm_username) < 0)) {
     status = APP_CONFIG_ERR_WRITE;
   }
@@ -596,11 +601,16 @@ int app_config_has_server_url(const AppConfig *config) {
 }
 
 /*
- * Returns non-zero when username/password authentication is configured.
+ * Returns non-zero when token or username/password authentication
+ * is configured.
  */
 int app_config_has_auth(const AppConfig *config) {
   if (config == NULL) {
     return 0;
+  }
+
+  if (has_text(config->romm_api_token)) {
+    return 1;
   }
 
   return has_text(config->romm_username) && has_text(config->romm_password);
