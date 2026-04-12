@@ -32,8 +32,9 @@ int romm_http_list_remote_saves_callback(
     int max_items);
 
 /*
- * Real RomM upload callback backed by POST /api/saves.
- * local_item->rom_id must be set.
+ * Real RomM upload callback backed by POST /api/saves for new saves and
+ * PUT /api/saves/{id} when local_item->remote_id targets an existing save.
+ * local_item->rom_id must be set for new uploads.
  */
 int romm_http_upload_save_callback(
     void *context,

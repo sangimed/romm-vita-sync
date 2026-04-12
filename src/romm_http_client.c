@@ -2236,10 +2236,12 @@ static int http_get_file(
 }
 
 /*
- * Sends a multipart/form-data upload request for one file field.
+ * Sends a multipart/form-data request carrying a single file field.
+ * method is typically POST for creation or PUT for in-place replacement.
  */
-static int http_post_multipart_file(
+static int http_send_multipart_file(
     const AppConfig *config,
+    int method,
     const char *url,
     const char *field_name,
     const char *upload_filename,
@@ -2300,7 +2302,7 @@ static int http_post_multipart_file(
   free(file_data);
   int status = http_send_request(
       config,
-      SCE_HTTP_METHOD_POST,
+      method,
       url,
       content_type,
       payload,
@@ -3356,7 +3358,9 @@ int romm_http_list_remote_saves_callback(
 }
 
 /*
- * Real RomM upload callback backed by POST /api/saves.
+ * Real RomM upload callback backed by POST /api/saves for new saves and
+ * PUT /api/saves/{id} for matched remote saves. This keeps one current remote
+ * save per rom/slot when the sync engine already identified the existing entry.
  */
 int romm_http_upload_save_callback(
     void *context,
@@ -3385,40 +3389,55 @@ int romm_http_upload_save_callback(
   }
 
   const char *emulator = romm_save_emulator(config);
-  const char *slot_query = slot_to_query_value(local_item->slot);
   char path[384];
-  if (has_text(config->device_id) && has_text(slot_query)) {
-    snprintf(
-        path,
-        sizeof(path),
-        "/api/saves?rom_id=%d&emulator=%s&device_id=%s&slot=%s",
-        rom_id,
-        emulator,
-        config->device_id,
-        slot_query);
-  } else if (has_text(config->device_id)) {
-    snprintf(
-        path,
-        sizeof(path),
-        "/api/saves?rom_id=%d&emulator=%s&device_id=%s",
-        rom_id,
-        emulator,
-        config->device_id);
-  } else if (has_text(slot_query)) {
-    snprintf(
-        path,
-        sizeof(path),
-        "/api/saves?rom_id=%d&emulator=%s&slot=%s",
-        rom_id,
-        emulator,
-        slot_query);
+  int http_method = SCE_HTTP_METHOD_POST;
+  if (local_item->remote_id > 0) {
+    http_method = SCE_HTTP_METHOD_PUT;
+    if (has_text(config->device_id)) {
+      snprintf(
+          path,
+          sizeof(path),
+          "/api/saves/%d?device_id=%s",
+          local_item->remote_id,
+          config->device_id);
+    } else {
+      snprintf(path, sizeof(path), "/api/saves/%d", local_item->remote_id);
+    }
   } else {
-    snprintf(
-        path,
-        sizeof(path),
-        "/api/saves?rom_id=%d&emulator=%s",
-        rom_id,
-        emulator);
+    const char *slot_query = slot_to_query_value(local_item->slot);
+    if (has_text(config->device_id) && has_text(slot_query)) {
+      snprintf(
+          path,
+          sizeof(path),
+          "/api/saves?rom_id=%d&emulator=%s&device_id=%s&slot=%s",
+          rom_id,
+          emulator,
+          config->device_id,
+          slot_query);
+    } else if (has_text(config->device_id)) {
+      snprintf(
+          path,
+          sizeof(path),
+          "/api/saves?rom_id=%d&emulator=%s&device_id=%s",
+          rom_id,
+          emulator,
+          config->device_id);
+    } else if (has_text(slot_query)) {
+      snprintf(
+          path,
+          sizeof(path),
+          "/api/saves?rom_id=%d&emulator=%s&slot=%s",
+          rom_id,
+          emulator,
+          slot_query);
+    } else {
+      snprintf(
+          path,
+          sizeof(path),
+          "/api/saves?rom_id=%d&emulator=%s",
+          rom_id,
+          emulator);
+    }
   }
 
   char url[APP_CONFIG_MAX_URL_LEN + sizeof(path)];
@@ -3434,14 +3453,15 @@ int romm_http_upload_save_callback(
   app_log_write(
       APP_LOG_LEVEL_INFO,
       "http",
-      "request POST /api/saves rom_id=%d game=%s slot=%s device_id=%s upload=%s",
+      "request %s %s rom_id=%d game=%s upload=%s",
+      (http_method == SCE_HTTP_METHOD_PUT) ? "PUT" : "POST",
+      path,
       rom_id,
       has_text(local_item->game_id) ? local_item->game_id : "(unknown)",
-      has_text(slot_query) ? slot_query : "(none)",
-      has_text(config->device_id) ? "yes" : "no",
       upload_filename);
-  int transport_status = http_post_multipart_file(
+  int transport_status = http_send_multipart_file(
       config,
+      http_method,
       url,
       "saveFile",
       upload_filename,
@@ -3456,10 +3476,12 @@ int romm_http_upload_save_callback(
   app_log_write(
       APP_LOG_LEVEL_DEBUG,
       "http",
-      "upload save status=%d game=%s rom_id=%d body=%s",
+      "upload save method=%s status=%d game=%s rom_id=%d remote_id=%d body=%s",
+      (http_method == SCE_HTTP_METHOD_PUT) ? "PUT" : "POST",
       status_code,
       local_item->game_id,
       rom_id,
+      local_item->remote_id,
       response_body);
 
   if ((status_code == 401) || (status_code == 403)) {

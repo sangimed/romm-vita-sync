@@ -256,7 +256,7 @@ Coverage:
 - per-game sync triggering from the Vita UI
 - visible sync/log output on-device
 - in-app conversion path wiring (`VMP->SRM` for upload, `SRM->VMP` + signing for download)
-- real save transfer integration (`GET /api/saves`, `POST /api/saves`, `GET /api/saves/{id}/content`)
+- real save transfer integration (`GET /api/saves`, `POST /api/saves`, `PUT /api/saves/{id}`, `GET /api/saves/{id}/content`)
 
 ### 1. Build And Upload VPK
 
@@ -313,7 +313,7 @@ Host toolchain alternative:
 
 1. Default is `dry_run = true` for safety-first runs.
 2. Set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
-3. Upload flow sends `.SRM` through `POST /api/saves`; download flow pulls `GET /api/saves/{id}/content` then rebuilds/signs `.VMP`.
+3. Upload flow sends `.SRM` through `POST /api/saves` for new remote saves and `PUT /api/saves/{id}` when a matching remote save already exists; download flow pulls `GET /api/saves/{id}/content` then rebuilds/signs `.VMP`.
 
 ### 8. `auto_apply_conflicts` Validation
 
@@ -792,7 +792,7 @@ Initial goals:
 - display save inventory UI
 
 RomM device registration is now wired to the real HTTP endpoint (`POST /api/devices`).
-Save listing/upload/download are now wired to real HTTP callbacks in `main.c` (`/api/saves` endpoints).
+Save listing/upload/download are now wired to real HTTP callbacks in `main.c` (`/api/saves` endpoints, with upload replacement via `PUT /api/saves/{id}` when a remote save is already matched).
 Local Vita items are resolved to server `rom_id` before sync decisions by:
 
 - resolving the configured platform through `/api/platforms` when available, otherwise falling back to the legacy RomM `platform=` query
@@ -801,10 +801,9 @@ Local Vita items are resolved to server `rom_id` before sync decisions by:
 - matching candidates by serial metadata first, then title (`fs_name_no_tags`, `name`, `fs_name_no_ext`), then filename patterns
 - surfacing unresolved mappings to the UI when no targeted candidate set yields a unique `rom_id`
 - listing remote saves only for the mapped `rom_id` set required by the current sync batch, scoped to the authenticated RomM user rather than the full save inventory
-
 Conversion is now wired in the app sync flow:
 
-- upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback
+- upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback, then either creates a new remote save or overwrites the matched remote save
 - download path: remote `.SRM` is reconstructed to local `.VMP` and re-signed in-app
 - when one game has both local PS1 cards, only the newest local card is mapped and synchronized; exact timestamp ties keep `SCEVMC0.VMP` and warn the user
 - if the server copy is newer and the remote save is a standard single-card SRM, the download target remains that selected local card
