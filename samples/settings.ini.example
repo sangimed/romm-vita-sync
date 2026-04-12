@@ -26,8 +26,6 @@ state_store_path = ux0:data/romm-vita-sync/sync_state.tsv
 backup_directory = ux0:data/romm-vita-sync/backups
 ; Keep true for safe first runs, set false to execute transfers
 dry_run = true
-; When true, recommended conflict actions are applied automatically without prompts
-auto_apply_conflicts = false
 ; Optional automatic full sync at app startup (runs without opening the manual sync modal)
 auto_sync_on_startup = false
 

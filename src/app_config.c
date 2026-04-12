@@ -346,8 +346,8 @@ static void apply_key_value(
     } else if (string_ieq(key, "dry_run")) {
       config->sync_dry_run = parse_bool_value(value, config->sync_dry_run);
     } else if (string_ieq(key, "auto_apply_conflicts") || string_ieq(key, "auto_resolve_conflicts")) {
-      config->sync_auto_apply_conflicts =
-          parse_bool_value(value, config->sync_auto_apply_conflicts);
+      (void)value;
+      config->sync_auto_apply_conflicts = 1;
     } else if (string_ieq(key, "auto_sync_on_startup") || string_ieq(key, "auto_sync")) {
       config->sync_auto_on_startup = parse_bool_value(value, config->sync_auto_on_startup);
     }
@@ -391,7 +391,7 @@ void app_config_init_defaults(AppConfig *config) {
   safe_copy(config->sync_state_store_path, sizeof(config->sync_state_store_path), APP_CONFIG_DEFAULT_STATE_STORE_PATH);
   safe_copy(config->sync_backup_directory, sizeof(config->sync_backup_directory), APP_CONFIG_DEFAULT_BACKUP_DIRECTORY);
   config->sync_dry_run = 1;
-  config->sync_auto_apply_conflicts = 0;
+  config->sync_auto_apply_conflicts = 1;
   config->sync_auto_on_startup = 0;
 
   config->log_level = APP_CONFIG_LOG_LEVEL_DEBUG;
@@ -464,6 +464,7 @@ int app_config_load(const char *path, AppConfig *out_config) {
     return APP_CONFIG_ERR_READ;
   }
 
+  out_config->sync_auto_apply_conflicts = 1;
   fclose(file);
   return APP_CONFIG_OK;
 }
@@ -557,13 +558,6 @@ int app_config_save(const char *path, const AppConfig *config) {
     status = APP_CONFIG_ERR_WRITE;
   }
   if ((status == APP_CONFIG_OK) && (fprintf(file, "dry_run = %s\n", config->sync_dry_run ? "true" : "false") < 0)) {
-    status = APP_CONFIG_ERR_WRITE;
-  }
-  if ((status == APP_CONFIG_OK) &&
-      (fprintf(
-           file,
-           "auto_apply_conflicts = %s\n",
-           config->sync_auto_apply_conflicts ? "true" : "false") < 0)) {
     status = APP_CONFIG_ERR_WRITE;
   }
   if ((status == APP_CONFIG_OK) && (fprintf(file, "auto_sync_on_startup = %s\n", config->sync_auto_on_startup ? "true" : "false") < 0)) {

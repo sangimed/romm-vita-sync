@@ -151,15 +151,14 @@ Commands:
 
 1. Ensure Vita can reach the RomM URL
 2. In the game list, choose a detected PS1 game
-3. Return to `Synchronize Selected Game` and press `X`
+3. Return to `Synchronize Selected Game` and press the system confirm button (`X` or `O`)
 4. Follow progress in the sync modal for manual runs; automatic startup sync updates the header state and `Synchronize` panel status without opening a modal
 
 Notes:
 
 - The RomM URL, username, and password are currently stored in plain text (no encryption) in `settings.ini`.
 - Default `dry_run = true`; you can disable it directly from the home screen or set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
-- Default `auto_apply_conflicts = false`; you can enable it from the home screen or set `[Sync].auto_apply_conflicts = true` in `settings.ini` to apply recommended conflict actions automatically.
-- When `auto_apply_conflicts = false`, manual conflict review shows which Vita button currently confirms the action (`X` or `O`, depending on the system enter-button setting). Declining the prompt skips that save, except for same-timestamp conflicts where the app offers upload first and then a download fallback.
+- Conflict auto-apply is always enabled internally so recommended conflict actions run automatically.
 
 ## Configuration (`settings.ini`)
 
@@ -170,7 +169,7 @@ Connection and sync runtime options are read from:
 Format is INI-style (conventional in C/C++ desktop and embedded projects).
 
 The app now creates `ux0:data/romm-vita-sync/` automatically on startup.
-You can configure the URL, username, password, dry-run mode, and conflict auto-apply mode directly in the in-app UI; manual file creation is not required.
+You can configure the URL, username, password, and dry-run mode directly in the in-app UI; manual file creation is not required.
 
 Reference template (optional, for manual editing/debug):
 
@@ -180,7 +179,7 @@ Supported sections:
 
 - `[RomM]`: `url`, `username`, `password`, `platform`, `emulator`, `verify_tls`, `timeout_seconds`
 - `[Device]`: `device_id`, `device_name`, `device_platform`, `client`, `client_version`
-- `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`, `auto_apply_conflicts`, `auto_sync_on_startup`
+- `[Sync]`: `state_store_path`, `backup_directory`, `dry_run`, `auto_sync_on_startup`
 - `[Log]`: `level` (`error|warn|info|debug`), `file_enabled` (`true|false`), `scan_verbose` (`true|false`)
 
 ### Sync State Store (`sync_state.tsv`)
@@ -229,7 +228,6 @@ Current in-app UI behavior:
 
 - The home screen exposes dedicated fields for the RomM `url`, `username`, and `password`.
 - The home screen includes a `Dry-run mode` toggle with immediate save.
-- The home screen includes an `Auto-apply conflicts` toggle with immediate save.
 - Editing those fields opens the official PS Vita system keyboard (`SceImeDialog`).
 - Confirming keyboard input persists values immediately to `ux0:data/romm-vita-sync/settings.ini`.
 - The main screen keeps a visible primary `Synchronize Selected Game` action plus secondary `Synchronize All Saves` and `Rescan Local Saves` actions.
@@ -239,8 +237,7 @@ Current in-app UI behavior:
 - Manual sync runs now open a blocking modal with a wider layout, wrapped text, a real progress bar, and live scrolling logs.
 - While a manual sync is running, the modal cannot be closed; once complete, it shows success/failure and can be closed manually.
 - Manual sync logs support held `UP/DOWN` scrolling after the viewport leaves auto-follow mode, and they can also be dragged with the front touchscreen.
-- When `Auto-apply conflicts` is enabled, recommended conflict actions execute without opening a confirmation dialog, including during startup auto-sync.
-- When `Auto-apply conflicts` is disabled, manual conflict dialogs show the active Vita confirm/decline button mapping and state whether declining skips the save or opens the alternate action prompt.
+- Recommended conflict actions execute automatically without exposing a dedicated conflict toggle in the home screen.
 - Automatic startup sync keeps using the same sync pipeline, but its live state is now reflected through the header status and `Synchronize` panel messaging on the home screen.
 - The current UI uses a sober single-screen Vita layout with wider panels, clearer spacing, controller navigation, and sharper text placement.
 
@@ -281,7 +278,6 @@ Host toolchain alternative:
 3. Select each connection field and enter the RomM `url`, `username`, and `password`.
 4. Confirm that each field saves immediately after closing the system keyboard.
 5. Toggle `Dry-run mode` directly from the home screen if you want to execute real transfers immediately.
-6. Toggle `Auto-apply conflicts` if you want recommended conflict actions to run without confirmation prompts.
 
 ### 3. Network And Auth Preconditions
 
@@ -292,7 +288,7 @@ Host toolchain alternative:
 ### 4. Sync Validation
 
 1. Move through the detected PS1 game list to choose the current sync target.
-2. Return to `Synchronize Selected Game` and press `X`.
+2. Return to `Synchronize Selected Game` and press the system confirm button (`X` or `O`).
 3. Confirm manual sync shows a blocking progress modal with live logs and completion state.
 4. Confirm automatic startup sync (when enabled) updates the header state and `Synchronize` panel without opening a modal.
 5. On first successful authenticated sync, confirm `device_id` is persisted in `settings.ini`.
@@ -300,7 +296,7 @@ Host toolchain alternative:
 ### 5. Persistence Validation
 
 1. Restart the app.
-2. Confirm URL/username/password are still present and both `Dry-run mode` and `Auto-apply conflicts` keep their saved values.
+2. Confirm URL/username/password are still present and `Dry-run mode` keeps its saved value.
 3. Confirm `device_id` remains stable across launches.
 
 ### 6. Negative Path Validation
@@ -315,11 +311,10 @@ Host toolchain alternative:
 2. Set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
 3. Upload flow sends `.SRM` through `POST /api/saves` for new remote saves and `PUT /api/saves/{id}` when a matching remote save already exists; download flow pulls `GET /api/saves/{id}/content` then rebuilds/signs `.VMP`.
 
-### 8. `auto_apply_conflicts` Validation
+### 8. Conflict Auto-Apply Behavior
 
-1. Default is `auto_apply_conflicts = false` so conflict actions require explicit confirmation during manual sync.
-2. Set `[Sync].auto_apply_conflicts = true` in `settings.ini` or enable the home-screen toggle to apply recommended conflict actions automatically.
-3. Confirm startup auto-sync no longer defers `local_newer` and `remote_newer` conflicts when this setting is enabled.
+1. Conflict auto-apply is enabled by default and not exposed as a home-screen toggle.
+2. Recommended conflict actions run automatically during both manual sync and startup auto-sync.
 
 ## Why This Project Exists
 

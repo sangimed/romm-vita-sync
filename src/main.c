@@ -8,6 +8,7 @@
 
 #include <ctype.h>
 #include <math.h>
+#include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -33,11 +34,10 @@
 #define UI_SELECT_USERNAME 1
 #define UI_SELECT_PASSWORD 2
 #define UI_SELECT_DRY_RUN 3
-#define UI_SELECT_AUTO_APPLY_CONFLICTS 4
-#define UI_SELECT_SYNC_PRIMARY 5
-#define UI_SELECT_SYNC_ALL 6
-#define UI_SELECT_RESCAN 7
-#define UI_SELECT_GAME_BASE 8
+#define UI_SELECT_SYNC_PRIMARY 4
+#define UI_SELECT_SYNC_ALL 5
+#define UI_SELECT_RESCAN 6
+#define UI_SELECT_GAME_BASE 7
 
 #define UI_SCREEN_WIDTH 960.0f
 #define UI_SCREEN_HEIGHT 544.0f
@@ -95,6 +95,18 @@
 #define UI_NAV_DOWN 1
 #define UI_NAV_LEFT 2
 #define UI_NAV_RIGHT 3
+#define UI_NAV_NONE -1
+
+#define UI_ANALOG_CENTER 127
+#define UI_ANALOG_DEADZONE 40
+#define UI_NAV_REPEAT_DELAY_FRAMES 14
+#define UI_NAV_REPEAT_INTERVAL_FRAMES 4
+
+typedef struct UiControllerState {
+  unsigned int buttons;
+  unsigned char left_x;
+  unsigned char left_y;
+} UiControllerState;
 
 typedef struct UiGameEntry {
   char key[ROMM_GAME_ID_LEN];
@@ -184,6 +196,8 @@ typedef struct UiAppState {
   int selected_index;
   int active_game_index;
   int game_scroll;
+  int nav_hold_direction;
+  int nav_hold_frames;
   char status_line[UI_STATUS_LINE_LEN];
   UiSyncFeedback sync_feedback;
   int pending_auto_sync;
@@ -201,6 +215,7 @@ static SceTouchPanelInfo g_touch_front_panel_info;
 
 static float ui_estimate_text_width(const char *text, float scale);
 static void ui_build_main_layout(UiMainLayout *layout);
+static void ui_render_sync_modal(UiAppState *state);
 
 /*
  * Returns non-zero when a string is non-null and non-empty.
@@ -221,6 +236,13 @@ static const char *ui_dialog_confirm_button_label(void) {
  */
 static const char *ui_dialog_decline_button_label(void) {
   return (g_dialog_enter_button_assign == SCE_SYSTEM_PARAM_ENTER_BUTTON_CIRCLE) ? "X" : "O";
+}
+
+/*
+ * Returns the controller button used as primary action in this runtime.
+ */
+static unsigned int ui_primary_action_button(void) {
+  return (g_dialog_enter_button_assign == SCE_SYSTEM_PARAM_ENTER_BUTTON_CIRCLE) ? SCE_CTRL_CIRCLE : SCE_CTRL_CROSS;
 }
 
 /*
@@ -353,27 +375,46 @@ static void ui_sync_log_write(AppLogLevel level, const char *format, ...) {
 }
 
 /*
- * Polls the controller and returns the currently held buttons.
+ * Polls one controller snapshot (buttons + left stick).
  */
-static unsigned int ui_poll_buttons(void) {
+static UiControllerState ui_poll_controller_state(void) {
+  UiControllerState state;
+  memset(&state, 0, sizeof(state));
+
   SceCtrlData pad;
   memset(&pad, 0, sizeof(pad));
   sceCtrlPeekBufferPositive(0, &pad, 1);
-  return pad.buttons;
+  state.buttons = pad.buttons;
+  state.left_x = pad.lx;
+  state.left_y = pad.ly;
+  return state;
+}
+
+/*
+ * Polls the controller and returns the currently held buttons.
+ */
+static unsigned int ui_poll_buttons(void) {
+  return ui_poll_controller_state().buttons;
+}
+
+/*
+ * Computes edge-triggered button presses from one sampled held-button bitmask.
+ */
+static unsigned int ui_compute_pressed(unsigned int buttons, unsigned int *io_previous_buttons) {
+  if (io_previous_buttons == NULL) {
+    return 0U;
+  }
+
+  unsigned int pressed = buttons & (~(*io_previous_buttons));
+  *io_previous_buttons = buttons;
+  return pressed;
 }
 
 /*
  * Polls controller and returns buttons that transitioned to pressed state.
  */
 static unsigned int ui_poll_pressed(unsigned int *io_previous_buttons) {
-  if (io_previous_buttons == NULL) {
-    return 0U;
-  }
-
-  unsigned int buttons = ui_poll_buttons();
-  unsigned int pressed = buttons & (~(*io_previous_buttons));
-  *io_previous_buttons = buttons;
-  return pressed;
+  return ui_compute_pressed(ui_poll_buttons(), io_previous_buttons);
 }
 
 /*
@@ -914,7 +955,6 @@ static int ui_try_move_selection_shortcut(UiAppState *state, int direction) {
        (state->selected_index == UI_SELECT_USERNAME) ||
        (state->selected_index == UI_SELECT_PASSWORD) ||
        (state->selected_index == UI_SELECT_DRY_RUN) ||
-       (state->selected_index == UI_SELECT_AUTO_APPLY_CONFLICTS) ||
        (state->selected_index >= UI_SELECT_GAME_BASE))) {
     state->selected_index = UI_SELECT_SYNC_PRIMARY;
     return 1;
@@ -924,7 +964,7 @@ static int ui_try_move_selection_shortcut(UiAppState *state, int direction) {
     if ((state->active_game_index >= 0) && (state->active_game_index < state->game_count)) {
       state->selected_index = UI_SELECT_GAME_BASE + state->active_game_index;
     } else {
-      state->selected_index = UI_SELECT_AUTO_APPLY_CONFLICTS;
+      state->selected_index = UI_SELECT_DRY_RUN;
     }
     return 1;
   }
@@ -965,12 +1005,6 @@ static int ui_get_selection_anchor(const UiAppState *state, int index, float *ou
   if (index == UI_SELECT_DRY_RUN) {
     *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
     *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 3.0f) +
-             (layout.connection_row_h * 0.5f);
-    return 0;
-  }
-  if (index == UI_SELECT_AUTO_APPLY_CONFLICTS) {
-    *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
-    *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 4.0f) +
              (layout.connection_row_h * 0.5f);
     return 0;
   }
@@ -1102,6 +1136,138 @@ static int ui_move_selection_direction(UiAppState *state, int direction) {
     state->active_game_index = state->selected_index - UI_SELECT_GAME_BASE;
   }
   return 1;
+}
+
+/*
+ * Applies a deterministic wrap fallback when geometric directional lookup fails.
+ * This keeps D-pad and left-stick traversal predictable in every panel.
+ */
+static void ui_move_selection_with_fallback(UiAppState *state, int direction) {
+  if (state == NULL) {
+    return;
+  }
+
+  int total_entries = ui_total_selectable_entries(state);
+  if (total_entries <= 0) {
+    return;
+  }
+
+  if (!ui_move_selection_direction(state, direction)) {
+    if ((direction == UI_NAV_UP) || (direction == UI_NAV_LEFT)) {
+      state->selected_index -= 1;
+      if (state->selected_index < 0) {
+        state->selected_index = total_entries - 1;
+      }
+    } else if ((direction == UI_NAV_DOWN) || (direction == UI_NAV_RIGHT)) {
+      state->selected_index += 1;
+      if (state->selected_index >= total_entries) {
+        state->selected_index = 0;
+      }
+    }
+  }
+
+  if (state->selected_index >= UI_SELECT_GAME_BASE) {
+    state->active_game_index = state->selected_index - UI_SELECT_GAME_BASE;
+  }
+}
+
+/*
+ * Converts one analog axis to a signed direction using a deadzone around center.
+ */
+static int ui_analog_axis_direction(unsigned char axis_value) {
+  int delta = (int)axis_value - UI_ANALOG_CENTER;
+  if (delta <= -UI_ANALOG_DEADZONE) {
+    return -1;
+  }
+  if (delta >= UI_ANALOG_DEADZONE) {
+    return 1;
+  }
+  return 0;
+}
+
+/*
+ * Resolves left-stick movement to one cardinal direction, preferring the dominant axis.
+ */
+static int ui_analog_navigation_direction(unsigned char left_x, unsigned char left_y) {
+  int horizontal = ui_analog_axis_direction(left_x);
+  int vertical = ui_analog_axis_direction(left_y);
+  if ((horizontal == 0) && (vertical == 0)) {
+    return UI_NAV_NONE;
+  }
+
+  int horizontal_delta = abs((int)left_x - UI_ANALOG_CENTER);
+  int vertical_delta = abs((int)left_y - UI_ANALOG_CENTER);
+
+  if (vertical_delta >= horizontal_delta) {
+    if (vertical < 0) {
+      return UI_NAV_UP;
+    }
+    if (vertical > 0) {
+      return UI_NAV_DOWN;
+    }
+  }
+
+  if (horizontal < 0) {
+    return UI_NAV_LEFT;
+  }
+  if (horizontal > 0) {
+    return UI_NAV_RIGHT;
+  }
+
+  return UI_NAV_NONE;
+}
+
+/*
+ * Resolves one frame of held input to a cardinal navigation direction.
+ * D-pad takes priority and left stick is used when D-pad is neutral.
+ */
+static int ui_resolve_navigation_direction(unsigned int buttons, unsigned char left_x, unsigned char left_y) {
+  if (buttons & SCE_CTRL_UP) {
+    return UI_NAV_UP;
+  }
+  if (buttons & SCE_CTRL_DOWN) {
+    return UI_NAV_DOWN;
+  }
+  if (buttons & SCE_CTRL_LEFT) {
+    return UI_NAV_LEFT;
+  }
+  if (buttons & SCE_CTRL_RIGHT) {
+    return UI_NAV_RIGHT;
+  }
+  return ui_analog_navigation_direction(left_x, left_y);
+}
+
+/*
+ * Applies repeat-aware directional navigation from D-pad and left analog stick.
+ */
+static void ui_handle_navigation_input(UiAppState *state, unsigned int buttons, unsigned char left_x, unsigned char left_y) {
+  if (state == NULL) {
+    return;
+  }
+
+  int direction = ui_resolve_navigation_direction(buttons, left_x, left_y);
+  if (direction == UI_NAV_NONE) {
+    state->nav_hold_direction = UI_NAV_NONE;
+    state->nav_hold_frames = 0;
+    return;
+  }
+
+  int trigger_move = 0;
+  if (state->nav_hold_direction != direction) {
+    state->nav_hold_direction = direction;
+    state->nav_hold_frames = 0;
+    trigger_move = 1;
+  } else {
+    state->nav_hold_frames += 1;
+    if ((state->nav_hold_frames >= UI_NAV_REPEAT_DELAY_FRAMES) &&
+        (((state->nav_hold_frames - UI_NAV_REPEAT_DELAY_FRAMES) % UI_NAV_REPEAT_INTERVAL_FRAMES) == 0)) {
+      trigger_move = 1;
+    }
+  }
+
+  if (trigger_move) {
+    ui_move_selection_with_fallback(state, direction);
+  }
 }
 
 /*
@@ -2123,16 +2289,10 @@ static void ui_render_connection_panel(const UiAppState *state) {
   char username_display[APP_CONFIG_MAX_USERNAME_LEN + 16];
   char password_display[APP_CONFIG_MAX_PASSWORD_LEN + 16];
   char dry_run_display[24];
-  char auto_apply_conflicts_display[24];
   ui_format_field_display(state->config.romm_url, 0, url_display, sizeof(url_display));
   ui_format_field_display(state->config.romm_username, 0, username_display, sizeof(username_display));
   ui_format_field_display(state->config.romm_password, 1, password_display, sizeof(password_display));
   snprintf(dry_run_display, sizeof(dry_run_display), "%s", state->config.sync_dry_run ? "Enabled" : "Disabled");
-  snprintf(
-      auto_apply_conflicts_display,
-      sizeof(auto_apply_conflicts_display),
-      "%s",
-      state->config.sync_auto_apply_conflicts ? "Enabled" : "Disabled");
 
   ui_draw_panel(layout.connection_x, layout.connection_y, layout.connection_w, layout.connection_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
   ui_draw_text(layout.connection_x + 16.0f, layout.connection_y + 30.0f, UI_COLOR_TEXT, 0.88f, "Connection");
@@ -2169,14 +2329,6 @@ static void ui_render_connection_panel(const UiAppState *state) {
       state->selected_index == UI_SELECT_DRY_RUN,
       "Dry-run mode",
       dry_run_display);
-  ui_draw_field_row(
-      layout.connection_row_x,
-      layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 4.0f),
-      layout.connection_row_w,
-      layout.connection_row_h,
-      state->selected_index == UI_SELECT_AUTO_APPLY_CONFLICTS,
-      "Auto-apply conflicts",
-      auto_apply_conflicts_display);
 }
 
 /*
@@ -2361,6 +2513,13 @@ static void ui_render_footer(const UiAppState *state) {
   UiMainLayout layout;
   ui_build_main_layout(&layout);
 
+  char controls_hint[96];
+  snprintf(
+      controls_hint,
+      sizeof(controls_hint),
+      "D-Pad/Left Stick move   %s select/apply   START quit",
+      ui_dialog_confirm_button_label());
+
   ui_draw_text(32.0f, 522.0f, UI_COLOR_TEXT_DIM, 0.78f, "Status");
   ui_draw_truncated_text(layout.footer_status_x, 522.0f, layout.footer_status_w, UI_COLOR_STATUS, 0.72f, state->status_line);
   ui_draw_truncated_text_right(
@@ -2369,7 +2528,7 @@ static void ui_render_footer(const UiAppState *state) {
       layout.footer_hint_w,
       UI_COLOR_TEXT_MUTED,
       0.66f,
-      "D-Pad move   X select/apply   START quit");
+      controls_hint);
 }
 
 /*
@@ -2387,6 +2546,28 @@ static void ui_render_main_screen(UiAppState *state) {
   ui_render_game_panel(state);
   ui_render_footer(state);
   ui_end_frame();
+}
+
+/*
+ * Renders one background frame while a blocking message dialog is active.
+ * This avoids blank-frame flicker during confirm prompts.
+ */
+static void ui_render_dialog_background_frame(void *user_data) {
+  UiAppState *state = (UiAppState *)user_data;
+  if (state == NULL) {
+    return;
+  }
+
+  ui_pump_app_events();
+
+  int previous_common_dialog_active = g_common_dialog_active;
+  g_common_dialog_active = 1;
+  if (state->sync_feedback.running && (state->sync_feedback.trigger == UI_SYNC_TRIGGER_MANUAL)) {
+    ui_render_sync_modal(state);
+  } else {
+    ui_render_main_screen(state);
+  }
+  g_common_dialog_active = previous_common_dialog_active;
 }
 
 /*
@@ -3732,6 +3913,8 @@ static int ui_run_sync_pipeline(
   ui_sync_feedback_set_progress(&state->sync_feedback, 3, total_units);
   ui_sync_render_live(state);
 
+  /* Conflict auto-apply is always enabled to keep sync flow deterministic. */
+  state->config.sync_auto_apply_conflicts = 1;
   ui_sync_log_write(
       APP_LOG_LEVEL_INFO,
       "Sync options: dry_run=%d auto_apply_conflicts=%d trigger=%s",
@@ -3742,11 +3925,9 @@ static int ui_run_sync_pipeline(
   if (state->config.sync_dry_run) {
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "Dry-run enabled: transfers will not execute");
   }
-  if (state->config.sync_auto_apply_conflicts) {
-    ui_sync_log_write(
-        APP_LOG_LEVEL_INFO,
-        "Auto-apply conflicts enabled: recommended actions will execute without confirmation");
-  }
+  ui_sync_log_write(
+      APP_LOG_LEVEL_INFO,
+      "Auto-apply conflicts enabled: recommended actions will execute without confirmation");
 
   SyncEngineConfig config;
   sync_engine_config_init(&config);
@@ -3766,7 +3947,7 @@ static int ui_run_sync_pipeline(
   conflict_context.state = state;
   conflict_context.trigger = trigger;
   conflict_context.dry_run = state->config.sync_dry_run;
-  conflict_context.auto_apply_conflicts = state->config.sync_auto_apply_conflicts;
+  conflict_context.auto_apply_conflicts = 1;
 
   config.resolve_conflict = ui_sync_resolve_conflict_callback;
   config.resolve_conflict_user_data = &conflict_context;
@@ -4233,27 +4414,6 @@ static void ui_activate_selection(UiAppState *state) {
     return;
   }
 
-  if (state->selected_index == UI_SELECT_AUTO_APPLY_CONFLICTS) {
-    int previous_auto_apply_conflicts = state->config.sync_auto_apply_conflicts;
-    state->config.sync_auto_apply_conflicts = state->config.sync_auto_apply_conflicts ? 0 : 1;
-    int save_status = ui_save_config(
-        state,
-        state->config.sync_auto_apply_conflicts ? "Auto-apply conflicts enabled" : "Auto-apply conflicts disabled");
-    if (save_status != APP_CONFIG_OK) {
-      state->config.sync_auto_apply_conflicts = previous_auto_apply_conflicts;
-      return;
-    }
-
-    if (save_status == APP_CONFIG_OK) {
-      app_log_write(
-          APP_LOG_LEVEL_INFO,
-          "ui",
-          "auto-apply conflicts %s from the home screen",
-          state->config.sync_auto_apply_conflicts ? "enabled" : "disabled");
-    }
-    return;
-  }
-
   if (state->selected_index == UI_SELECT_SYNC_PRIMARY) {
     if (ui_active_game(state) == NULL) {
       ui_set_status(state, "No PS1 game is selected");
@@ -4334,6 +4494,9 @@ static void ui_initialize_state(UiAppState *state) {
         state->config_status);
     app_config_init_defaults(&state->config);
   }
+
+  /* Backup coverage is mandatory, so conflict auto-apply stays enabled and hidden. */
+  state->config.sync_auto_apply_conflicts = 1;
   ui_apply_logging_preferences(&state->config);
 
   if (state->config_status == APP_CONFIG_ERR_NOT_FOUND) {
@@ -4376,6 +4539,8 @@ static void ui_initialize_state(UiAppState *state) {
     ui_set_status(state, "Automatic startup sync is queued");
   }
   state->selected_index = UI_SELECT_SERVER_URL;
+  state->nav_hold_direction = UI_NAV_NONE;
+  state->nav_hold_frames = 0;
 }
 
 /*
@@ -4425,7 +4590,7 @@ int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
 
-  sceCtrlSetSamplingMode(SCE_CTRL_MODE_DIGITAL);
+  sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
   app_log_clear_history();
 
   if (ui_renderer_init() < 0) {
@@ -4444,8 +4609,9 @@ int main(int argc, char *argv[]) {
 
   UiAppState *state = &g_app_state;
   ui_initialize_state(state);
+  ui_dialog_set_frame_callback(ui_render_dialog_background_frame, state);
 
-  unsigned int previous_buttons = 0U;
+  unsigned int previous_buttons = ui_poll_buttons();
   for (;;) {
     ui_run_pending_auto_sync(state);
     ui_pump_app_events();
@@ -4453,40 +4619,21 @@ int main(int argc, char *argv[]) {
     ui_update_game_scroll(state);
     ui_render_main_screen(state);
 
-    unsigned int pressed = ui_poll_pressed(&previous_buttons);
+    UiControllerState controller = ui_poll_controller_state();
+    unsigned int pressed = ui_compute_pressed(controller.buttons, &previous_buttons);
     if (pressed & SCE_CTRL_START) {
       break;
     }
 
-    int total_entries = ui_total_selectable_entries(state);
-    if (pressed & SCE_CTRL_UP) {
-      if (!ui_move_selection_direction(state, UI_NAV_UP)) {
-        state->selected_index--;
-        if (state->selected_index < 0) {
-          state->selected_index = total_entries - 1;
-        }
-      }
-    }
-    if (pressed & SCE_CTRL_DOWN) {
-      if (!ui_move_selection_direction(state, UI_NAV_DOWN)) {
-        state->selected_index++;
-        if (state->selected_index >= total_entries) {
-          state->selected_index = 0;
-        }
-      }
-    }
-    if (pressed & SCE_CTRL_LEFT) {
-      ui_move_selection_direction(state, UI_NAV_LEFT);
-    }
-    if (pressed & SCE_CTRL_RIGHT) {
-      ui_move_selection_direction(state, UI_NAV_RIGHT);
-    }
+    ui_handle_navigation_input(state, controller.buttons, controller.left_x, controller.left_y);
     if (state->selected_index >= UI_SELECT_GAME_BASE) {
       state->active_game_index = state->selected_index - UI_SELECT_GAME_BASE;
     }
-    if (pressed & SCE_CTRL_CROSS) {
+    if (pressed & ui_primary_action_button()) {
       ui_activate_selection(state);
       previous_buttons = ui_poll_buttons();
+      state->nav_hold_direction = UI_NAV_NONE;
+      state->nav_hold_frames = 0;
     }
 
     sceKernelDelayThread(16 * 1000);
