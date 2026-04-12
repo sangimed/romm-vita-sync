@@ -20,28 +20,40 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -O2")
 include_directories(
   common
   src
+  src/core
+  src/sync
+  src/network
+  src/convert
+  src/ui
   tools/vita-mcr2vmp/include
 )
 
 add_executable(${PROJECT_NAME}
-  src/app_config.c
-  src/app_log.c
   src/main.c
-  src/backup_manager.c
-  src/conflict_resolver.c
-  src/game_matcher.c
-  src/romm_client.c
-  src/romm_http_client.c
-  src/scan_to_sync_adapter.c
-  src/save_scanner.c
-  src/sfo_parser.c
-  src/sync_engine.c
-  src/sync_state_store.c
-  src/sync_types.c
-  src/ui_dialogs.c
-  src/ui_inventory.c
-  src/vmp_signer.c
-  src/vmp_srm_converter.c
+  src/core/app_config.c
+  src/core/app_log.c
+  src/core/backup_manager.c
+  src/core/sfo_parser.c
+  src/sync/conflict_resolver.c
+  src/sync/game_matcher.c
+  src/sync/save_scanner.c
+  src/sync/scan_to_sync_adapter.c
+  src/sync/sync_engine.c
+  src/sync/sync_state_store.c
+  src/sync/sync_types.c
+  src/network/romm_client.c
+  src/network/romm_http_client.c
+  src/convert/vmp_signer.c
+  src/convert/vmp_srm_converter.c
+  src/ui/ui_common.c
+  src/ui/ui_render.c
+  src/ui/ui_navigation.c
+  src/ui/ui_screens.c
+  src/ui/ui_sync_modal.c
+  src/ui/ui_sync_orchestrator.c
+  src/ui/ui_config_editor.c
+  src/ui/ui_dialogs.c
+  src/ui/ui_inventory.c
   tools/vita-mcr2vmp/src/aes.c
   tools/vita-mcr2vmp/src/sha1.c
   common/debugScreen.c
