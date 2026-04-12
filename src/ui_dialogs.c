@@ -10,21 +10,34 @@
 #include "app_log.h"
 
 static int g_dialog_initialized = 0;
+static UiDialogFrameCallback g_frame_callback = NULL;
+static void *g_frame_callback_user_data = NULL;
 
 int ui_dialog_init(void) {
   g_dialog_initialized = 1;
   return 0;
 }
 
+void ui_dialog_set_frame_callback(UiDialogFrameCallback callback, void *user_data) {
+  g_frame_callback = callback;
+  g_frame_callback_user_data = user_data;
+}
+
 /*
  * Pumps one vita2d frame so sceMsgDialog renders on top of the app content.
  */
-static void pump_frame(void) {
-  vita2d_start_drawing();
-  vita2d_end_drawing();
-  vita2d_common_dialog_update();
-  vita2d_swap_buffers();
-  sceKernelDelayThread(16 * 1000);
+static void pump_frame(int delay_microseconds) {
+  if (g_frame_callback != NULL) {
+    g_frame_callback(g_frame_callback_user_data);
+  } else {
+    vita2d_start_drawing();
+    vita2d_end_drawing();
+    vita2d_common_dialog_update();
+    vita2d_swap_buffers();
+  }
+  if (delay_microseconds > 0) {
+    sceKernelDelayThread((unsigned int)delay_microseconds);
+  }
 }
 
 /*
@@ -32,7 +45,7 @@ static void pump_frame(void) {
  */
 static void wait_dialog_finished(void) {
   while (sceMsgDialogGetStatus() != SCE_COMMON_DIALOG_STATUS_FINISHED) {
-    pump_frame();
+    pump_frame(16 * 1000);
   }
 }
 
@@ -64,11 +77,33 @@ static int show_user_msg(const char *message, SceMsgDialogButtonType buttons) {
     return -1;
   }
 
-  wait_dialog_finished();
-
   SceMsgDialogResult result;
   memset(&result, 0, sizeof(result));
-  sceMsgDialogGetResult(&result);
+  result.buttonId = SCE_MSG_DIALOG_BUTTON_ID_INVALID;
+
+  int close_requested = 0;
+  for (;;) {
+    int dialog_status = sceMsgDialogGetStatus();
+    if (dialog_status == SCE_COMMON_DIALOG_STATUS_FINISHED) {
+      break;
+    }
+
+    if (!close_requested && (dialog_status == SCE_COMMON_DIALOG_STATUS_RUNNING)) {
+      SceMsgDialogResult live_result;
+      memset(&live_result, 0, sizeof(live_result));
+      sceMsgDialogGetResult(&live_result);
+      if (live_result.buttonId != SCE_MSG_DIALOG_BUTTON_ID_INVALID) {
+        result = live_result;
+        sceMsgDialogClose();
+        close_requested = 1;
+      }
+    }
+    pump_frame(close_requested ? 0 : (16 * 1000));
+  }
+
+  if (result.buttonId == SCE_MSG_DIALOG_BUTTON_ID_INVALID) {
+    sceMsgDialogGetResult(&result);
+  }
   sceMsgDialogTerm();
 
   return (int)result.buttonId;
@@ -113,7 +148,7 @@ int ui_dialog_progress_start(const char *message) {
     return -1;
   }
 
-  pump_frame();
+  pump_frame(16 * 1000);
   return 0;
 }
 
@@ -130,13 +165,13 @@ int ui_dialog_progress_update(int percent) {
     return status;
   }
 
-  pump_frame();
+  pump_frame(16 * 1000);
   return 0;
 }
 
 int ui_dialog_progress_finish(void) {
   sceMsgDialogProgressBarSetValue(SCE_MSG_DIALOG_PROGRESSBAR_TARGET_BAR_DEFAULT, 100);
-  pump_frame();
+  pump_frame(16 * 1000);
   sceMsgDialogClose();
   wait_dialog_finished();
 

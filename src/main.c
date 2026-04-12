@@ -8,6 +8,7 @@
 
 #include <ctype.h>
 #include <math.h>
+#include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -33,11 +34,10 @@
 #define UI_SELECT_USERNAME 1
 #define UI_SELECT_PASSWORD 2
 #define UI_SELECT_DRY_RUN 3
-#define UI_SELECT_AUTO_APPLY_CONFLICTS 4
-#define UI_SELECT_SYNC_PRIMARY 5
-#define UI_SELECT_SYNC_ALL 6
-#define UI_SELECT_RESCAN 7
-#define UI_SELECT_GAME_BASE 8
+#define UI_SELECT_SYNC_PRIMARY 4
+#define UI_SELECT_SYNC_ALL 5
+#define UI_SELECT_RESCAN 6
+#define UI_SELECT_GAME_BASE 7
 
 #define UI_SCREEN_WIDTH 960.0f
 #define UI_SCREEN_HEIGHT 544.0f
@@ -95,6 +95,18 @@
 #define UI_NAV_DOWN 1
 #define UI_NAV_LEFT 2
 #define UI_NAV_RIGHT 3
+#define UI_NAV_NONE -1
+
+#define UI_ANALOG_CENTER 127
+#define UI_ANALOG_DEADZONE 40
+#define UI_NAV_REPEAT_DELAY_FRAMES 14
+#define UI_NAV_REPEAT_INTERVAL_FRAMES 4
+
+typedef struct UiControllerState {
+  unsigned int buttons;
+  unsigned char left_x;
+  unsigned char left_y;
+} UiControllerState;
 
 typedef struct UiGameEntry {
   char key[ROMM_GAME_ID_LEN];
@@ -102,6 +114,7 @@ typedef struct UiGameEntry {
   char title[ROMM_GAME_TITLE_LEN];
   int save_count;
   int card_count;
+  int selected_for_sync;
 } UiGameEntry;
 
 typedef enum UiSyncTrigger {
@@ -184,6 +197,8 @@ typedef struct UiAppState {
   int selected_index;
   int active_game_index;
   int game_scroll;
+  int nav_hold_direction;
+  int nav_hold_frames;
   char status_line[UI_STATUS_LINE_LEN];
   UiSyncFeedback sync_feedback;
   int pending_auto_sync;
@@ -201,6 +216,7 @@ static SceTouchPanelInfo g_touch_front_panel_info;
 
 static float ui_estimate_text_width(const char *text, float scale);
 static void ui_build_main_layout(UiMainLayout *layout);
+static void ui_render_sync_modal(UiAppState *state);
 
 /*
  * Returns non-zero when a string is non-null and non-empty.
@@ -221,6 +237,13 @@ static const char *ui_dialog_confirm_button_label(void) {
  */
 static const char *ui_dialog_decline_button_label(void) {
   return (g_dialog_enter_button_assign == SCE_SYSTEM_PARAM_ENTER_BUTTON_CIRCLE) ? "X" : "O";
+}
+
+/*
+ * Returns the controller button used as primary action in this runtime.
+ */
+static unsigned int ui_primary_action_button(void) {
+  return (g_dialog_enter_button_assign == SCE_SYSTEM_PARAM_ENTER_BUTTON_CIRCLE) ? SCE_CTRL_CIRCLE : SCE_CTRL_CROSS;
 }
 
 /*
@@ -353,27 +376,46 @@ static void ui_sync_log_write(AppLogLevel level, const char *format, ...) {
 }
 
 /*
- * Polls the controller and returns the currently held buttons.
+ * Polls one controller snapshot (buttons + left stick).
  */
-static unsigned int ui_poll_buttons(void) {
+static UiControllerState ui_poll_controller_state(void) {
+  UiControllerState state;
+  memset(&state, 0, sizeof(state));
+
   SceCtrlData pad;
   memset(&pad, 0, sizeof(pad));
   sceCtrlPeekBufferPositive(0, &pad, 1);
-  return pad.buttons;
+  state.buttons = pad.buttons;
+  state.left_x = pad.lx;
+  state.left_y = pad.ly;
+  return state;
+}
+
+/*
+ * Polls the controller and returns the currently held buttons.
+ */
+static unsigned int ui_poll_buttons(void) {
+  return ui_poll_controller_state().buttons;
+}
+
+/*
+ * Computes edge-triggered button presses from one sampled held-button bitmask.
+ */
+static unsigned int ui_compute_pressed(unsigned int buttons, unsigned int *io_previous_buttons) {
+  if (io_previous_buttons == NULL) {
+    return 0U;
+  }
+
+  unsigned int pressed = buttons & (~(*io_previous_buttons));
+  *io_previous_buttons = buttons;
+  return pressed;
 }
 
 /*
  * Polls controller and returns buttons that transitioned to pressed state.
  */
 static unsigned int ui_poll_pressed(unsigned int *io_previous_buttons) {
-  if (io_previous_buttons == NULL) {
-    return 0U;
-  }
-
-  unsigned int buttons = ui_poll_buttons();
-  unsigned int pressed = buttons & (~(*io_previous_buttons));
-  *io_previous_buttons = buttons;
-  return pressed;
+  return ui_compute_pressed(ui_poll_buttons(), io_previous_buttons);
 }
 
 /*
@@ -914,7 +956,6 @@ static int ui_try_move_selection_shortcut(UiAppState *state, int direction) {
        (state->selected_index == UI_SELECT_USERNAME) ||
        (state->selected_index == UI_SELECT_PASSWORD) ||
        (state->selected_index == UI_SELECT_DRY_RUN) ||
-       (state->selected_index == UI_SELECT_AUTO_APPLY_CONFLICTS) ||
        (state->selected_index >= UI_SELECT_GAME_BASE))) {
     state->selected_index = UI_SELECT_SYNC_PRIMARY;
     return 1;
@@ -924,7 +965,7 @@ static int ui_try_move_selection_shortcut(UiAppState *state, int direction) {
     if ((state->active_game_index >= 0) && (state->active_game_index < state->game_count)) {
       state->selected_index = UI_SELECT_GAME_BASE + state->active_game_index;
     } else {
-      state->selected_index = UI_SELECT_AUTO_APPLY_CONFLICTS;
+      state->selected_index = UI_SELECT_DRY_RUN;
     }
     return 1;
   }
@@ -965,12 +1006,6 @@ static int ui_get_selection_anchor(const UiAppState *state, int index, float *ou
   if (index == UI_SELECT_DRY_RUN) {
     *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
     *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 3.0f) +
-             (layout.connection_row_h * 0.5f);
-    return 0;
-  }
-  if (index == UI_SELECT_AUTO_APPLY_CONFLICTS) {
-    *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
-    *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 4.0f) +
              (layout.connection_row_h * 0.5f);
     return 0;
   }
@@ -1105,6 +1140,138 @@ static int ui_move_selection_direction(UiAppState *state, int direction) {
 }
 
 /*
+ * Applies a deterministic wrap fallback when geometric directional lookup fails.
+ * This keeps D-pad and left-stick traversal predictable in every panel.
+ */
+static void ui_move_selection_with_fallback(UiAppState *state, int direction) {
+  if (state == NULL) {
+    return;
+  }
+
+  int total_entries = ui_total_selectable_entries(state);
+  if (total_entries <= 0) {
+    return;
+  }
+
+  if (!ui_move_selection_direction(state, direction)) {
+    if ((direction == UI_NAV_UP) || (direction == UI_NAV_LEFT)) {
+      state->selected_index -= 1;
+      if (state->selected_index < 0) {
+        state->selected_index = total_entries - 1;
+      }
+    } else if ((direction == UI_NAV_DOWN) || (direction == UI_NAV_RIGHT)) {
+      state->selected_index += 1;
+      if (state->selected_index >= total_entries) {
+        state->selected_index = 0;
+      }
+    }
+  }
+
+  if (state->selected_index >= UI_SELECT_GAME_BASE) {
+    state->active_game_index = state->selected_index - UI_SELECT_GAME_BASE;
+  }
+}
+
+/*
+ * Converts one analog axis to a signed direction using a deadzone around center.
+ */
+static int ui_analog_axis_direction(unsigned char axis_value) {
+  int delta = (int)axis_value - UI_ANALOG_CENTER;
+  if (delta <= -UI_ANALOG_DEADZONE) {
+    return -1;
+  }
+  if (delta >= UI_ANALOG_DEADZONE) {
+    return 1;
+  }
+  return 0;
+}
+
+/*
+ * Resolves left-stick movement to one cardinal direction, preferring the dominant axis.
+ */
+static int ui_analog_navigation_direction(unsigned char left_x, unsigned char left_y) {
+  int horizontal = ui_analog_axis_direction(left_x);
+  int vertical = ui_analog_axis_direction(left_y);
+  if ((horizontal == 0) && (vertical == 0)) {
+    return UI_NAV_NONE;
+  }
+
+  int horizontal_delta = abs((int)left_x - UI_ANALOG_CENTER);
+  int vertical_delta = abs((int)left_y - UI_ANALOG_CENTER);
+
+  if (vertical_delta >= horizontal_delta) {
+    if (vertical < 0) {
+      return UI_NAV_UP;
+    }
+    if (vertical > 0) {
+      return UI_NAV_DOWN;
+    }
+  }
+
+  if (horizontal < 0) {
+    return UI_NAV_LEFT;
+  }
+  if (horizontal > 0) {
+    return UI_NAV_RIGHT;
+  }
+
+  return UI_NAV_NONE;
+}
+
+/*
+ * Resolves one frame of held input to a cardinal navigation direction.
+ * D-pad takes priority and left stick is used when D-pad is neutral.
+ */
+static int ui_resolve_navigation_direction(unsigned int buttons, unsigned char left_x, unsigned char left_y) {
+  if (buttons & SCE_CTRL_UP) {
+    return UI_NAV_UP;
+  }
+  if (buttons & SCE_CTRL_DOWN) {
+    return UI_NAV_DOWN;
+  }
+  if (buttons & SCE_CTRL_LEFT) {
+    return UI_NAV_LEFT;
+  }
+  if (buttons & SCE_CTRL_RIGHT) {
+    return UI_NAV_RIGHT;
+  }
+  return ui_analog_navigation_direction(left_x, left_y);
+}
+
+/*
+ * Applies repeat-aware directional navigation from D-pad and left analog stick.
+ */
+static void ui_handle_navigation_input(UiAppState *state, unsigned int buttons, unsigned char left_x, unsigned char left_y) {
+  if (state == NULL) {
+    return;
+  }
+
+  int direction = ui_resolve_navigation_direction(buttons, left_x, left_y);
+  if (direction == UI_NAV_NONE) {
+    state->nav_hold_direction = UI_NAV_NONE;
+    state->nav_hold_frames = 0;
+    return;
+  }
+
+  int trigger_move = 0;
+  if (state->nav_hold_direction != direction) {
+    state->nav_hold_direction = direction;
+    state->nav_hold_frames = 0;
+    trigger_move = 1;
+  } else {
+    state->nav_hold_frames += 1;
+    if ((state->nav_hold_frames >= UI_NAV_REPEAT_DELAY_FRAMES) &&
+        (((state->nav_hold_frames - UI_NAV_REPEAT_DELAY_FRAMES) % UI_NAV_REPEAT_INTERVAL_FRAMES) == 0)) {
+      trigger_move = 1;
+    }
+  }
+
+  if (trigger_move) {
+    ui_move_selection_with_fallback(state, direction);
+  }
+}
+
+/*
  * Clamps the remembered sync target so the primary action always points at a valid game.
  */
 static void ui_clamp_active_game(UiAppState *state) {
@@ -1165,10 +1332,44 @@ static const UiGameEntry *ui_active_game(const UiAppState *state) {
 }
 
 /*
+ * Returns how many games are currently checked for synchronization.
+ */
+static int ui_selected_game_count(const UiAppState *state) {
+  if ((state == NULL) || (state->game_count <= 0)) {
+    return 0;
+  }
+
+  int count = 0;
+  for (int i = 0; i < state->game_count; ++i) {
+    if (state->games[i].selected_for_sync) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/*
+ * Returns the first checked game entry, or NULL when no game is checked.
+ */
+static const UiGameEntry *ui_first_selected_game(const UiAppState *state) {
+  if ((state == NULL) || (state->game_count <= 0)) {
+    return NULL;
+  }
+
+  for (int i = 0; i < state->game_count; ++i) {
+    if (state->games[i].selected_for_sync) {
+      return &state->games[i];
+    }
+  }
+
+  return NULL;
+}
+
+/*
  * Returns non-zero when the primary synchronization action should be enabled.
  */
 static int ui_sync_action_enabled(const UiAppState *state) {
-  if (ui_active_game(state) == NULL) {
+  if (ui_selected_game_count(state) <= 0) {
     return 0;
   }
 
@@ -2045,7 +2246,7 @@ static void ui_draw_button(float x, float y, float w, float h, int primary, int 
 
 /*
  * Draws one compact game-list row.
- * The active sync target remains softly marked even when focus is elsewhere.
+ * Checked rows stay marked even when focus moves to another element.
  */
 static void ui_draw_game_row(
     float x,
@@ -2053,17 +2254,39 @@ static void ui_draw_game_row(
     float w,
     float h,
     int focused,
-    int active,
+    int checked,
     const char *title,
     int card_count) {
-  unsigned int fill = focused ? UI_COLOR_FIELD_ACTIVE : (active ? UI_COLOR_ACCENT_SOFT : UI_COLOR_PANEL_ALT);
-  unsigned int border = focused ? UI_COLOR_PANEL_BORDER_ACTIVE : (active ? UI_COLOR_BUTTON_BORDER : UI_COLOR_PANEL_BORDER);
-  unsigned int title_color = focused ? UI_COLOR_TEXT : (active ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED);
-  unsigned int count_color = active ? UI_COLOR_TEXT : UI_COLOR_TEXT_DIM;
+  unsigned int fill = focused ? UI_COLOR_FIELD_ACTIVE : (checked ? UI_COLOR_ACCENT_SOFT : UI_COLOR_PANEL_ALT);
+  unsigned int border = focused ? UI_COLOR_PANEL_BORDER_ACTIVE : (checked ? UI_COLOR_BUTTON_BORDER : UI_COLOR_PANEL_BORDER);
+  unsigned int title_color = focused ? UI_COLOR_TEXT : (checked ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED);
+  unsigned int count_color = checked ? UI_COLOR_TEXT : UI_COLOR_TEXT_DIM;
 
   ui_draw_panel(x, y, w, h, fill, border);
-  if (active) {
+  if (checked) {
     vita2d_draw_rectangle(ui_snap_to_pixel(x), ui_snap_to_pixel(y), 3.0f, ui_snap_to_pixel(h), UI_COLOR_ACCENT);
+  }
+
+  float checkbox_size = h - 14.0f;
+  if (checkbox_size < 12.0f) {
+    checkbox_size = 12.0f;
+  }
+  float checkbox_x = x + 10.0f;
+  float checkbox_y = y + ((h - checkbox_size) * 0.5f);
+  ui_draw_panel(
+      checkbox_x,
+      checkbox_y,
+      checkbox_size,
+      checkbox_size,
+      checked ? UI_COLOR_BUTTON : UI_COLOR_FIELD,
+      checked ? UI_COLOR_BUTTON_BORDER : UI_COLOR_PANEL_BORDER);
+  if (checked) {
+    ui_draw_text_center(
+        checkbox_x + (checkbox_size * 0.5f),
+        checkbox_y + (checkbox_size * 0.72f),
+        UI_COLOR_TEXT,
+        0.58f,
+        "X");
   }
 
   char count_text[32];
@@ -2071,12 +2294,13 @@ static void ui_draw_game_row(
 
   float count_scale = 0.64f;
   float count_width = ui_estimate_text_width(count_text, count_scale);
-  float title_width = w - 36.0f - count_width;
+  float title_x = checkbox_x + checkbox_size + 10.0f;
+  float title_width = (x + w - 12.0f) - title_x - count_width;
   if (title_width < 80.0f) {
     title_width = 80.0f;
   }
 
-  ui_draw_truncated_text(x + 12.0f, y + 18.0f, title_width, title_color, 0.72f, title);
+  ui_draw_truncated_text(title_x, y + 18.0f, title_width, title_color, 0.72f, title);
   ui_draw_text_right(x + w - 12.0f, y + 18.0f, count_color, count_scale, count_text);
 }
 
@@ -2102,7 +2326,7 @@ static void ui_render_header(const UiAppState *state) {
       620.0f,
       UI_COLOR_TEXT_MUTED,
       0.68f,
-      "Configure the RoMM server, choose a PS1 game, then start a manual or startup synchronization.");
+      "Configure the RoMM server, check one or more PS1 games, then start a manual or startup synchronization.");
 
   ui_draw_text_right(928.0f, 28.0f, UI_COLOR_TEXT_DIM, 0.72f, "Status");
   ui_draw_truncated_text_right(928.0f, 52.0f, 240.0f, status_color, 0.76f, status_text);
@@ -2123,16 +2347,10 @@ static void ui_render_connection_panel(const UiAppState *state) {
   char username_display[APP_CONFIG_MAX_USERNAME_LEN + 16];
   char password_display[APP_CONFIG_MAX_PASSWORD_LEN + 16];
   char dry_run_display[24];
-  char auto_apply_conflicts_display[24];
   ui_format_field_display(state->config.romm_url, 0, url_display, sizeof(url_display));
   ui_format_field_display(state->config.romm_username, 0, username_display, sizeof(username_display));
   ui_format_field_display(state->config.romm_password, 1, password_display, sizeof(password_display));
   snprintf(dry_run_display, sizeof(dry_run_display), "%s", state->config.sync_dry_run ? "Enabled" : "Disabled");
-  snprintf(
-      auto_apply_conflicts_display,
-      sizeof(auto_apply_conflicts_display),
-      "%s",
-      state->config.sync_auto_apply_conflicts ? "Enabled" : "Disabled");
 
   ui_draw_panel(layout.connection_x, layout.connection_y, layout.connection_w, layout.connection_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
   ui_draw_text(layout.connection_x + 16.0f, layout.connection_y + 30.0f, UI_COLOR_TEXT, 0.88f, "Connection");
@@ -2169,14 +2387,6 @@ static void ui_render_connection_panel(const UiAppState *state) {
       state->selected_index == UI_SELECT_DRY_RUN,
       "Dry-run mode",
       dry_run_display);
-  ui_draw_field_row(
-      layout.connection_row_x,
-      layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 4.0f),
-      layout.connection_row_w,
-      layout.connection_row_h,
-      state->selected_index == UI_SELECT_AUTO_APPLY_CONFLICTS,
-      "Auto-apply conflicts",
-      auto_apply_conflicts_display);
 }
 
 /*
@@ -2190,35 +2400,46 @@ static void ui_render_sync_panel(const UiAppState *state) {
   UiMainLayout layout;
   ui_build_main_layout(&layout);
 
-  const UiGameEntry *game = ui_active_game(state);
+  const UiGameEntry *first_selected_game = ui_first_selected_game(state);
+  int selected_games = ui_selected_game_count(state);
   char title_display[ROMM_GAME_TITLE_LEN + 16];
-  char detail[96];
+  char detail[128];
   char readiness[UI_STATUS_LINE_LEN];
   unsigned int readiness_color = UI_COLOR_SUCCESS;
   int sync_enabled = ui_sync_action_enabled(state);
   int sync_all_enabled = ui_sync_all_action_enabled(state);
 
-  if (game != NULL) {
-    const char *resolved_title = has_text(game->title) ? game->title : game->game_id;
-    snprintf(title_display, sizeof(title_display), "%s", resolved_title);
-    if (game->card_count == game->save_count) {
-      snprintf(detail, sizeof(detail), "%s | %d card%s", game->game_id, game->card_count, (game->card_count == 1) ? "" : "s");
-    } else if (game->card_count == 0) {
-      snprintf(detail, sizeof(detail), "%s | 0 cards | restore target", game->game_id);
-    } else {
+  if (selected_games > 0) {
+    int selected_targets = 0;
+    for (int i = 0; i < state->game_count; ++i) {
+      if (state->games[i].selected_for_sync) {
+        selected_targets += state->games[i].save_count;
+      }
+    }
+
+    if ((selected_games == 1) && (first_selected_game != NULL)) {
+      const char *resolved_title = has_text(first_selected_game->title)
+                                       ? first_selected_game->title
+                                       : first_selected_game->game_id;
+      snprintf(title_display, sizeof(title_display), "%s", resolved_title);
       snprintf(
           detail,
           sizeof(detail),
-          "%s | %d card%s | %d target%s",
-          game->game_id,
-          game->card_count,
-          (game->card_count == 1) ? "" : "s",
-          game->save_count,
-          (game->save_count == 1) ? "" : "s");
+          "1 game checked | %d local target%s",
+          selected_targets,
+          (selected_targets == 1) ? "" : "s");
+    } else {
+      snprintf(title_display, sizeof(title_display), "%d games checked", selected_games);
+      snprintf(
+          detail,
+          sizeof(detail),
+          "%d local target%s currently selected",
+          selected_targets,
+          (selected_targets == 1) ? "" : "s");
     }
   } else {
-    snprintf(title_display, sizeof(title_display), "No PS1 game selected");
-    snprintf(detail, sizeof(detail), "Rescan local saves after copying memory cards to the Vita.");
+    snprintf(title_display, sizeof(title_display), "No game checked");
+    snprintf(detail, sizeof(detail), "Open Detected PS1 Games and check one or more entries to sync.");
   }
 
   if (state->sync_feedback.running) {
@@ -2227,8 +2448,11 @@ static void ui_render_sync_panel(const UiAppState *state) {
   } else if (state->sync_feedback.completed) {
     snprintf(readiness, sizeof(readiness), "%s", state->sync_feedback.message);
     readiness_color = state->sync_feedback.success ? UI_COLOR_SUCCESS : UI_COLOR_DANGER;
-  } else if (game == NULL) {
+  } else if (state->game_count <= 0) {
     snprintf(readiness, sizeof(readiness), "No local PS1 saves detected yet.");
+    readiness_color = UI_COLOR_WARNING;
+  } else if (selected_games <= 0) {
+    snprintf(readiness, sizeof(readiness), "Check one or more PS1 games in the list to enable sync.");
     readiness_color = UI_COLOR_WARNING;
   } else if (!app_config_has_server_url(&state->config)) {
     snprintf(readiness, sizeof(readiness), "Enter the RoMM server address first.");
@@ -2248,7 +2472,7 @@ static void ui_render_sync_panel(const UiAppState *state) {
       layout.sync_content_x,
       cursor_y,
       layout.sync_content_w,
-      game != NULL ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED,
+      selected_games > 0 ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED,
       0.88f,
       2.0f,
       2,
@@ -2274,7 +2498,7 @@ static void ui_render_sync_panel(const UiAppState *state) {
       1,
       state->selected_index == UI_SELECT_SYNC_PRIMARY,
       sync_enabled,
-      "Synchronize Selected Game");
+      "Synchronize Selected Games");
   ui_draw_button(
       layout.sync_button_x,
       layout.sync_first_button_y + layout.sync_button_h + layout.sync_button_gap,
@@ -2326,8 +2550,15 @@ static void ui_render_game_panel(const UiAppState *state) {
     end = state->game_count;
   }
 
-  char summary[48];
-  snprintf(summary, sizeof(summary), "Showing %d-%d of %d", start + 1, end, state->game_count);
+  char summary[96];
+  snprintf(
+      summary,
+      sizeof(summary),
+      "Showing %d-%d of %d | Checked %d",
+      start + 1,
+      end,
+      state->game_count,
+      ui_selected_game_count(state));
   ui_draw_text_right(layout.game_x + layout.game_w - 16.0f, layout.game_y + 24.0f, UI_COLOR_TEXT_DIM, 0.64f, summary);
 
   float row_y = layout.game_first_row_y;
@@ -2343,7 +2574,7 @@ static void ui_render_game_panel(const UiAppState *state) {
         layout.game_row_w,
         UI_GAME_ROW_HEIGHT,
         state->selected_index == (UI_SELECT_GAME_BASE + i),
-        state->active_game_index == i,
+        state->games[i].selected_for_sync,
         full_title,
         game->card_count);
     row_y += UI_GAME_ROW_HEIGHT;
@@ -2361,6 +2592,13 @@ static void ui_render_footer(const UiAppState *state) {
   UiMainLayout layout;
   ui_build_main_layout(&layout);
 
+  char controls_hint[96];
+  snprintf(
+      controls_hint,
+      sizeof(controls_hint),
+      "D-Pad/Left Stick move   %s select/toggle   START quit",
+      ui_dialog_confirm_button_label());
+
   ui_draw_text(32.0f, 522.0f, UI_COLOR_TEXT_DIM, 0.78f, "Status");
   ui_draw_truncated_text(layout.footer_status_x, 522.0f, layout.footer_status_w, UI_COLOR_STATUS, 0.72f, state->status_line);
   ui_draw_truncated_text_right(
@@ -2369,7 +2607,7 @@ static void ui_render_footer(const UiAppState *state) {
       layout.footer_hint_w,
       UI_COLOR_TEXT_MUTED,
       0.66f,
-      "D-Pad move   X select/apply   START quit");
+      controls_hint);
 }
 
 /*
@@ -2387,6 +2625,28 @@ static void ui_render_main_screen(UiAppState *state) {
   ui_render_game_panel(state);
   ui_render_footer(state);
   ui_end_frame();
+}
+
+/*
+ * Renders one background frame while a blocking message dialog is active.
+ * This avoids blank-frame flicker during confirm prompts.
+ */
+static void ui_render_dialog_background_frame(void *user_data) {
+  UiAppState *state = (UiAppState *)user_data;
+  if (state == NULL) {
+    return;
+  }
+
+  ui_pump_app_events();
+
+  int previous_common_dialog_active = g_common_dialog_active;
+  g_common_dialog_active = 1;
+  if (state->sync_feedback.running && (state->sync_feedback.trigger == UI_SYNC_TRIGGER_MANUAL)) {
+    ui_render_sync_modal(state);
+  } else {
+    ui_render_main_screen(state);
+  }
+  g_common_dialog_active = previous_common_dialog_active;
 }
 
 /*
@@ -2416,6 +2676,23 @@ static int ui_refresh_local_inventory(UiAppState *state) {
   const UiGameEntry *previous_active = ui_active_game(state);
   if (previous_active != NULL) {
     snprintf(previous_active_key, sizeof(previous_active_key), "%s", previous_active->key);
+  }
+
+  char previous_selected_keys[ROMM_SYNC_MAX_ITEMS][ROMM_GAME_ID_LEN];
+  int previous_selected_count = 0;
+  for (int i = 0; i < state->game_count; ++i) {
+    if (!state->games[i].selected_for_sync || !has_text(state->games[i].key)) {
+      continue;
+    }
+    if (previous_selected_count >= ROMM_SYNC_MAX_ITEMS) {
+      break;
+    }
+    snprintf(
+        previous_selected_keys[previous_selected_count],
+        sizeof(previous_selected_keys[previous_selected_count]),
+        "%s",
+        state->games[i].key);
+    previous_selected_count += 1;
   }
 
   ui_set_status(state, "Scanning local PS1 saves...");
@@ -2458,11 +2735,31 @@ static int ui_refresh_local_inventory(UiAppState *state) {
       state->games,
       (int)(sizeof(state->games) / sizeof(state->games[0])));
 
+  int restored_selected_count = 0;
+  for (int i = 0; i < state->game_count; ++i) {
+    state->games[i].selected_for_sync = 0;
+    for (int j = 0; j < previous_selected_count; ++j) {
+      if (sync_string_ieq(state->games[i].key, previous_selected_keys[j])) {
+        state->games[i].selected_for_sync = 1;
+        restored_selected_count += 1;
+        break;
+      }
+    }
+  }
+
   if ((state->game_count > 0) && has_text(previous_active_key)) {
     int restored_index = ui_find_game_entry(state->games, state->game_count, previous_active_key);
     state->active_game_index = (restored_index >= 0) ? restored_index : 0;
   } else {
     state->active_game_index = (state->game_count > 0) ? 0 : -1;
+  }
+
+  if ((restored_selected_count <= 0) && (state->game_count > 0)) {
+    int fallback_index = state->active_game_index;
+    if ((fallback_index < 0) || (fallback_index >= state->game_count)) {
+      fallback_index = 0;
+    }
+    state->games[fallback_index].selected_for_sync = 1;
   }
 
   state->game_scroll = 0;
@@ -2496,31 +2793,51 @@ static int ui_item_matches_game_key(const SyncSaveDescriptor *item, const char *
 }
 
 /*
- * Collects local descriptors for a single selected game.
+ * Collects local descriptors for all checked games in list order.
+ * Returns item count and optionally reports selected game/target totals.
  */
-static int ui_collect_game_items(
+static int ui_collect_selected_game_items(
     const UiAppState *state,
-    const UiGameEntry *game,
     SyncSaveDescriptor *out_items,
-    int max_items) {
-  if ((state == NULL) || (game == NULL) || (out_items == NULL) || (max_items <= 0)) {
+    int max_items,
+    int *out_selected_games,
+    int *out_selected_targets) {
+  if ((state == NULL) || (out_items == NULL) || (max_items <= 0)) {
     return 0;
   }
 
+  int selected_games = 0;
+  int selected_targets = 0;
   int count = 0;
-  for (int i = 0; i < state->local_count; ++i) {
-    if (!ui_item_matches_game_key(&state->local_items[i], game->key)) {
+
+  for (int game_index = 0; game_index < state->game_count; ++game_index) {
+    const UiGameEntry *game = &state->games[game_index];
+    if (!game->selected_for_sync) {
       continue;
     }
 
-    if (count >= max_items) {
-      break;
-    }
+    selected_games += 1;
+    for (int i = 0; i < state->local_count; ++i) {
+      if (!ui_item_matches_game_key(&state->local_items[i], game->key)) {
+        continue;
+      }
 
-    memcpy(&out_items[count], &state->local_items[i], sizeof(out_items[count]));
-    count++;
+      selected_targets += 1;
+      if (count >= max_items) {
+        continue;
+      }
+
+      memcpy(&out_items[count], &state->local_items[i], sizeof(out_items[count]));
+      count += 1;
+    }
   }
 
+  if (out_selected_games != NULL) {
+    *out_selected_games = selected_games;
+  }
+  if (out_selected_targets != NULL) {
+    *out_selected_targets = selected_targets;
+  }
   return count;
 }
 
@@ -3732,6 +4049,8 @@ static int ui_run_sync_pipeline(
   ui_sync_feedback_set_progress(&state->sync_feedback, 3, total_units);
   ui_sync_render_live(state);
 
+  /* Conflict auto-apply is always enabled to keep sync flow deterministic. */
+  state->config.sync_auto_apply_conflicts = 1;
   ui_sync_log_write(
       APP_LOG_LEVEL_INFO,
       "Sync options: dry_run=%d auto_apply_conflicts=%d trigger=%s",
@@ -3742,11 +4061,9 @@ static int ui_run_sync_pipeline(
   if (state->config.sync_dry_run) {
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "Dry-run enabled: transfers will not execute");
   }
-  if (state->config.sync_auto_apply_conflicts) {
-    ui_sync_log_write(
-        APP_LOG_LEVEL_INFO,
-        "Auto-apply conflicts enabled: recommended actions will execute without confirmation");
-  }
+  ui_sync_log_write(
+      APP_LOG_LEVEL_INFO,
+      "Auto-apply conflicts enabled: recommended actions will execute without confirmation");
 
   SyncEngineConfig config;
   sync_engine_config_init(&config);
@@ -3766,7 +4083,7 @@ static int ui_run_sync_pipeline(
   conflict_context.state = state;
   conflict_context.trigger = trigger;
   conflict_context.dry_run = state->config.sync_dry_run;
-  conflict_context.auto_apply_conflicts = state->config.sync_auto_apply_conflicts;
+  conflict_context.auto_apply_conflicts = 1;
 
   config.resolve_conflict = ui_sync_resolve_conflict_callback;
   config.resolve_conflict_user_data = &conflict_context;
@@ -3814,38 +4131,40 @@ static int ui_run_sync_pipeline(
 }
 
 /*
- * Runs synchronization for one selected game using the manual modal feedback path.
+ * Runs synchronization for all checked games using the manual modal feedback path.
  */
-static void ui_run_sync_for_game(UiAppState *state, int game_index) {
-  if ((state == NULL) || (game_index < 0) || (game_index >= state->game_count)) {
+static void ui_run_sync_for_selected_games(UiAppState *state) {
+  if (state == NULL) {
     return;
   }
 
-  const UiGameEntry *game = &state->games[game_index];
-  int game_item_count = ui_collect_game_items(
+  int selected_game_count = 0;
+  int selected_target_count = 0;
+  int work_item_count = ui_collect_selected_game_items(
       state,
-      game,
       state->sync_work_items,
-      (int)(sizeof(state->sync_work_items) / sizeof(state->sync_work_items[0])));
+      (int)(sizeof(state->sync_work_items) / sizeof(state->sync_work_items[0])),
+      &selected_game_count,
+      &selected_target_count);
   int sync_candidate_count = ui_estimate_ps1_sync_candidate_count(
       state->sync_work_items,
-      game_item_count);
+      work_item_count);
 
   char confirm_msg[256];
   snprintf(
       confirm_msg,
       sizeof(confirm_msg),
-      "Synchronize %s?\n%d sync candidate(s) selected from %d local target(s).",
-      has_text(game->title) ? game->title : game->game_id,
+      "Synchronize %d selected game(s)?\n%d sync candidate(s) selected from %d local target(s).",
+      selected_game_count,
       sync_candidate_count,
-      game_item_count);
+      selected_target_count);
   if (ui_dialog_confirm(confirm_msg) != 1) {
-    ui_set_status(state, "Sync canceled for %s", game->game_id);
+    ui_set_status(state, "Sync canceled for selected games");
     return;
   }
 
-  if (game_item_count <= 0) {
-    ui_set_status(state, "No local save found for %s", game->game_id);
+  if (work_item_count <= 0) {
+    ui_set_status(state, "No local save found for the checked games");
     return;
   }
 
@@ -3853,15 +4172,15 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
   snprintf(
       context,
       sizeof(context),
-      "Game: %s (%d sync candidate%s)",
-      game->game_id,
+      "Selected games: %d (%d sync candidate%s)",
+      selected_game_count,
       sync_candidate_count,
       (sync_candidate_count == 1) ? "" : "s");
 
   int sync_status = ui_run_sync_pipeline(
       state,
       state->sync_work_items,
-      game_item_count,
+      work_item_count,
       UI_SYNC_TRIGGER_MANUAL,
       "Manual Synchronization",
       context);
@@ -3869,13 +4188,12 @@ static void ui_run_sync_for_game(UiAppState *state, int game_index) {
   if (sync_status == SYNC_ENGINE_OK) {
     ui_set_status(
         state,
-        "Sync finished for %s (uploads=%d, downloads=%d, errors=%d)",
-        game->game_id,
+        "Sync finished for selected games (uploads=%d, downloads=%d, errors=%d)",
         state->sync_report.uploads_executed,
         state->sync_report.downloads_executed,
         state->sync_report.transfer_errors);
   } else {
-    ui_set_status(state, "Sync failed for %s", game->game_id);
+    ui_set_status(state, "Sync failed for selected games");
   }
 
   ui_present_completed_manual_sync(state);
@@ -4233,30 +4551,9 @@ static void ui_activate_selection(UiAppState *state) {
     return;
   }
 
-  if (state->selected_index == UI_SELECT_AUTO_APPLY_CONFLICTS) {
-    int previous_auto_apply_conflicts = state->config.sync_auto_apply_conflicts;
-    state->config.sync_auto_apply_conflicts = state->config.sync_auto_apply_conflicts ? 0 : 1;
-    int save_status = ui_save_config(
-        state,
-        state->config.sync_auto_apply_conflicts ? "Auto-apply conflicts enabled" : "Auto-apply conflicts disabled");
-    if (save_status != APP_CONFIG_OK) {
-      state->config.sync_auto_apply_conflicts = previous_auto_apply_conflicts;
-      return;
-    }
-
-    if (save_status == APP_CONFIG_OK) {
-      app_log_write(
-          APP_LOG_LEVEL_INFO,
-          "ui",
-          "auto-apply conflicts %s from the home screen",
-          state->config.sync_auto_apply_conflicts ? "enabled" : "disabled");
-    }
-    return;
-  }
-
   if (state->selected_index == UI_SELECT_SYNC_PRIMARY) {
-    if (ui_active_game(state) == NULL) {
-      ui_set_status(state, "No PS1 game is selected");
+    if (ui_selected_game_count(state) <= 0) {
+      ui_set_status(state, "Check at least one PS1 game before synchronizing");
       return;
     }
 
@@ -4270,7 +4567,7 @@ static void ui_activate_selection(UiAppState *state) {
       return;
     }
 
-    ui_run_sync_for_game(state, state->active_game_index);
+    ui_run_sync_for_selected_games(state);
     ui_refresh_local_inventory(state);
     ui_clamp_selection(state);
     return;
@@ -4307,8 +4604,12 @@ static void ui_activate_selection(UiAppState *state) {
   if (state->selected_index >= UI_SELECT_GAME_BASE) {
     int game_index = state->selected_index - UI_SELECT_GAME_BASE;
     state->active_game_index = game_index;
-    state->selected_index = UI_SELECT_SYNC_PRIMARY;
-    ui_set_status(state, "Selected %s for synchronization", state->games[game_index].game_id);
+    state->games[game_index].selected_for_sync = state->games[game_index].selected_for_sync ? 0 : 1;
+    ui_set_status(
+        state,
+        "%s %s for synchronization",
+        state->games[game_index].selected_for_sync ? "Checked" : "Unchecked",
+        state->games[game_index].game_id);
   }
 }
 
@@ -4334,6 +4635,9 @@ static void ui_initialize_state(UiAppState *state) {
         state->config_status);
     app_config_init_defaults(&state->config);
   }
+
+  /* Backup coverage is mandatory, so conflict auto-apply stays enabled and hidden. */
+  state->config.sync_auto_apply_conflicts = 1;
   ui_apply_logging_preferences(&state->config);
 
   if (state->config_status == APP_CONFIG_ERR_NOT_FOUND) {
@@ -4376,6 +4680,8 @@ static void ui_initialize_state(UiAppState *state) {
     ui_set_status(state, "Automatic startup sync is queued");
   }
   state->selected_index = UI_SELECT_SERVER_URL;
+  state->nav_hold_direction = UI_NAV_NONE;
+  state->nav_hold_frames = 0;
 }
 
 /*
@@ -4425,7 +4731,7 @@ int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
 
-  sceCtrlSetSamplingMode(SCE_CTRL_MODE_DIGITAL);
+  sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
   app_log_clear_history();
 
   if (ui_renderer_init() < 0) {
@@ -4444,8 +4750,9 @@ int main(int argc, char *argv[]) {
 
   UiAppState *state = &g_app_state;
   ui_initialize_state(state);
+  ui_dialog_set_frame_callback(ui_render_dialog_background_frame, state);
 
-  unsigned int previous_buttons = 0U;
+  unsigned int previous_buttons = ui_poll_buttons();
   for (;;) {
     ui_run_pending_auto_sync(state);
     ui_pump_app_events();
@@ -4453,40 +4760,21 @@ int main(int argc, char *argv[]) {
     ui_update_game_scroll(state);
     ui_render_main_screen(state);
 
-    unsigned int pressed = ui_poll_pressed(&previous_buttons);
+    UiControllerState controller = ui_poll_controller_state();
+    unsigned int pressed = ui_compute_pressed(controller.buttons, &previous_buttons);
     if (pressed & SCE_CTRL_START) {
       break;
     }
 
-    int total_entries = ui_total_selectable_entries(state);
-    if (pressed & SCE_CTRL_UP) {
-      if (!ui_move_selection_direction(state, UI_NAV_UP)) {
-        state->selected_index--;
-        if (state->selected_index < 0) {
-          state->selected_index = total_entries - 1;
-        }
-      }
-    }
-    if (pressed & SCE_CTRL_DOWN) {
-      if (!ui_move_selection_direction(state, UI_NAV_DOWN)) {
-        state->selected_index++;
-        if (state->selected_index >= total_entries) {
-          state->selected_index = 0;
-        }
-      }
-    }
-    if (pressed & SCE_CTRL_LEFT) {
-      ui_move_selection_direction(state, UI_NAV_LEFT);
-    }
-    if (pressed & SCE_CTRL_RIGHT) {
-      ui_move_selection_direction(state, UI_NAV_RIGHT);
-    }
+    ui_handle_navigation_input(state, controller.buttons, controller.left_x, controller.left_y);
     if (state->selected_index >= UI_SELECT_GAME_BASE) {
       state->active_game_index = state->selected_index - UI_SELECT_GAME_BASE;
     }
-    if (pressed & SCE_CTRL_CROSS) {
+    if (pressed & ui_primary_action_button()) {
       ui_activate_selection(state);
       previous_buttons = ui_poll_buttons();
+      state->nav_hold_direction = UI_NAV_NONE;
+      state->nav_hold_frames = 0;
     }
 
     sceKernelDelayThread(16 * 1000);

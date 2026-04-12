@@ -3,12 +3,20 @@
 
 #define UI_DIALOG_MSG_MAX_LEN 512
 
+typedef void (*UiDialogFrameCallback)(void *user_data);
+
 /*
  * Initializes the sceMsgDialog subsystem.
  * Must be called after sceCommonDialogSetConfigParam.
  * Returns 0 on success, negative on failure.
  */
 int ui_dialog_init(void);
+
+/*
+ * Registers an optional callback used to render one frame while a dialog is open.
+ * When unset, dialog pumping falls back to empty-frame rendering.
+ */
+void ui_dialog_set_frame_callback(UiDialogFrameCallback callback, void *user_data);
 
 /*
  * Displays a Yes/No confirmation dialog using sceMsgDialog.
