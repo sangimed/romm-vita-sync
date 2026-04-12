@@ -85,6 +85,11 @@
 #define UI_TEXT_SCALE_BOOST 1.14f
 #define UI_TEXT_SCALE_MIN 0.82f
 #define UI_TEXT_SCALE_MAX 1.46f
+#define UI_TEXT_SCALE_STEP 0.125f
+#define UI_TEXT_SHADOW_OFFSET_X 1.0f
+#define UI_TEXT_SHADOW_OFFSET_Y 1.0f
+#define UI_TEXT_SHADOW_ALPHA_MIN 32U
+#define UI_TEXT_SHADOW_ALPHA_MAX 96U
 
 #define UI_NAV_UP 0
 #define UI_NAV_DOWN 1
@@ -1352,8 +1357,60 @@ static float ui_snap_to_pixel(float value) {
 }
 
 /*
+ * Snaps coordinates in a scale-aware way so transformed text still lands on pixel boundaries.
+ * This reduces blur introduced by fractional scaling and sub-pixel glyph origins.
+ */
+static float ui_snap_to_text_grid(float value, float scale) {
+  if (scale <= 0.0f) {
+    return ui_snap_to_pixel(value);
+  }
+
+  return ui_snap_to_pixel(value * scale) / scale;
+}
+
+/*
+ * Quantizes text scale to stable increments.
+ * Restricting the number of effective scales improves consistency and sharpness.
+ */
+static float ui_quantize_text_scale(float scale) {
+  if (scale <= 0.0f) {
+    return UI_TEXT_SCALE_MIN;
+  }
+
+  float stepped = floorf((scale / UI_TEXT_SCALE_STEP) + 0.5f) * UI_TEXT_SCALE_STEP;
+  if (stepped < UI_TEXT_SCALE_MIN) {
+    return UI_TEXT_SCALE_MIN;
+  }
+  if (stepped > UI_TEXT_SCALE_MAX) {
+    return UI_TEXT_SCALE_MAX;
+  }
+  return stepped;
+}
+
+/*
+ * Builds a subtle black shadow from text alpha.
+ * This keeps text readable on busy panel edges without overpowering the glyph shape.
+ */
+static unsigned int ui_text_shadow_color(unsigned int text_color) {
+  unsigned int alpha = (text_color >> 24) & 0xFFU;
+  if (alpha == 0U) {
+    return 0U;
+  }
+
+  unsigned int shadow_alpha = alpha / 3U;
+  if (shadow_alpha < UI_TEXT_SHADOW_ALPHA_MIN) {
+    shadow_alpha = UI_TEXT_SHADOW_ALPHA_MIN;
+  }
+  if (shadow_alpha > UI_TEXT_SHADOW_ALPHA_MAX) {
+    shadow_alpha = UI_TEXT_SHADOW_ALPHA_MAX;
+  }
+
+  return RGBA8(0, 0, 0, shadow_alpha);
+}
+
+/*
  * Applies a readability-oriented text scale policy for Vita's display.
- * Tiny scales are lifted to avoid hard-to-read pixelated labels.
+ * Tiny scales are lifted and then quantized to reduce blurred interpolation states.
  */
 static float ui_resolve_text_scale(float scale) {
   float resolved = scale * UI_TEXT_SCALE_BOOST;
@@ -1363,7 +1420,7 @@ static float ui_resolve_text_scale(float scale) {
   if (resolved > UI_TEXT_SCALE_MAX) {
     resolved = UI_TEXT_SCALE_MAX;
   }
-  return resolved;
+  return ui_quantize_text_scale(resolved);
 }
 
 /*
@@ -1409,7 +1466,21 @@ static void ui_draw_text(float x, float y, unsigned int color, float scale, cons
   va_end(args);
 
   float draw_scale = ui_resolve_text_scale(scale);
-  vita2d_pgf_draw_text(g_ui_font, ui_snap_to_pixel(x), ui_snap_to_pixel(y), color, draw_scale, line);
+  float draw_x = ui_snap_to_text_grid(x, draw_scale);
+  float draw_y = ui_snap_to_text_grid(y, draw_scale);
+
+  unsigned int shadow_color = ui_text_shadow_color(color);
+  if (shadow_color != 0U) {
+    vita2d_pgf_draw_text(
+        g_ui_font,
+        ui_snap_to_text_grid(draw_x + UI_TEXT_SHADOW_OFFSET_X, draw_scale),
+        ui_snap_to_text_grid(draw_y + UI_TEXT_SHADOW_OFFSET_Y, draw_scale),
+        shadow_color,
+        draw_scale,
+        line);
+  }
+
+  vita2d_pgf_draw_text(g_ui_font, draw_x, draw_y, color, draw_scale, line);
 }
 
 /*

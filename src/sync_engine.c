@@ -1627,7 +1627,7 @@ int sync_engine_run(
           active_device_id,
           local_item,
           NULL,
-          &state_store,
+          state_store,
           action,
           out_report);
       if (upload_status == ROMM_CLIENT_ERR_CONFLICT) {
@@ -1788,7 +1788,7 @@ int sync_engine_run(
           active_device_id,
           local_item,
           remote_item,
-          &state_store,
+          state_store,
           action,
           out_report);
       if (upload_status == ROMM_CLIENT_ERR_CONFLICT) {
