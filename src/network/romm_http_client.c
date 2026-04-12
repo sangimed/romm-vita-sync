@@ -32,6 +32,7 @@
 #define ROMM_HTTP_MAX_FILENAME 128
 #define ROMM_HTTP_MAX_PLATFORM_SLUG 64
 #define ROMM_HTTP_MAX_SEARCH_TERM ROMM_GAME_TITLE_LEN
+#define ROMM_HTTP_MAX_SEARCH_VARIANTS 6
 #define ROMM_HTTP_LOG_BODY_PREVIEW 160
 #define ROMM_HTTP_LOG_BODY_DEBUG 224
 #define ROMM_HTTP_FALLBACK_URL_BUFFER_SIZE (APP_CONFIG_MAX_URL_LEN + 256)
@@ -698,7 +699,7 @@ static const char *romm_save_emulator(const AppConfig *config) {
 
 /*
  * Builds a compact search term from one local text source for /api/roms.
- * Non-alnum separators collapse to single spaces so symbols like TM do not block matches.
+ * Non-alnum separators collapse to single spaces.
  */
 static int build_compact_search_term(
     const char *source,
@@ -735,38 +736,222 @@ static int build_compact_search_term(
 }
 
 /*
- * Builds the primary /api/roms search term.
- * Prefer GAME_ID because it is usually the most stable identifier across localized titles.
+ * Appends one deduplicated search variant when it is meaningful.
  */
-static int build_rom_search_term(
-    const SyncSaveDescriptor *local_item,
-    char *out_term,
-    size_t out_term_size) {
-  if ((local_item == NULL) || (out_term == NULL) || (out_term_size == 0U)) {
-    return -1;
+static void append_search_variant(
+    const char *candidate,
+    const char *reason,
+    char out_terms[ROMM_HTTP_MAX_SEARCH_VARIANTS][ROMM_HTTP_MAX_SEARCH_TERM],
+    char out_reasons[ROMM_HTTP_MAX_SEARCH_VARIANTS][24],
+    int *io_count) {
+  if ((out_terms == NULL) || (out_reasons == NULL) || (io_count == NULL) ||
+      (*io_count < 0) || (*io_count >= ROMM_HTTP_MAX_SEARCH_VARIANTS)) {
+    return;
   }
 
-  out_term[0] = '\0';
-  if (build_compact_search_term(local_item->game_id, out_term, out_term_size) == 0) {
-    return 0;
+  if (!has_text(candidate)) {
+    return;
   }
 
-  return build_compact_search_term(local_item->title, out_term, out_term_size);
+  const size_t length = strlen(candidate);
+  int contains_digit = 0;
+  int contains_alpha = 0;
+  for (const char *cursor = candidate; *cursor != '\0'; ++cursor) {
+    if (isdigit((unsigned char)*cursor)) {
+      contains_digit = 1;
+    } else if (isalpha((unsigned char)*cursor)) {
+      contains_alpha = 1;
+    }
+  }
+  const int looks_like_alias = (contains_alpha != 0) && (contains_digit != 0) && (length <= 6U);
+  if ((length < 4U) && !looks_like_alias) {
+    return;
+  }
+
+  for (int i = 0; i < *io_count; ++i) {
+    if (sync_string_ieq(out_terms[i], candidate)) {
+      return;
+    }
+  }
+
+  snprintf(out_terms[*io_count], ROMM_HTTP_MAX_SEARCH_TERM, "%s", candidate);
+  snprintf(out_reasons[*io_count], 24, "%s", has_text(reason) ? reason : "variant");
+  (*io_count)++;
 }
 
 /*
- * Builds a secondary title-based search term when GAME_ID pre-filtering misses localized entries.
+ * Removes short alias prefix token, e.g. "r4 ridge racer type 4" -> "ridge racer type 4".
  */
-static int build_rom_title_search_term(
-    const SyncSaveDescriptor *local_item,
+static int build_alias_stripped_variant(
+    const char *normalized_title,
     char *out_term,
     size_t out_term_size) {
-  if ((local_item == NULL) || (out_term == NULL) || (out_term_size == 0U)) {
+  if (!has_text(normalized_title) || (out_term == NULL) || (out_term_size == 0U)) {
+    return -1;
+  }
+
+  const char *first_space = strchr(normalized_title, ' ');
+  if (first_space == NULL) {
+    return -1;
+  }
+
+  char first_token[16];
+  size_t first_len = (size_t)(first_space - normalized_title);
+  if ((first_len == 0U) || (first_len >= sizeof(first_token))) {
+    return -1;
+  }
+  memcpy(first_token, normalized_title, first_len);
+  first_token[first_len] = '\0';
+
+  int has_digit = 0;
+  int has_alpha = 0;
+  for (size_t i = 0U; i < first_len; ++i) {
+    if (isdigit((unsigned char)first_token[i])) {
+      has_digit = 1;
+    } else if (isalpha((unsigned char)first_token[i])) {
+      has_alpha = 1;
+    }
+  }
+  if (!has_alpha || !has_digit || (first_len > 5U)) {
+    return -1;
+  }
+
+  const char *remainder = first_space + 1;
+  while (*remainder == ' ') {
+    remainder++;
+  }
+  if (strlen(remainder) < 4U) {
+    return -1;
+  }
+
+  size_t copy_len = strlen(remainder);
+  if (copy_len >= out_term_size) {
+    copy_len = out_term_size - 1U;
+  }
+  memcpy(out_term, remainder, copy_len);
+  out_term[copy_len] = '\0';
+  return 0;
+}
+
+/*
+ * Builds a compact variant from significant title tokens.
+ */
+static int build_significant_token_variant(
+    const char *normalized_title,
+    char *out_term,
+    size_t out_term_size) {
+  if (!has_text(normalized_title) || (out_term == NULL) || (out_term_size == 0U)) {
     return -1;
   }
 
   out_term[0] = '\0';
-  return build_compact_search_term(local_item->title, out_term, out_term_size);
+
+  static const char *const noise_tokens[] = {
+      "the",
+      "and",
+      "of",
+      "edition",
+      "ver",
+      "version",
+      "disc",
+      "cd",
+      "usa",
+      "europe",
+      "japan"};
+
+  char token[ROMM_HTTP_MAX_SEARCH_TERM];
+  size_t token_len = 0U;
+  size_t out = 0U;
+  int kept = 0;
+  for (const char *cursor = normalized_title;; ++cursor) {
+    const char c = *cursor;
+    if ((c != ' ') && (c != '\0')) {
+      if ((token_len + 1U) < sizeof(token)) {
+        token[token_len++] = c;
+      }
+      continue;
+    }
+
+    if (token_len > 0U) {
+      token[token_len] = '\0';
+      int is_noise = 0;
+      for (size_t i = 0U; i < (sizeof(noise_tokens) / sizeof(noise_tokens[0])); ++i) {
+        if (sync_string_ieq(token, noise_tokens[i])) {
+          is_noise = 1;
+          break;
+        }
+      }
+
+      if (!is_noise && ((strlen(token) >= 2U) || isdigit((unsigned char)token[0]))) {
+        if ((kept > 0) && ((out + 1U) < out_term_size)) {
+          out_term[out++] = ' ';
+        }
+        for (size_t i = 0U; (i < strlen(token)) && ((out + 1U) < out_term_size); ++i) {
+          out_term[out++] = token[i];
+        }
+        kept++;
+        if (kept >= 5) {
+          break;
+        }
+      }
+      token_len = 0U;
+    }
+
+    if (c == '\0') {
+      break;
+    }
+  }
+  out_term[out] = '\0';
+  return (strlen(out_term) >= 4U) ? 0 : -1;
+}
+
+/*
+ * Builds ordered /api/roms search variants for one local save.
+ */
+static int build_rom_search_variants(
+    const SyncSaveDescriptor *local_item,
+    char out_terms[ROMM_HTTP_MAX_SEARCH_VARIANTS][ROMM_HTTP_MAX_SEARCH_TERM],
+    char out_reasons[ROMM_HTTP_MAX_SEARCH_VARIANTS][24]) {
+  if ((local_item == NULL) || (out_terms == NULL) || (out_reasons == NULL)) {
+    return 0;
+  }
+
+  for (int i = 0; i < ROMM_HTTP_MAX_SEARCH_VARIANTS; ++i) {
+    out_terms[i][0] = '\0';
+    out_reasons[i][0] = '\0';
+  }
+
+  int count = 0;
+
+  char game_id_term[ROMM_HTTP_MAX_SEARCH_TERM];
+  if (build_compact_search_term(local_item->game_id, game_id_term, sizeof(game_id_term)) == 0) {
+    append_search_variant(game_id_term, "game_id", out_terms, out_reasons, &count);
+  }
+
+  char raw_title_term[ROMM_HTTP_MAX_SEARCH_TERM];
+  if (build_compact_search_term(local_item->title, raw_title_term, sizeof(raw_title_term)) == 0) {
+    append_search_variant(raw_title_term, "title_raw", out_terms, out_reasons, &count);
+  }
+
+  char normalized_title[ROMM_HTTP_MAX_SEARCH_TERM];
+  game_matcher_normalize_title(local_item->title, normalized_title, sizeof(normalized_title));
+  append_search_variant(normalized_title, "title_normalized", out_terms, out_reasons, &count);
+
+  char alias_trimmed[ROMM_HTTP_MAX_SEARCH_TERM];
+  alias_trimmed[0] = '\0';
+  if (build_alias_stripped_variant(normalized_title, alias_trimmed, sizeof(alias_trimmed)) == 0) {
+    append_search_variant(alias_trimmed, "title_no_alias", out_terms, out_reasons, &count);
+  }
+
+  char significant_variant[ROMM_HTTP_MAX_SEARCH_TERM];
+  if (build_significant_token_variant(
+          has_text(alias_trimmed) ? alias_trimmed : normalized_title,
+          significant_variant,
+          sizeof(significant_variant)) == 0) {
+    append_search_variant(significant_variant, "title_tokens", out_terms, out_reasons, &count);
+  }
+
+  return count;
 }
 
 /*
@@ -1750,6 +1935,60 @@ static void extract_serial_metadata(
 }
 
 /*
+ * Enriches one ROM catalog entry with alternative names/aliases when present.
+ */
+static void extract_alternative_names_metadata(
+    const char *object_start,
+    const char *object_end,
+    RomCatalogEntry *entry) {
+  if ((object_start == NULL) || (object_end == NULL) ||
+      (object_start >= object_end) || (entry == NULL)) {
+    return;
+  }
+
+  const char *const list_keys[] = {
+      "alternative_names",
+      "alternativeNames",
+      "aliases"};
+  const char *const scalar_keys[] = {
+      "alternative_name",
+      "alternativeName",
+      "alias"};
+
+  for (size_t i = 0U; i < (sizeof(list_keys) / sizeof(list_keys[0])); ++i) {
+    char list_values[GAME_MATCHER_MAX_ALTERNATIVE_NAMES_LEN];
+    if (extract_json_string_array_field_in_range(object_start, object_end, list_keys[i], list_values, sizeof(list_values)) == 0) {
+      char token[GAME_MATCHER_MAX_ALTERNATIVE_NAMES_LEN];
+      size_t token_len = 0U;
+      for (const char *cursor = list_values;; ++cursor) {
+        char c = *cursor;
+        if ((c != '|') && (c != '\0') && ((token_len + 1U) < sizeof(token))) {
+          token[token_len++] = c;
+          continue;
+        }
+
+        if (token_len > 0U) {
+          token[token_len] = '\0';
+          append_pipe_list_unique(entry->alternative_names, sizeof(entry->alternative_names), token);
+          token_len = 0U;
+        }
+
+        if (c == '\0') {
+          break;
+        }
+      }
+    }
+  }
+
+  for (size_t i = 0U; i < (sizeof(scalar_keys) / sizeof(scalar_keys[0])); ++i) {
+    char value[GAME_MATCHER_MAX_ALTERNATIVE_NAMES_LEN];
+    if (extract_json_string_field_in_range(object_start, object_end, scalar_keys[i], value, sizeof(value)) == 0) {
+      append_pipe_list_unique(entry->alternative_names, sizeof(entry->alternative_names), value);
+    }
+  }
+}
+
+/*
  * Initializes Vita networking + HTTP stack for one HTTP transaction.
  */
 static int http_runtime_init(const AppConfig *config, const char *url, HttpRuntimeState *state) {
@@ -2381,6 +2620,7 @@ static int parse_rom_catalog_entries(
       extract_json_string_field_in_range(object_start, object_end, "fs_name_no_ext", entry->fs_name_no_ext, sizeof(entry->fs_name_no_ext));
       extract_json_string_field_in_range(object_start, object_end, "platform_slug", entry->platform_slug, sizeof(entry->platform_slug));
       extract_serial_metadata(object_start, object_end, entry);
+      extract_alternative_names_metadata(object_start, object_end, entry);
       count++;
     }
 
@@ -2555,7 +2795,7 @@ static int build_rom_catalog_path(
       int written = snprintf(
           out_path,
           out_path_size,
-          "/api/roms?limit=%d&offset=%d&platform_ids=%d&search_term=%s&fields=id,name,fs_name,fs_name_no_tags,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id",
+          "/api/roms?limit=%d&offset=%d&platform_ids=%d&search_term=%s&fields=id,name,fs_name,fs_name_no_tags,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id,alternative_names,alternativeNames",
           limit,
           offset,
           platform_id,
@@ -2566,7 +2806,7 @@ static int build_rom_catalog_path(
     int written = snprintf(
         out_path,
         out_path_size,
-        "/api/roms?limit=%d&offset=%d&platform=%s&search_term=%s&fields=id,name,fs_name,fs_name_no_tags,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id",
+        "/api/roms?limit=%d&offset=%d&platform=%s&search_term=%s&fields=id,name,fs_name,fs_name_no_tags,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id,alternative_names,alternativeNames",
         limit,
         offset,
         platform_filter,
@@ -2578,7 +2818,7 @@ static int build_rom_catalog_path(
     int written = snprintf(
         out_path,
         out_path_size,
-        "/api/roms?limit=%d&offset=%d&platform_ids=%d&fields=id,name,fs_name,fs_name_no_tags,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id",
+        "/api/roms?limit=%d&offset=%d&platform_ids=%d&fields=id,name,fs_name,fs_name_no_tags,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id,alternative_names,alternativeNames",
         limit,
         offset,
         platform_id);
@@ -2588,7 +2828,7 @@ static int build_rom_catalog_path(
   int written = snprintf(
       out_path,
       out_path_size,
-      "/api/roms?limit=%d&offset=%d&platform=%s&fields=id,name,fs_name,fs_name_no_tags,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id",
+      "/api/roms?limit=%d&offset=%d&platform=%s&fields=id,name,fs_name,fs_name_no_tags,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id,alternative_names,alternativeNames",
       limit,
       offset,
       platform_filter);
@@ -2623,7 +2863,7 @@ static int fetch_rom_catalog(
   int total = INT_MAX;
   int catalog_count = 0;
   for (int offset = 0; (offset < total) && (catalog_count < max_catalog); offset += ROMM_HTTP_ROM_PAGE_LIMIT) {
-    char path[512];
+    char path[768];
     if (build_rom_catalog_path(
             platform_filter,
             platform_id,
@@ -3010,24 +3250,28 @@ int romm_http_resolve_rom_ids(
     GameMatcherResolution resolution;
     int resolved_rom_id = -1;
 
-    char search_term[ROMM_HTTP_MAX_SEARCH_TERM];
-    search_term[0] = '\0';
-    char fallback_search_term[ROMM_HTTP_MAX_SEARCH_TERM];
-    fallback_search_term[0] = '\0';
+    char search_terms[ROMM_HTTP_MAX_SEARCH_VARIANTS][ROMM_HTTP_MAX_SEARCH_TERM];
+    char search_reasons[ROMM_HTTP_MAX_SEARCH_VARIANTS][24];
+    int search_term_count = build_rom_search_variants(local_item, search_terms, search_reasons);
 
-    const char *search_terms[2];
-    int search_term_count = 0;
-    if (build_rom_search_term(local_item, search_term, sizeof(search_term)) == 0) {
-      search_terms[search_term_count++] = search_term;
-    }
-    if ((build_rom_title_search_term(local_item, fallback_search_term, sizeof(fallback_search_term)) == 0) &&
-        ((search_term_count == 0) || !sync_string_ieq(fallback_search_term, search_term))) {
-      search_terms[search_term_count++] = fallback_search_term;
+    if (app_log_is_enabled(APP_LOG_LEVEL_DEBUG) && (search_term_count > 0)) {
+      for (int variant_index = 0; variant_index < search_term_count; ++variant_index) {
+        app_log_write(
+            APP_LOG_LEVEL_DEBUG,
+            "http",
+            "rom search variant[%d/%d] game=%s reason=%s term=%s",
+            variant_index + 1,
+            search_term_count,
+            local_item->game_id,
+            search_reasons[variant_index],
+            search_terms[variant_index]);
+      }
     }
 
     if (search_term_count > 0) {
       for (int term_index = 0; term_index < search_term_count; ++term_index) {
         const char *active_search_term = search_terms[term_index];
+        const char *active_reason = search_reasons[term_index];
         if (!sync_string_ieq(active_search_term, last_search_term)) {
           int search_status = fetch_rom_catalog(
               config,
@@ -3048,6 +3292,15 @@ int romm_http_resolve_rom_ids(
         }
 
         if (last_search_count <= 0) {
+          if (app_log_is_enabled(APP_LOG_LEVEL_DEBUG)) {
+            app_log_write(
+                APP_LOG_LEVEL_DEBUG,
+                "http",
+                "rom search variant miss game=%s reason=%s term=%s",
+                local_item->game_id,
+                active_reason,
+                active_search_term);
+          }
           continue;
         }
 
@@ -3060,6 +3313,19 @@ int romm_http_resolve_rom_ids(
         if (candidate_rom_id > 0) {
           resolved_rom_id = candidate_rom_id;
           resolution = candidate_resolution;
+          if (app_log_is_enabled(APP_LOG_LEVEL_DEBUG)) {
+            app_log_write(
+                APP_LOG_LEVEL_DEBUG,
+                "http",
+                "rom variant selected game=%s reason=%s term=%s rom_id=%d stage=%s/%s score=%d",
+                local_item->game_id,
+                active_reason,
+                active_search_term,
+                candidate_rom_id,
+                game_matcher_match_stage_str(candidate_resolution.stage),
+                game_matcher_match_field_str(candidate_resolution.field),
+                candidate_resolution.score);
+          }
           break;
         }
         if ((candidate_rom_id == GAME_MATCHER_AMBIGUOUS) &&
