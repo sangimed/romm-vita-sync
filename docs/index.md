@@ -150,8 +150,8 @@ Commands:
 ### First Sync
 
 1. Ensure Vita can reach the RomM URL
-2. In the game list, choose a detected PS1 game
-3. Return to `Synchronize Selected Game` and press the system confirm button (`X` or `O`)
+2. In the game list, check one or more detected PS1 games
+3. Return to `Synchronize Selected Games` and press the system confirm button (`X` or `O`)
 4. Follow progress in the sync modal for manual runs; automatic startup sync updates the header state and `Synchronize` panel status without opening a modal
 
 Notes:
@@ -230,8 +230,9 @@ Current in-app UI behavior:
 - The home screen includes a `Dry-run mode` toggle with immediate save.
 - Editing those fields opens the official PS Vita system keyboard (`SceImeDialog`).
 - Confirming keyboard input persists values immediately to `ux0:data/romm-vita-sync/settings.ini`.
-- The main screen keeps a visible primary `Synchronize Selected Game` action plus secondary `Synchronize All Saves` and `Rescan Local Saves` actions.
-- The current sync target is selected from the detected PS1 game list and remains highlighted even when focus moves back to the sync button.
+- The main screen keeps a visible primary `Synchronize Selected Games` action plus secondary `Synchronize All Saves` and `Rescan Local Saves` actions.
+- `Detected PS1 Games` supports multi-selection with checkboxes; pressing the confirm button on a row toggles its checked state.
+- The detected list keeps a focused row for navigation while checked rows define the actual sync selection set.
 - The main screen uses three larger panels (`Connection`, `Synchronize`, `Detected PS1 Games`) instead of a separate sync-activity side panel.
 - Connection values wrap inside their rows, and long single-line labels such as game-list entries and footer status text ellipsize to stay inside their bounds.
 - Manual sync runs now open a blocking modal with a wider layout, wrapped text, a real progress bar, and live scrolling logs.
@@ -287,8 +288,8 @@ Host toolchain alternative:
 
 ### 4. Sync Validation
 
-1. Move through the detected PS1 game list to choose the current sync target.
-2. Return to `Synchronize Selected Game` and press the system confirm button (`X` or `O`).
+1. Move through the detected PS1 game list and check one or more games to include.
+2. Return to `Synchronize Selected Games` and press the system confirm button (`X` or `O`).
 3. Confirm manual sync shows a blocking progress modal with live logs and completion state.
 4. Confirm automatic startup sync (when enabled) updates the header state and `Synchronize` panel without opening a modal.
 5. On first successful authenticated sync, confirm `device_id` is persisted in `settings.ini`.
