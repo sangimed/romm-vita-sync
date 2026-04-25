@@ -14,11 +14,12 @@
 #define UI_SELECT_SERVER_URL 0
 #define UI_SELECT_USERNAME 1
 #define UI_SELECT_PASSWORD 2
-#define UI_SELECT_DRY_RUN 3
-#define UI_SELECT_SYNC_PRIMARY 4
-#define UI_SELECT_SYNC_ALL 5
-#define UI_SELECT_RESCAN 6
-#define UI_SELECT_GAME_BASE 7
+#define UI_SELECT_PLATFORM 3
+#define UI_SELECT_DRY_RUN 4
+#define UI_SELECT_SYNC_PRIMARY 5
+#define UI_SELECT_SYNC_ALL 6
+#define UI_SELECT_RESCAN 7
+#define UI_SELECT_GAME_BASE 8
 
 #define UI_SCREEN_WIDTH 960.0f
 #define UI_SCREEN_HEIGHT 544.0f
@@ -192,6 +193,7 @@ typedef struct UiAppState {
   SyncSaveDescriptor sync_work_items[ROMM_SYNC_MAX_ITEMS];
   SyncRunReport sync_report;
   int local_count;
+  SyncSavePlatform selected_save_platform;
 
   UiGameEntry games[ROMM_SYNC_MAX_ITEMS];
   int game_count;

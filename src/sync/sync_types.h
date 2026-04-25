@@ -43,6 +43,12 @@ typedef enum SyncLocalSelectionReason {
   SYNC_LOCAL_SELECTION_DETERMINISTIC_FALLBACK = 4
 } SyncLocalSelectionReason;
 
+typedef enum SyncSavePlatform {
+  SYNC_SAVE_PLATFORM_UNKNOWN = 0,
+  SYNC_SAVE_PLATFORM_PSONE = 1,
+  SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL = 2
+} SyncSavePlatform;
+
 typedef struct SyncSaveDescriptor {
   int rom_id;
   int remote_id;
@@ -59,6 +65,7 @@ typedef struct SyncSaveDescriptor {
   int device_is_current;
   int device_is_untracked;
   SyncSlot slot;
+  SyncSavePlatform platform;
 } SyncSaveDescriptor;
 
 typedef struct SyncStateEntry {
@@ -129,5 +136,12 @@ int sync_select_latest_local_per_game(
 const char *sync_slot_str(SyncSlot slot);
 const char *sync_action_type_str(SyncActionType action);
 const char *sync_conflict_type_str(SyncConflictType conflict);
+const char *sync_save_platform_id(SyncSavePlatform platform);
+const char *sync_save_platform_display_name(SyncSavePlatform platform);
+const char *sync_save_platform_short_label(SyncSavePlatform platform);
+const char *sync_save_platform_badge(SyncSavePlatform platform);
+int sync_save_platform_restore_supported(SyncSavePlatform platform);
+int sync_save_platform_is_experimental(SyncSavePlatform platform);
+SyncSavePlatform sync_save_platform_from_id(const char *id);
 
 #endif

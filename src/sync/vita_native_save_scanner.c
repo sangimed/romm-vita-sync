@@ -1,0 +1,486 @@
+#include "vita_native_save_scanner.h"
+
+#include <psp2/io/dirent.h>
+#include <psp2/io/fcntl.h>
+#include <psp2/io/stat.h>
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "app_log.h"
+#include "backup_manager.h"
+#include "sfo_parser.h"
+#include "sync_types.h"
+#include "vita_native_save_policy.h"
+
+#define VITA_NATIVE_MAX_DEPTH 8
+#define VITA_TAR_BLOCK_SIZE 512
+
+static int has_text_local(const char *value) {
+  return (value != NULL) && (value[0] != '\0');
+}
+
+static void vita_scan_log(int verbose, AppLogLevel level, const char *format, ...) {
+  if (!verbose || format == NULL) {
+    return;
+  }
+
+  char message[256];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(message, sizeof(message), format, args);
+  va_end(args);
+  app_log_write(level, "vita-native", "%s", message);
+}
+
+static int path_exists(const char *path) {
+  SceIoStat st;
+  memset(&st, 0, sizeof(st));
+  return has_text_local(path) && (sceIoGetstat(path, &st) >= 0);
+}
+
+static int path_is_directory_local(const char *path) {
+  SceUID dfd;
+  if (!has_text_local(path)) {
+    return 0;
+  }
+  dfd = sceIoDopen(path);
+  if (dfd < 0) {
+    return 0;
+  }
+  sceIoDclose(dfd);
+  return 1;
+}
+
+static int copy_truncated(char *out, size_t out_size, const char *value) {
+  if ((out == NULL) || (out_size == 0U)) {
+    return -1;
+  }
+  out[0] = '\0';
+  if (value == NULL) {
+    return -1;
+  }
+  size_t value_len = strlen(value);
+  size_t copy_len = (value_len < (out_size - 1U)) ? value_len : (out_size - 1U);
+  memcpy(out, value, copy_len);
+  out[copy_len] = '\0';
+  return (value_len < out_size) ? 0 : -1;
+}
+
+static int join_path_suffix(const char *base, const char *suffix, char *out, size_t out_size) {
+  if (!has_text_local(base) || !has_text_local(suffix) || (out == NULL) || (out_size == 0U)) {
+    return -1;
+  }
+  size_t base_len = strlen(base);
+  size_t suffix_len = strlen(suffix);
+  if ((base_len + suffix_len + 1U) > out_size) {
+    out[0] = '\0';
+    return -1;
+  }
+  memcpy(out, base, base_len);
+  memcpy(out + base_len, suffix, suffix_len);
+  out[base_len + suffix_len] = '\0';
+  return 0;
+}
+
+static void write_two_digits(char *out, unsigned value) {
+  value %= 100U;
+  out[0] = (char)('0' + (value / 10U));
+  out[1] = (char)('0' + (value % 10U));
+}
+
+static void write_four_digits(char *out, unsigned value) {
+  value %= 10000U;
+  out[0] = (char)('0' + ((value / 1000U) % 10U));
+  out[1] = (char)('0' + ((value / 100U) % 10U));
+  out[2] = (char)('0' + ((value / 10U) % 10U));
+  out[3] = (char)('0' + (value % 10U));
+}
+
+static void format_vita_timestamp(const SceDateTime *dt, char *out, size_t out_size) {
+  if ((dt == NULL) || (out == NULL) || (out_size < ROMM_TIMESTAMP_LEN)) {
+    return;
+  }
+  write_four_digits(out, (unsigned)dt->year);
+  out[4] = '-';
+  write_two_digits(out + 5, (unsigned)dt->month);
+  out[7] = '-';
+  write_two_digits(out + 8, (unsigned)dt->day);
+  out[10] = ' ';
+  write_two_digits(out + 11, (unsigned)dt->hour);
+  out[13] = ':';
+  write_two_digits(out + 14, (unsigned)dt->minute);
+  out[16] = ':';
+  write_two_digits(out + 17, (unsigned)dt->second);
+  out[19] = '\0';
+}
+
+static int recursive_container_stats(
+    const char *path,
+    int depth,
+    uint64_t *in_out_size,
+    int64_t *in_out_latest_timestamp) {
+  if (!has_text_local(path) || (in_out_size == NULL) || (in_out_latest_timestamp == NULL) ||
+      (depth > VITA_NATIVE_MAX_DEPTH)) {
+    return -1;
+  }
+
+  SceUID dfd = sceIoDopen(path);
+  if (dfd < 0) {
+    return dfd;
+  }
+
+  SceIoDirent entry;
+  for (;;) {
+    memset(&entry, 0, sizeof(entry));
+    int read = sceIoDread(dfd, &entry);
+    if (read <= 0) {
+      break;
+    }
+    if ((strcmp(entry.d_name, ".") == 0) || (strcmp(entry.d_name, "..") == 0)) {
+      continue;
+    }
+
+    char child[ROMM_MAX_PATH_LEN];
+    if (join_path_suffix(path, "/", child, sizeof(child)) < 0 ||
+        join_path_suffix(child, entry.d_name, child, sizeof(child)) < 0) {
+      continue;
+    }
+
+    if (path_is_directory_local(child)) {
+      recursive_container_stats(child, depth + 1, in_out_size, in_out_latest_timestamp);
+      continue;
+    }
+
+    *in_out_size += (uint64_t)entry.d_stat.st_size;
+    char timestamp_text[ROMM_TIMESTAMP_LEN];
+    int64_t timestamp_unix = 0;
+    format_vita_timestamp(&entry.d_stat.st_mtime, timestamp_text, sizeof(timestamp_text));
+    if (sync_parse_local_timestamp(timestamp_text, &timestamp_unix) == 0 &&
+        timestamp_unix > *in_out_latest_timestamp) {
+      *in_out_latest_timestamp = timestamp_unix;
+    }
+  }
+
+  sceIoDclose(dfd);
+  return 0;
+}
+
+/*
+ * Validates that a candidate Vita native savedata directory has the metadata
+ * needed for an export-only backup. The policy requires keystone because it is
+ * part of Vita PFS/signature recognition; candidates without it are skipped
+ * rather than uploaded as server objects that cannot be restored safely.
+ */
+static int validate_vita_container(
+    const char *container_path,
+    int *out_has_sce_sys,
+    int *out_has_keystone,
+    int *out_has_param_sfo,
+    char *out_reason,
+    size_t out_reason_size) {
+  if (!has_text_local(container_path)) {
+    return 0;
+  }
+
+  char sce_sys[ROMM_MAX_PATH_LEN];
+  char keystone[ROMM_MAX_PATH_LEN];
+  char param_lower[ROMM_MAX_PATH_LEN];
+  char param_upper[ROMM_MAX_PATH_LEN];
+  if ((join_path_suffix(container_path, "/sce_sys", sce_sys, sizeof(sce_sys)) < 0) ||
+      (join_path_suffix(container_path, "/sce_sys/keystone", keystone, sizeof(keystone)) < 0) ||
+      (join_path_suffix(container_path, "/sce_sys/param.sfo", param_lower, sizeof(param_lower)) < 0) ||
+      (join_path_suffix(container_path, "/sce_sys/PARAM.SFO", param_upper, sizeof(param_upper)) < 0)) {
+    return 0;
+  }
+
+  int has_sce_sys = path_is_directory_local(sce_sys);
+  int has_keystone = path_exists(keystone);
+  int has_param_sfo = path_exists(param_lower) || path_exists(param_upper);
+
+  if (out_has_sce_sys != NULL) {
+    *out_has_sce_sys = has_sce_sys;
+  }
+  if (out_has_keystone != NULL) {
+    *out_has_keystone = has_keystone;
+  }
+  if (out_has_param_sfo != NULL) {
+    *out_has_param_sfo = has_param_sfo;
+  }
+
+  return vita_native_save_container_is_exportable(
+      has_sce_sys,
+      has_keystone,
+      has_param_sfo,
+      out_reason,
+      out_reason_size);
+}
+
+static void populate_vita_title(const char *container_path, char *out_title, size_t out_title_size) {
+  if ((out_title == NULL) || (out_title_size == 0U)) {
+    return;
+  }
+  out_title[0] = '\0';
+  if (!has_text_local(container_path)) {
+    return;
+  }
+
+  char param_path[ROMM_MAX_PATH_LEN];
+  if (join_path_suffix(container_path, "/sce_sys/param.sfo", param_path, sizeof(param_path)) == 0 &&
+      sfo_read_title(param_path, out_title, out_title_size) == 0) {
+    return;
+  }
+  if (join_path_suffix(container_path, "/sce_sys/PARAM.SFO", param_path, sizeof(param_path)) == 0) {
+    sfo_read_title(param_path, out_title, out_title_size);
+  }
+}
+
+int vita_native_scan_save_containers(
+    const char *root,
+    int verbose,
+    SyncSaveDescriptor *out_items,
+    int max_items) {
+  if ((out_items == NULL) || (max_items <= 0)) {
+    return -1;
+  }
+
+  const char *scan_root = has_text_local(root) ? root : VITA_NATIVE_SAVEDATA_ROOT;
+  vita_scan_log(verbose, APP_LOG_LEVEL_INFO, "capability detection: probing %s", scan_root);
+  vita_scan_log(verbose, APP_LOG_LEVEL_WARN, "%s", vita_native_save_restore_unsupported_reason());
+  vita_scan_log(verbose, APP_LOG_LEVEL_INFO, "safe restore requires validation of decrypted write context, mounting, keystone preservation and metadata handling");
+
+  SceUID dfd = sceIoDopen(scan_root);
+  if (dfd < 0) {
+    vita_scan_log(verbose, APP_LOG_LEVEL_WARN, "Vita native savedata root inaccessible status=%d path=%s", (int)dfd, scan_root);
+    return 0;
+  }
+
+  int count = 0;
+  SceIoDirent entry;
+  for (;;) {
+    memset(&entry, 0, sizeof(entry));
+    int read = sceIoDread(dfd, &entry);
+    if (read <= 0) {
+      break;
+    }
+    if ((strcmp(entry.d_name, ".") == 0) || (strcmp(entry.d_name, "..") == 0)) {
+      continue;
+    }
+
+    char container_path[ROMM_MAX_PATH_LEN];
+    if (join_path_suffix(scan_root, "/", container_path, sizeof(container_path)) < 0 ||
+        join_path_suffix(container_path, entry.d_name, container_path, sizeof(container_path)) < 0 ||
+        !path_is_directory_local(container_path)) {
+      continue;
+    }
+
+    int has_sce_sys = 0;
+    int has_keystone = 0;
+    int has_param_sfo = 0;
+    char policy_reason[128];
+    policy_reason[0] = '\0';
+    if (!validate_vita_container(container_path, &has_sce_sys, &has_keystone, &has_param_sfo, policy_reason, sizeof(policy_reason))) {
+      vita_scan_log(verbose, APP_LOG_LEVEL_WARN, "skipped Vita container candidate title_id=%s sce_sys=%d keystone=%d param_sfo=%d reason=%s", entry.d_name, has_sce_sys, has_keystone, has_param_sfo, has_text_local(policy_reason) ? policy_reason : "not exportable");
+      continue;
+    }
+    if (count >= max_items) {
+      break;
+    }
+
+    SyncSaveDescriptor *item = &out_items[count];
+    sync_save_descriptor_init(item);
+    item->platform = SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL;
+    item->slot = SYNC_SLOT_UNKNOWN;
+    copy_truncated(item->game_id, sizeof(item->game_id), entry.d_name);
+    copy_truncated(item->path, sizeof(item->path), container_path);
+    copy_truncated(item->filename, sizeof(item->filename), entry.d_name);
+    populate_vita_title(container_path, item->title, sizeof(item->title));
+
+    uint64_t total_size = 0U;
+    int64_t latest_timestamp = 0;
+    recursive_container_stats(container_path, 0, &total_size, &latest_timestamp);
+    item->size_bytes = total_size;
+    item->timestamp_unix = latest_timestamp;
+    sync_format_timestamp(latest_timestamp, item->timestamp_text, sizeof(item->timestamp_text));
+
+    vita_scan_log(verbose, APP_LOG_LEVEL_INFO, "detected Vita save container title_id=%s title=%s size=%llu sce_sys=%d keystone=%d platform=%s policy=%s", item->game_id, has_text_local(item->title) ? item->title : "(unknown)", (unsigned long long)item->size_bytes, has_sce_sys, has_keystone, sync_save_platform_id(item->platform), policy_reason);
+    count += 1;
+  }
+
+  sceIoDclose(dfd);
+  return count;
+}
+
+static void tar_write_octal(char *field, size_t field_size, unsigned long long value) {
+  if ((field == NULL) || (field_size == 0U)) {
+    return;
+  }
+  snprintf(field, field_size, "%0*llo", (int)field_size - 1, value);
+}
+
+static int tar_write_zero_block(SceUID fd) {
+  char block[VITA_TAR_BLOCK_SIZE];
+  memset(block, 0, sizeof(block));
+  return (sceIoWrite(fd, block, sizeof(block)) == (int)sizeof(block)) ? 0 : -1;
+}
+
+static int tar_write_header(SceUID fd, const char *name, uint64_t size, int is_dir) {
+  char header[VITA_TAR_BLOCK_SIZE];
+  memset(header, 0, sizeof(header));
+  snprintf(header, 100, "%s", name);
+  tar_write_octal(header + 100, 8, is_dir ? 0755ULL : 0644ULL);
+  tar_write_octal(header + 108, 8, 0ULL);
+  tar_write_octal(header + 116, 8, 0ULL);
+  tar_write_octal(header + 124, 12, is_dir ? 0ULL : (unsigned long long)size);
+  tar_write_octal(header + 136, 12, 0ULL);
+  memset(header + 148, ' ', 8);
+  header[156] = is_dir ? '5' : '0';
+  memcpy(header + 257, "ustar", 5);
+  memcpy(header + 263, "00", 2);
+
+  unsigned int checksum = 0U;
+  for (int i = 0; i < VITA_TAR_BLOCK_SIZE; ++i) {
+    checksum += (unsigned char)header[i];
+  }
+  snprintf(header + 148, 8, "%06o", checksum);
+  header[154] = '\0';
+  header[155] = ' ';
+
+  return (sceIoWrite(fd, header, sizeof(header)) == (int)sizeof(header)) ? 0 : -1;
+}
+
+static int tar_add_path(SceUID tar_fd, const char *filesystem_path, const char *archive_name, int depth) {
+  if (!has_text_local(filesystem_path) || !has_text_local(archive_name) || (depth > VITA_NATIVE_MAX_DEPTH)) {
+    return -1;
+  }
+
+  if (path_is_directory_local(filesystem_path)) {
+    char dir_name[ROMM_MAX_PATH_LEN];
+    snprintf(dir_name, sizeof(dir_name), "%s/", archive_name);
+    if (tar_write_header(tar_fd, dir_name, 0U, 1) < 0) {
+      return -1;
+    }
+
+    SceUID dfd = sceIoDopen(filesystem_path);
+    if (dfd < 0) {
+      return dfd;
+    }
+    SceIoDirent entry;
+    for (;;) {
+      memset(&entry, 0, sizeof(entry));
+      int read = sceIoDread(dfd, &entry);
+      if (read <= 0) {
+        break;
+      }
+      if ((strcmp(entry.d_name, ".") == 0) || (strcmp(entry.d_name, "..") == 0)) {
+        continue;
+      }
+      char child_fs[ROMM_MAX_PATH_LEN];
+      char child_archive[ROMM_MAX_PATH_LEN];
+      if (join_path_suffix(filesystem_path, "/", child_fs, sizeof(child_fs)) < 0 ||
+          join_path_suffix(child_fs, entry.d_name, child_fs, sizeof(child_fs)) < 0 ||
+          join_path_suffix(archive_name, "/", child_archive, sizeof(child_archive)) < 0 ||
+          join_path_suffix(child_archive, entry.d_name, child_archive, sizeof(child_archive)) < 0) {
+        continue;
+      }
+      tar_add_path(tar_fd, child_fs, child_archive, depth + 1);
+    }
+    sceIoDclose(dfd);
+    return 0;
+  }
+
+  SceIoStat st;
+  memset(&st, 0, sizeof(st));
+  if (sceIoGetstat(filesystem_path, &st) < 0) {
+    return -1;
+  }
+  if (tar_write_header(tar_fd, archive_name, (uint64_t)st.st_size, 0) < 0) {
+    return -1;
+  }
+
+  SceUID in_fd = sceIoOpen(filesystem_path, SCE_O_RDONLY, 0);
+  if (in_fd < 0) {
+    return in_fd;
+  }
+
+  char buffer[4096];
+  int read = 0;
+  while ((read = sceIoRead(in_fd, buffer, sizeof(buffer))) > 0) {
+    if (sceIoWrite(tar_fd, buffer, read) != read) {
+      sceIoClose(in_fd);
+      return -1;
+    }
+  }
+  sceIoClose(in_fd);
+
+  uint64_t remainder = ((uint64_t)st.st_size) % VITA_TAR_BLOCK_SIZE;
+  if (remainder != 0U) {
+    char padding[VITA_TAR_BLOCK_SIZE];
+    int padding_size = (int)(VITA_TAR_BLOCK_SIZE - remainder);
+    memset(padding, 0, sizeof(padding));
+    if (sceIoWrite(tar_fd, padding, padding_size) != padding_size) {
+      return -1;
+    }
+  }
+  return 0;
+}
+
+int vita_native_prepare_export_archives(
+    SyncSaveDescriptor *items,
+    int item_count,
+    const char *cache_directory,
+    int verbose) {
+  if ((items == NULL) || (item_count < 0)) {
+    return -1;
+  }
+
+  const char *cache_dir = has_text_local(cache_directory) ? cache_directory : VITA_NATIVE_EXPORT_CACHE_DIR;
+  int ensure_status = backup_manager_ensure_directory(cache_dir);
+  if (ensure_status != BACKUP_MANAGER_OK) {
+    return ensure_status;
+  }
+
+  for (int i = 0; i < item_count; ++i) {
+    SyncSaveDescriptor *item = &items[i];
+    if (item->platform != SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+      continue;
+    }
+
+    char original_path[ROMM_MAX_PATH_LEN];
+    snprintf(original_path, sizeof(original_path), "%s", item->path);
+
+    char archive_path[ROMM_MAX_PATH_LEN];
+    int64_t stamp = item->timestamp_unix > 0 ? item->timestamp_unix : 0;
+    int wrote = snprintf(archive_path, sizeof(archive_path), "%s/%s_%lld.tar", cache_dir, item->game_id, (long long)stamp);
+    if ((wrote < 0) || ((size_t)wrote >= sizeof(archive_path))) {
+      return -1;
+    }
+
+    SceUID tar_fd = sceIoOpen(archive_path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0644);
+    if (tar_fd < 0) {
+      return tar_fd;
+    }
+    int tar_status = tar_add_path(tar_fd, original_path, item->game_id, 0);
+    if (tar_status == 0) {
+      tar_write_zero_block(tar_fd);
+      tar_write_zero_block(tar_fd);
+    }
+    sceIoClose(tar_fd);
+    if (tar_status < 0) {
+      sceIoRemove(archive_path);
+      return tar_status;
+    }
+
+    SceIoStat archive_stat;
+    memset(&archive_stat, 0, sizeof(archive_stat));
+    if (sceIoGetstat(archive_path, &archive_stat) >= 0) {
+      item->size_bytes = (uint64_t)archive_stat.st_size;
+    }
+    snprintf(item->path, sizeof(item->path), "%s", archive_path);
+    sync_extract_filename(archive_path, item->filename, sizeof(item->filename));
+    vita_scan_log(verbose, APP_LOG_LEVEL_INFO, "archive export prepared title_id=%s archive=%s size=%llu", item->game_id, archive_path, (unsigned long long)item->size_bytes);
+  }
+
+  return 0;
+}

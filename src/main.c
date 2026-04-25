@@ -68,6 +68,7 @@ static void ui_initialize_state(UiAppState *state) {
 
   memset(state, 0, sizeof(*state));
   state->active_game_index = -1;
+  state->selected_save_platform = SYNC_SAVE_PLATFORM_PSONE;
   int runtime_directory_status = ensure_runtime_data_directory();
   app_config_init_defaults(&state->config);
   state->config_status = app_config_load(APP_CONFIG_DEFAULT_PATH, &state->config);

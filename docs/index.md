@@ -55,7 +55,8 @@ Current integration status:
 - real HTTP device registration is implemented (`POST /api/devices`)
 - upload/download conversion logic is integrated in `SyncEngine`
 - real HTTP save transfer callbacks are wired (`list/upload/download`)
-- local Vita saves are now mapped to RomM `rom_id` by trying `/api/platforms` first, then querying `/api/roms` with bounded, normalized `search_term` variants (`GAME_ID`, title raw/normalized, alias-stripped title, significant tokens) and local scoring (serial, title fuzzy, filename fallback)
+- local Vita saves are mapped to RomM `rom_id` by trying `/api/platforms` first, then querying `/api/roms` with bounded, normalized `search_term` variants (`GAME_ID`, title raw/normalized, alias-stripped title, significant tokens) and local scoring (serial, title fuzzy, filename fallback)
+- PS Vita native save scanning is experimental and export-only: containers must include `sce_sys`, `PARAM.SFO`, and `sce_sys/keystone` before they are uploaded as backup archives, and restore remains disabled until PFS/keystone signature metadata can be preserved or regenerated safely
 
 
 ## Execution Model (Version 1)
@@ -453,7 +454,8 @@ SyncSaveDescriptor
 ├─ origin_device
 ├─ device_is_current
 ├─ device_is_untracked
-└─ slot
+├─ slot
+└─ platform
 ```
 
 Notes:
@@ -462,8 +464,23 @@ Notes:
 - remote saves fetched from RomM are also parsed into `SyncSaveDescriptor`
 - this shared descriptor is the canonical synchronization model currently used by `SyncEngine`
 - `slot` is inferred from `SCEVMC0.VMP` or `SCEVMC1.VMP`
+- `platform` identifies `psOne` or experimental `psVita` descriptors, so PS1 and Vita-native policy can share the sync pipeline without applying PS1-only rules to Vita containers
 - before RomM mapping and transfer decisions, local descriptors are grouped per `game_id` and only the newest local card remains eligible for sync
 - when two local cards from the same game share the exact same timestamp, `SCEVMC0.VMP` wins deterministically and the UI shows a warning
+
+### PS Vita Native Save Policy
+
+PS Vita native save support is currently experimental and export-only.
+
+Scanner behavior:
+
+1. Probe `ux0:user/00/savedata/<TITLE_ID>/` containers.
+2. Require `sce_sys`, `sce_sys/keystone`, and `sce_sys/param.sfo` or `sce_sys/PARAM.SFO`.
+3. Skip any candidate missing `keystone`, because the keystone is part of Vita PFS/signature validation and an upload without it would create a server backup that cannot be restored as a recognized Vita save.
+4. Archive accepted containers as `.tar` files under `ux0:data/romm-vita-sync/cache/vita-native-exports/` before upload.
+5. Keep Vita native restore disabled with the reason `restore not supported yet for Vita native saves: PFS/keystone signature metadata must be preserved or regenerated safely`.
+
+This means the server receives faithful backup archives only when the minimum signed-container metadata is present. The app does not yet import or restore Vita native saves from RomM, because copying a server-side archive back into `savedata` without a proven PFS/keystone-aware write path can leave the save unrecognized or corrupted.
 
 ### UI Game Aggregation (`UiGameEntry`)
 
@@ -735,9 +752,10 @@ Implementation notes:
 
 ### v3 — PS Vita Native Saves
 
-- evaluate encryption constraints
-- investigate extraction workflows
-- integrate native save support where possible
+- current experimental support scans native savedata containers and uploads archive-only backups when `sce_sys`, `PARAM.SFO`, and `keystone` are present
+- implement a proven restore path that preserves or regenerates PFS/keystone signature metadata before enabling imports from RomM
+- investigate extraction and decrypted-write workflows
+- integrate bidirectional native save support only after restore safety is validated
 
 ### v4 — Emulator Environments
 

@@ -160,6 +160,7 @@ void sync_save_descriptor_init(SyncSaveDescriptor *item) {
   item->rom_id = -1;
   item->remote_id = -1;
   item->slot = SYNC_SLOT_UNKNOWN;
+  item->platform = SYNC_SAVE_PLATFORM_PSONE;
 }
 
 /*
@@ -370,6 +371,15 @@ int sync_select_latest_local_per_game(
 
   int selected_count = 0;
   for (int i = 0; i < item_count; ++i) {
+    if (items[i].platform != SYNC_SAVE_PLATFORM_PSONE) {
+      out_selected_mask[i] = 1;
+      if (out_selection_reasons != NULL) {
+        out_selection_reasons[i] = SYNC_LOCAL_SELECTION_ONLY_ITEM;
+      }
+      selected_count += 1;
+      continue;
+    }
+
     int already_grouped = 0;
     for (int j = 0; j < i; ++j) {
       if (local_items_share_game_group(&items[i], &items[j])) {
@@ -485,4 +495,74 @@ const char *sync_conflict_type_str(SyncConflictType conflict) {
     default:
       return "none";
   }
+}
+
+const char *sync_save_platform_id(SyncSavePlatform platform) {
+  switch (platform) {
+    case SYNC_SAVE_PLATFORM_PSONE:
+      return "psOne";
+    case SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL:
+      return "psVita";
+    case SYNC_SAVE_PLATFORM_UNKNOWN:
+    default:
+      return "unknown";
+  }
+}
+
+const char *sync_save_platform_display_name(SyncSavePlatform platform) {
+  switch (platform) {
+    case SYNC_SAVE_PLATFORM_PSONE:
+      return "PS1 / psOne";
+    case SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL:
+      return "PS Vita native saves";
+    case SYNC_SAVE_PLATFORM_UNKNOWN:
+    default:
+      return "Unknown platform";
+  }
+}
+
+const char *sync_save_platform_short_label(SyncSavePlatform platform) {
+  switch (platform) {
+    case SYNC_SAVE_PLATFORM_PSONE:
+      return "PS1";
+    case SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL:
+      return "VITA";
+    case SYNC_SAVE_PLATFORM_UNKNOWN:
+    default:
+      return "?";
+  }
+}
+
+const char *sync_save_platform_badge(SyncSavePlatform platform) {
+  switch (platform) {
+    case SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL:
+      return "experimental - restore disabled";
+    case SYNC_SAVE_PLATFORM_PSONE:
+    case SYNC_SAVE_PLATFORM_UNKNOWN:
+    default:
+      return "";
+  }
+}
+
+int sync_save_platform_restore_supported(SyncSavePlatform platform) {
+  return platform == SYNC_SAVE_PLATFORM_PSONE;
+}
+
+int sync_save_platform_is_experimental(SyncSavePlatform platform) {
+  return platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL;
+}
+
+SyncSavePlatform sync_save_platform_from_id(const char *id) {
+  if (!has_text(id)) {
+    return SYNC_SAVE_PLATFORM_UNKNOWN;
+  }
+  if (sync_string_ieq(id, "psOne") || sync_string_ieq(id, "ps1") ||
+      sync_string_ieq(id, "psx") || sync_string_ieq(id, "PSONE")) {
+    return SYNC_SAVE_PLATFORM_PSONE;
+  }
+  if (sync_string_ieq(id, "psVita") || sync_string_ieq(id, "vita") ||
+      sync_string_ieq(id, "VITA_NATIVE_EXPERIMENTAL")) {
+    return SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL;
+  }
+  return SYNC_SAVE_PLATFORM_UNKNOWN;
 }
