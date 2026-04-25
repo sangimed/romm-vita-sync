@@ -56,7 +56,7 @@ Current integration status:
 - upload/download conversion logic is integrated in `SyncEngine`
 - real HTTP save transfer callbacks are wired (`list/upload/download`)
 - local Vita saves are mapped to RomM `rom_id` by trying `/api/platforms` first, then querying `/api/roms` with bounded, normalized `search_term` variants (`GAME_ID`, title raw/normalized, alias-stripped title, significant tokens) and local scoring (serial, title fuzzy, filename fallback)
-- PS Vita native save scanning is experimental and export-only: containers must include `sce_sys`, `PARAM.SFO`, and `sce_sys/keystone` before they are uploaded as backup archives, and restore remains disabled until PFS/keystone signature metadata can be preserved or regenerated safely
+- PS Vita native save scanning is experimental and export-only: containers must belong to official retail/digital games (excluding homebrew), include `sce_sys`, `PARAM.SFO`, and `sce_sys/keystone` before they are uploaded as backup archives, and restore remains disabled until PFS/keystone signature metadata can be preserved or regenerated safely
 
 
 ## Execution Model (Version 1)
@@ -475,10 +475,11 @@ PS Vita native save support is currently experimental and export-only.
 Scanner behavior:
 
 1. Probe `ux0:user/00/savedata/<TITLE_ID>/` containers.
-2. Require `sce_sys`, `sce_sys/keystone`, and `sce_sys/param.sfo` or `sce_sys/PARAM.SFO`.
-3. Skip any candidate missing `keystone`, because the keystone is part of Vita PFS/signature validation and an upload without it would create a server backup that cannot be restored as a recognized Vita save.
-4. Archive accepted containers as `.tar` files under `ux0:data/romm-vita-sync/cache/vita-native-exports/` before upload.
-5. Keep Vita native restore disabled with the reason `restore not supported yet for Vita native saves: PFS/keystone signature metadata must be preserved or regenerated safely`.
+2. Filter out non-official games. Only retail and digital games matching the official Title ID format (`PCS[A-H]` followed by five digits) are eligible for synchronization. Homebrew applications are explicitly excluded.
+3. Require `sce_sys`, `sce_sys/keystone`, and `sce_sys/param.sfo` or `sce_sys/PARAM.SFO`.
+4. Skip any candidate missing `keystone`, because the keystone is part of Vita PFS/signature validation and an upload without it would create a server backup that cannot be restored as a recognized Vita save.
+5. Archive accepted containers as `.tar` files under `ux0:data/romm-vita-sync/cache/vita-native-exports/` before upload.
+6. Keep Vita native restore disabled with the reason `restore not supported yet for Vita native saves: PFS/keystone signature metadata must be preserved or regenerated safely`.
 
 This means the server receives faithful backup archives only when the minimum signed-container metadata is present. The app does not yet import or restore Vita native saves from RomM, because copying a server-side archive back into `savedata` without a proven PFS/keystone-aware write path can leave the save unrecognized or corrupted.
 
