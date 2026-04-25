@@ -17,8 +17,47 @@
 #define VITA_NATIVE_MAX_DEPTH 8
 #define VITA_TAR_BLOCK_SIZE 512
 
+/*
+ * Native savedata PARAM.SFO files can be sparse, so resolve a TITLE_ID through
+ * installed app/appmeta metadata before falling back to the save container.
+ */
+static const char *const VITA_NATIVE_METADATA_PREFIXES[] = {
+    "ux0:",
+    "ur0:",
+    "uma0:",
+    "imc0:",
+    "xmc0:",
+    "grw0:",
+    "gro0:",
+};
+
+static const char *const VITA_NATIVE_APP_TITLE_KEYS[] = {
+    "TITLE",
+};
+
+static const char *const VITA_NATIVE_SAVEDATA_TITLE_KEYS[] = {
+    "TITLE",
+    "SAVEDATA_TITLE",
+    "SUB_TITLE",
+    "DETAIL",
+};
+
 static int has_text_local(const char *value) {
   return (value != NULL) && (value[0] != '\0');
+}
+
+static int has_visible_text(const char *value) {
+  if (value == NULL) {
+    return 0;
+  }
+
+  while (*value != '\0') {
+    if ((unsigned char)*value > ' ') {
+      return 1;
+    }
+    value++;
+  }
+  return 0;
 }
 
 static void vita_scan_log(int verbose, AppLogLevel level, const char *format, ...) {
@@ -82,6 +121,98 @@ static int join_path_suffix(const char *base, const char *suffix, char *out, siz
   memcpy(out + base_len, suffix, suffix_len);
   out[base_len + suffix_len] = '\0';
   return 0;
+}
+
+static int read_first_sfo_text_key(
+    const char *sfo_path,
+    const char *const *keys,
+    size_t key_count,
+    char *out_value,
+    size_t out_size) {
+  if (!has_text_local(sfo_path) || (keys == NULL) || (out_value == NULL) || (out_size == 0U)) {
+    return -1;
+  }
+
+  out_value[0] = '\0';
+  for (size_t i = 0; i < key_count; ++i) {
+    char candidate[ROMM_GAME_TITLE_LEN];
+    candidate[0] = '\0';
+    if (has_text_local(keys[i]) &&
+        sfo_read_key(sfo_path, keys[i], candidate, sizeof(candidate)) == 0 &&
+        has_visible_text(candidate)) {
+      copy_truncated(out_value, out_size, candidate);
+      return 0;
+    }
+  }
+
+  return -1;
+}
+
+static int read_vita_title_from_sfo(
+    const char *sfo_path,
+    char *out_title,
+    size_t out_title_size) {
+  return read_first_sfo_text_key(
+      sfo_path,
+      VITA_NATIVE_APP_TITLE_KEYS,
+      sizeof(VITA_NATIVE_APP_TITLE_KEYS) / sizeof(VITA_NATIVE_APP_TITLE_KEYS[0]),
+      out_title,
+      out_title_size);
+}
+
+static int try_vita_title_sfo_path(
+    const char *path_format,
+    const char *prefix,
+    const char *title_id,
+    char *out_title,
+    size_t out_title_size) {
+  if (!has_text_local(path_format) || !has_text_local(prefix) || !has_text_local(title_id) ||
+      (out_title == NULL) || (out_title_size == 0U)) {
+    return -1;
+  }
+
+  char sfo_path[ROMM_MAX_PATH_LEN];
+  int wrote = snprintf(sfo_path, sizeof(sfo_path), path_format, prefix, title_id);
+  if ((wrote < 0) || ((size_t)wrote >= sizeof(sfo_path))) {
+    return -1;
+  }
+
+  return read_vita_title_from_sfo(sfo_path, out_title, out_title_size);
+}
+
+static int populate_vita_title_from_installed_app(
+    const char *title_id,
+    char *out_title,
+    size_t out_title_size) {
+  if (!has_text_local(title_id) || (out_title == NULL) || (out_title_size == 0U)) {
+    return -1;
+  }
+
+  static const char *const app_sfo_formats[] = {
+      "%sapp/%s/sce_sys/param.sfo",
+      "%sapp/%s/sce_sys/PARAM.SFO",
+      "%sappmeta/%s/param.sfo",
+      "%sappmeta/%s/PARAM.SFO",
+  };
+
+  for (size_t prefix_index = 0;
+       prefix_index < (sizeof(VITA_NATIVE_METADATA_PREFIXES) / sizeof(VITA_NATIVE_METADATA_PREFIXES[0]));
+       ++prefix_index) {
+    for (size_t format_index = 0;
+         format_index < (sizeof(app_sfo_formats) / sizeof(app_sfo_formats[0]));
+         ++format_index) {
+      if (try_vita_title_sfo_path(
+              app_sfo_formats[format_index],
+              VITA_NATIVE_METADATA_PREFIXES[prefix_index],
+              title_id,
+              out_title,
+              out_title_size) == 0) {
+        return 0;
+      }
+    }
+  }
+
+  return -1;
 }
 
 static void write_two_digits(char *out, unsigned value) {
@@ -217,22 +348,41 @@ static int validate_vita_container(
       out_reason_size);
 }
 
-static void populate_vita_title(const char *container_path, char *out_title, size_t out_title_size) {
+static void populate_vita_title(
+    const char *container_path,
+    const char *title_id,
+    char *out_title,
+    size_t out_title_size) {
   if ((out_title == NULL) || (out_title_size == 0U)) {
     return;
   }
   out_title[0] = '\0';
+
+  if (populate_vita_title_from_installed_app(title_id, out_title, out_title_size) == 0) {
+    return;
+  }
+
   if (!has_text_local(container_path)) {
     return;
   }
 
   char param_path[ROMM_MAX_PATH_LEN];
   if (join_path_suffix(container_path, "/sce_sys/param.sfo", param_path, sizeof(param_path)) == 0 &&
-      sfo_read_title(param_path, out_title, out_title_size) == 0) {
+      read_first_sfo_text_key(
+          param_path,
+          VITA_NATIVE_SAVEDATA_TITLE_KEYS,
+          sizeof(VITA_NATIVE_SAVEDATA_TITLE_KEYS) / sizeof(VITA_NATIVE_SAVEDATA_TITLE_KEYS[0]),
+          out_title,
+          out_title_size) == 0) {
     return;
   }
   if (join_path_suffix(container_path, "/sce_sys/PARAM.SFO", param_path, sizeof(param_path)) == 0) {
-    sfo_read_title(param_path, out_title, out_title_size);
+    read_first_sfo_text_key(
+        param_path,
+        VITA_NATIVE_SAVEDATA_TITLE_KEYS,
+        sizeof(VITA_NATIVE_SAVEDATA_TITLE_KEYS) / sizeof(VITA_NATIVE_SAVEDATA_TITLE_KEYS[0]),
+        out_title,
+        out_title_size);
   }
 }
 
@@ -267,6 +417,14 @@ int vita_native_scan_save_containers(
     if ((strcmp(entry.d_name, ".") == 0) || (strcmp(entry.d_name, "..") == 0)) {
       continue;
     }
+    if (!vita_native_save_title_id_is_official_game(entry.d_name)) {
+      vita_scan_log(
+          verbose,
+          APP_LOG_LEVEL_INFO,
+          "skipped non-official Vita savedata container title_id=%s",
+          entry.d_name);
+      continue;
+    }
 
     char container_path[ROMM_MAX_PATH_LEN];
     if (join_path_suffix(scan_root, "/", container_path, sizeof(container_path)) < 0 ||
@@ -295,7 +453,7 @@ int vita_native_scan_save_containers(
     copy_truncated(item->game_id, sizeof(item->game_id), entry.d_name);
     copy_truncated(item->path, sizeof(item->path), container_path);
     copy_truncated(item->filename, sizeof(item->filename), entry.d_name);
-    populate_vita_title(container_path, item->title, sizeof(item->title));
+    populate_vita_title(container_path, entry.d_name, item->title, sizeof(item->title));
 
     uint64_t total_size = 0U;
     int64_t latest_timestamp = 0;

@@ -31,10 +31,27 @@ static void test_restore_policy_is_explicitly_unsupported_until_resigning_exists
   assert(strstr(reason, "keystone") != NULL);
 }
 
+static void test_official_vita_game_title_id_policy(void) {
+  assert(vita_native_save_title_id_is_official_game("PCSA00011") == 1);
+  assert(vita_native_save_title_id_is_official_game("PCSE01234") == 1);
+  assert(vita_native_save_title_id_is_official_game("PCSH99999") == 1);
+  assert(vita_native_save_title_id_is_official_game("pcsg00123") == 1);
+
+  assert(vita_native_save_title_id_is_official_game(NULL) == 0);
+  assert(vita_native_save_title_id_is_official_game("") == 0);
+  assert(vita_native_save_title_id_is_official_game("VITASHELL") == 0);
+  assert(vita_native_save_title_id_is_official_game("MOLECULA") == 0);
+  assert(vita_native_save_title_id_is_official_game("NPXS10000") == 0);
+  assert(vita_native_save_title_id_is_official_game("PCSI00001") == 0);
+  assert(vita_native_save_title_id_is_official_game("PCSA0001") == 0);
+  assert(vita_native_save_title_id_is_official_game("PCSA0001A") == 0);
+}
+
 int main(void) {
   test_export_requires_keystone_signature_metadata();
   test_export_accepts_complete_signed_container_metadata();
   test_restore_policy_is_explicitly_unsupported_until_resigning_exists();
+  test_official_vita_game_title_id_policy();
 
   printf("All vita_native_save_policy tests passed.\n");
   return 0;

@@ -33,6 +33,42 @@ int vita_native_save_container_is_exportable(
   return 1;
 }
 
+static char ascii_upper(char value) {
+  if ((value >= 'a') && (value <= 'z')) {
+    return (char)(value - ('a' - 'A'));
+  }
+  return value;
+}
+
+static int ascii_digit(char value) {
+  return (value >= '0') && (value <= '9');
+}
+
+int vita_native_save_title_id_is_official_game(const char *title_id) {
+  if (title_id == NULL) {
+    return 0;
+  }
+
+  if ((ascii_upper(title_id[0]) != 'P') ||
+      (ascii_upper(title_id[1]) != 'C') ||
+      (ascii_upper(title_id[2]) != 'S')) {
+    return 0;
+  }
+
+  char region = ascii_upper(title_id[3]);
+  if ((region < 'A') || (region > 'H')) {
+    return 0;
+  }
+
+  for (int i = 4; i < 9; ++i) {
+    if (!ascii_digit(title_id[i])) {
+      return 0;
+    }
+  }
+
+  return title_id[9] == '\0';
+}
+
 const char *vita_native_save_restore_unsupported_reason(void) {
   return "restore not supported yet for Vita native saves: PFS/keystone signature metadata must be preserved or regenerated safely";
 }

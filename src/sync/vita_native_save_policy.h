@@ -19,6 +19,14 @@ int vita_native_save_container_is_exportable(
     size_t out_reason_size);
 
 /*
+ * Returns non-zero when a savedata TITLE_ID matches the official PS Vita game
+ * product-code shape used by regional retail/digital games: PCS[A-H] followed
+ * by five digits. Homebrew commonly uses free-form title IDs and is excluded
+ * from the native game list by this policy.
+ */
+int vita_native_save_title_id_is_official_game(const char *title_id);
+
+/*
  * Returns the fixed restore-block reason for Vita native saves. Native Vita
  * restore remains disabled until the project has a proven PFS/keystone-aware
  * write path that can preserve or regenerate the console-recognized signature
