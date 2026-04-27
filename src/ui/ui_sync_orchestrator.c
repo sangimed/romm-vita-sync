@@ -18,6 +18,7 @@
 #include "sync_engine.h"
 #include "vita_native_save_scanner.h"
 #include "ui_common.h"
+#include "ui_config_editor.h"
 #include "ui_dialogs.h"
 #include "ui_navigation.h"
 #include "ui_render.h"
@@ -152,6 +153,7 @@ static const char *ui_sync_local_selection_reason_str(SyncLocalSelectionReason r
 static int ui_prepare_ps1_sync_candidates(
     SyncSaveDescriptor *items,
     int item_count,
+    SyncSavePlatform platform,
     int *out_warning_count) {
   if ((items == NULL) || (item_count < 0) || (item_count > ROMM_SYNC_MAX_ITEMS)) {
     return 0;
@@ -175,7 +177,8 @@ static int ui_prepare_ps1_sync_candidates(
   if ((item_count > 0) && (selected_count != item_count)) {
     ui_sync_log_write(
         APP_LOG_LEVEL_INFO,
-        "PS1 latest-card rule active: %d sync candidate(s) selected from %d local target(s)",
+        "%s latest-local rule active: %d sync candidate(s) selected from %d local target(s)",
+        sync_save_platform_short_label(platform),
         selected_count,
         item_count);
   }
@@ -190,7 +193,8 @@ static int ui_prepare_ps1_sync_candidates(
     sync_format_timestamp(items[i].timestamp_unix, selected_timestamp, sizeof(selected_timestamp));
     ui_sync_log_write(
         APP_LOG_LEVEL_INFO,
-        "PS1 candidate selected: game=%s file=%s slot=%s timestamp=%s unix=%lld reason=%s",
+        "%s candidate selected: game=%s file=%s slot=%s timestamp=%s unix=%lld reason=%s",
+        sync_save_platform_short_label(platform),
         has_text(items[i].game_id) ? items[i].game_id : "(unknown)",
         has_text(items[i].filename) ? items[i].filename : items[i].path,
         sync_slot_str(items[i].slot),
@@ -768,9 +772,13 @@ int ui_run_sync_pipeline(
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "... %d more local save(s) omitted", detected_item_count - preview_count);
   }
 
-  work_item_count = ui_prepare_ps1_sync_candidates(work_items, detected_item_count, &selection_warning_count);
+  work_item_count = ui_prepare_ps1_sync_candidates(
+      work_items,
+      detected_item_count,
+      state->selected_save_platform,
+      &selection_warning_count);
   if (work_item_count <= 0) {
-    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync failed: no PS1 sync candidate was selected");
+    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync failed: no sync candidate was selected");
     ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: no sync candidate selected");
     state->sync_feedback.running = 0;
     state->sync_feedback.completed = 1;
@@ -908,7 +916,7 @@ int ui_run_sync_pipeline(
 
   if (state->selected_save_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
     ui_sync_feedback_set_message(&state->sync_feedback, "Preparing Vita archive export...");
-    ui_sync_log_write(APP_LOG_LEVEL_WARN, "restore not supported yet for Vita native saves");
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Vita native restore/download is disabled; upload archive sync is enabled");
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "Preparing archive-only export for %d Vita native save container(s)", work_item_count);
     int archive_status = vita_native_prepare_export_archives(
         work_items,
@@ -951,6 +959,22 @@ int ui_run_sync_pipeline(
   }
   ui_sync_log_write(APP_LOG_LEVEL_INFO, "Auto-apply conflicts enabled: recommended actions will execute without confirmation");
 
+  AppConfig sync_http_config;
+  RommClient sync_client;
+  const RommClient *active_client = &state->romm_client;
+  if (state->selected_save_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+    memcpy(&sync_http_config, &state->config, sizeof(sync_http_config));
+    snprintf(
+        sync_http_config.romm_save_emulator,
+        sizeof(sync_http_config.romm_save_emulator),
+        "%s",
+        romm_http_default_save_emulator_for_platform(SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL));
+    memcpy(&sync_client, &state->romm_client, sizeof(sync_client));
+    sync_client.context = &sync_http_config;
+    active_client = &sync_client;
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Using RomM save backend for Vita native archives: %s", sync_http_config.romm_save_emulator);
+  }
+
   SyncEngineConfig config;
   sync_engine_config_init(&config);
   config.device_id = has_text(state->config.device_id) ? state->config.device_id : NULL;
@@ -977,7 +1001,7 @@ int ui_run_sync_pipeline(
   config.progress_user_data = &progress_bridge;
 
   int sync_status = sync_engine_run(
-      &config, work_items, work_item_count, &state->romm_client, &state->sync_report);
+      &config, work_items, work_item_count, active_client, &state->sync_report);
 
   state->sync_feedback.running = 0;
   state->sync_feedback.completed = 1;

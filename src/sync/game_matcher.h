@@ -58,7 +58,7 @@ int game_matcher_find_remote_index(
     int remote_count);
 
 /*
- * Resolves a RomM rom_id for a local PS1 save descriptor using deterministic stages:
+ * Resolves a RomM rom_id for a local save descriptor using deterministic stages:
  * serial metadata (GAME_ID), then title against cleaned RomM names, then filename patterns.
  * Returns rom_id on success, GAME_MATCHER_AMBIGUOUS when multiple candidates tie,
  * or -1 when no safe deterministic match exists.

@@ -28,11 +28,11 @@
 #define ROMM_HTTP_MAX_SEARCH_ROMS 256
 #define ROMM_HTTP_PAGE_LIMIT 200
 #define ROMM_HTTP_ROM_PAGE_LIMIT 10
-#define ROMM_HTTP_MAX_UPLOAD_SIZE (2 * 1024 * 1024)
+#define ROMM_HTTP_MAX_UPLOAD_SIZE (32 * 1024 * 1024)
 #define ROMM_HTTP_MAX_FILENAME 128
 #define ROMM_HTTP_MAX_PLATFORM_SLUG 64
 #define ROMM_HTTP_MAX_SEARCH_TERM ROMM_GAME_TITLE_LEN
-#define ROMM_HTTP_MAX_SEARCH_VARIANTS 6
+#define ROMM_HTTP_MAX_SEARCH_VARIANTS 8
 #define ROMM_HTTP_LOG_BODY_PREVIEW 160
 #define ROMM_HTTP_LOG_BODY_DEBUG 224
 #define ROMM_HTTP_FALLBACK_URL_BUFFER_SIZE (APP_CONFIG_MAX_URL_LEN + 256)
@@ -40,6 +40,9 @@
 #define ROMM_HTTP_TLS_DISABLE_UNSUPPORTED 0x8043506Bu
 #define ROMM_HTTP_DEFAULT_PLATFORM_FILTER "psx"
 #define ROMM_HTTP_DEFAULT_SAVE_EMULATOR "pcsx_rearmed"
+#define ROMM_HTTP_DEFAULT_VITA_SAVE_EMULATOR "vita3k"
+#define ROMM_HTTP_MAX_PLATFORM_CANDIDATES 8
+#define ROMM_HTTP_ROM_FIELDS "id,name,fs_name,fs_name_no_tags,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id,alternative_names,alternativeNames"
 /*
  * Keep verify-tls override compatible with retail firmware behavior.
  * Some Vita builds reject multi-flag disable masks with 0x8043506B.
@@ -72,6 +75,25 @@ typedef struct HttpResponseMeta {
 } HttpResponseMeta;
 
 typedef GameMatcherRomCandidate RomCatalogEntry;
+
+typedef struct RommPlatformProfile {
+  SyncSavePlatform save_platform;
+  const char *slug_candidates[ROMM_HTTP_MAX_PLATFORM_CANDIDATES];
+} RommPlatformProfile;
+
+typedef struct RommResolvedPlatform {
+  SyncSavePlatform save_platform;
+  char primary_filter[ROMM_HTTP_MAX_PLATFORM_SLUG];
+  char platform_filter[ROMM_HTTP_MAX_PLATFORM_SLUG];
+  int platform_id;
+} RommResolvedPlatform;
+
+typedef enum RommRomQueryMode {
+  ROMM_ROM_QUERY_PLATFORM_IDS = 0,
+  ROMM_ROM_QUERY_PLATFORM_ID = 1,
+  ROMM_ROM_QUERY_PLATFORM_SLUG = 2,
+  ROMM_ROM_QUERY_UNFILTERED = 3
+} RommRomQueryMode;
 
 static void http_runtime_term(HttpRuntimeState *state);
 static int url_is_https(const char *url);
@@ -693,6 +715,111 @@ static const char *romm_catalog_platform_filter(const AppConfig *config) {
   return ROMM_HTTP_DEFAULT_PLATFORM_FILTER;
 }
 
+static const RommPlatformProfile *romm_platform_profile_for_save_platform(SyncSavePlatform platform) {
+  static const RommPlatformProfile profiles[] = {
+      {
+          SYNC_SAVE_PLATFORM_PSONE,
+          {"psx", "ps1", NULL},
+      },
+      {
+          SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL,
+          {"psvita", "vita", "ps-vita", "ps_vita", "playstation-vita", "sony-playstation-vita", NULL},
+      },
+  };
+
+  for (size_t i = 0; i < (sizeof(profiles) / sizeof(profiles[0])); ++i) {
+    if (profiles[i].save_platform == platform) {
+      return &profiles[i];
+    }
+  }
+
+  return NULL;
+}
+
+static int add_platform_candidate(
+    char candidates[][ROMM_HTTP_MAX_PLATFORM_SLUG],
+    int *candidate_count,
+    int max_candidates,
+    const char *slug) {
+  if ((candidates == NULL) || (candidate_count == NULL) || !has_text(slug)) {
+    return 0;
+  }
+  if (*candidate_count >= max_candidates) {
+    return 0;
+  }
+
+  for (int i = 0; i < *candidate_count; ++i) {
+    if (sync_string_ieq(candidates[i], slug)) {
+      return 0;
+    }
+  }
+
+  safe_copy(candidates[*candidate_count], ROMM_HTTP_MAX_PLATFORM_SLUG, slug);
+  *candidate_count += 1;
+  return 1;
+}
+
+static int build_romm_platform_candidates(
+    const AppConfig *config,
+    const SyncSaveDescriptor *item,
+    char candidates[][ROMM_HTTP_MAX_PLATFORM_SLUG],
+    int max_candidates) {
+  if ((candidates == NULL) || (max_candidates <= 0)) {
+    return 0;
+  }
+
+  int candidate_count = 0;
+  SyncSavePlatform platform = (item != NULL) ? item->platform : SYNC_SAVE_PLATFORM_UNKNOWN;
+  const RommPlatformProfile *profile = romm_platform_profile_for_save_platform(platform);
+
+  if (platform == SYNC_SAVE_PLATFORM_PSONE) {
+    add_platform_candidate(candidates, &candidate_count, max_candidates, romm_catalog_platform_filter(config));
+  }
+
+  if (profile != NULL) {
+    for (int i = 0;
+         (i < ROMM_HTTP_MAX_PLATFORM_CANDIDATES) && has_text(profile->slug_candidates[i]);
+         ++i) {
+      add_platform_candidate(candidates, &candidate_count, max_candidates, profile->slug_candidates[i]);
+    }
+  }
+
+  if (candidate_count == 0) {
+    add_platform_candidate(candidates, &candidate_count, max_candidates, romm_catalog_platform_filter(config));
+  }
+
+  return candidate_count;
+}
+
+static void build_platform_candidate_summary(
+    char candidates[][ROMM_HTTP_MAX_PLATFORM_SLUG],
+    int candidate_count,
+    char *out_summary,
+    size_t out_summary_size) {
+  if ((out_summary == NULL) || (out_summary_size == 0U)) {
+    return;
+  }
+  out_summary[0] = '\0';
+
+  for (int i = 0; i < candidate_count; ++i) {
+    if (!has_text(candidates[i])) {
+      continue;
+    }
+    size_t used = strlen(out_summary);
+    const char *separator = (used > 0U) ? "," : "";
+    int written = snprintf(
+        out_summary + used,
+        out_summary_size - used,
+        "%s%s",
+        separator,
+        candidates[i]);
+    if ((written <= 0) || ((size_t)written >= (out_summary_size - used))) {
+      out_summary[out_summary_size - 1U] = '\0';
+      return;
+    }
+  }
+}
+
 /*
  * Returns configured emulator slug used for /api/saves endpoints.
  */
@@ -701,6 +828,39 @@ static const char *romm_save_emulator(const AppConfig *config) {
     return config->romm_save_emulator;
   }
   return ROMM_HTTP_DEFAULT_SAVE_EMULATOR;
+}
+
+static const char *romm_save_emulator_for_item(
+    const AppConfig *config,
+    const SyncSaveDescriptor *item) {
+  if ((item != NULL) &&
+      (item->platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) &&
+      ((config == NULL) || !has_text(config->romm_save_emulator) ||
+       sync_string_ieq(config->romm_save_emulator, ROMM_HTTP_DEFAULT_SAVE_EMULATOR))) {
+    return ROMM_HTTP_DEFAULT_VITA_SAVE_EMULATOR;
+  }
+  return romm_save_emulator(config);
+}
+
+const char *romm_http_default_save_emulator_for_platform(SyncSavePlatform platform) {
+  if (platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+    return ROMM_HTTP_DEFAULT_VITA_SAVE_EMULATOR;
+  }
+  return ROMM_HTTP_DEFAULT_SAVE_EMULATOR;
+}
+
+static const char *romm_rom_query_mode_label(RommRomQueryMode mode) {
+  switch (mode) {
+    case ROMM_ROM_QUERY_PLATFORM_IDS:
+      return "platform_ids";
+    case ROMM_ROM_QUERY_PLATFORM_ID:
+      return "platform_id";
+    case ROMM_ROM_QUERY_PLATFORM_SLUG:
+      return "platform";
+    case ROMM_ROM_QUERY_UNFILTERED:
+    default:
+      return "unfiltered";
+  }
 }
 
 /*
@@ -934,9 +1094,15 @@ static int build_rom_search_variants(
     append_search_variant(game_id_term, "game_id", out_terms, out_reasons, &count);
   }
 
-  char raw_title_term[ROMM_HTTP_MAX_SEARCH_TERM];
-  if (build_compact_search_term(local_item->title, raw_title_term, sizeof(raw_title_term)) == 0) {
-    append_search_variant(raw_title_term, "title_raw", out_terms, out_reasons, &count);
+  char exact_title_term[ROMM_HTTP_MAX_SEARCH_TERM];
+  if (has_text(local_item->title) &&
+      (copy_trimmed_range(local_item->title, local_item->title + strlen(local_item->title), exact_title_term, sizeof(exact_title_term)) == 0)) {
+    append_search_variant(exact_title_term, "title_exact", out_terms, out_reasons, &count);
+  }
+
+  char compact_title_term[ROMM_HTTP_MAX_SEARCH_TERM];
+  if (build_compact_search_term(local_item->title, compact_title_term, sizeof(compact_title_term)) == 0) {
+    append_search_variant(compact_title_term, "title_compact", out_terms, out_reasons, &count);
   }
 
   char normalized_title[ROMM_HTTP_MAX_SEARCH_TERM];
@@ -1165,6 +1331,28 @@ static void build_upload_filename(const SyncSaveDescriptor *local_item, char *ou
     return;
   }
 
+  if (local_item->platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+    if (has_text(local_item->filename)) {
+      safe_copy(out_filename, out_size, local_item->filename);
+      return;
+    }
+
+    char normalized_title_id[ROMM_GAME_ID_LEN];
+    normalize_identifier(local_item->game_id, normalized_title_id, sizeof(normalized_title_id));
+    if (!has_text(normalized_title_id)) {
+      safe_copy(normalized_title_id, sizeof(normalized_title_id), "vitasave");
+    }
+
+    char timestamp_token[32];
+    build_upload_timestamp_token(local_item, timestamp_token, sizeof(timestamp_token));
+    if (has_text(timestamp_token)) {
+      snprintf(out_filename, out_size, "%s_%s.tar", normalized_title_id, timestamp_token);
+    } else {
+      snprintf(out_filename, out_size, "%s.tar", normalized_title_id);
+    }
+    return;
+  }
+
   char normalized_game_id[ROMM_GAME_ID_LEN];
   normalize_identifier(local_item->game_id, normalized_game_id, sizeof(normalized_game_id));
   if (!has_text(normalized_game_id)) {
@@ -1188,17 +1376,12 @@ static void build_upload_filename(const SyncSaveDescriptor *local_item, char *ou
   }
 }
 
-/*
- * Reads a local file entirely into memory, bounded for upload safety.
- */
-static int read_file_to_memory(const char *path, unsigned char **out_data, size_t *out_size) {
-  if (!has_text(path) || (out_data == NULL) || (out_size == NULL)) {
+static int read_file_size_bounded(const char *path, size_t *out_size) {
+  if (!has_text(path) || (out_size == NULL)) {
     return -1;
   }
 
-  *out_data = NULL;
   *out_size = 0U;
-
   FILE *file = fopen(path, "rb");
   if (file == NULL) {
     return -1;
@@ -1213,30 +1396,32 @@ static int read_file_to_memory(const char *path, unsigned char **out_data, size_
     fclose(file);
     return -1;
   }
-  if (fseek(file, 0, SEEK_SET) != 0) {
-    fclose(file);
+
+  fclose(file);
+  *out_size = (size_t)length;
+  return 0;
+}
+
+static int read_file_exact_into(const char *path, unsigned char *destination, size_t expected_size) {
+  if (!has_text(path) || ((destination == NULL) && (expected_size > 0U))) {
     return -1;
   }
 
-  unsigned char *buffer = (unsigned char *)malloc((size_t)length);
-  if ((buffer == NULL) && (length > 0L)) {
-    fclose(file);
+  FILE *file = fopen(path, "rb");
+  if (file == NULL) {
     return -1;
   }
 
   size_t read_size = 0U;
-  if (length > 0L) {
-    read_size = fread(buffer, 1U, (size_t)length, file);
-    if (read_size != (size_t)length) {
-      free(buffer);
-      fclose(file);
-      return -1;
-    }
+  if (expected_size > 0U) {
+    read_size = fread(destination, 1U, expected_size, file);
   }
-
+  int extra = fgetc(file);
   fclose(file);
-  *out_data = buffer;
-  *out_size = read_size;
+
+  if ((read_size != expected_size) || (extra != EOF)) {
+    return -1;
+  }
   return 0;
 }
 
@@ -1542,6 +1727,60 @@ static int next_object_in_array(
   *out_object_end = object_end + 1;
   *out_next_cursor = object_end + 1;
   return 0;
+}
+
+static int find_object_field_range(
+    const char *start,
+    const char *end,
+    const char *field_name,
+    const char **out_object_start,
+    const char **out_object_end) {
+  if ((start == NULL) || (end == NULL) || (start >= end) || !has_text(field_name) ||
+      (out_object_start == NULL) || (out_object_end == NULL)) {
+    return -1;
+  }
+
+  *out_object_start = NULL;
+  *out_object_end = NULL;
+  char pattern[80];
+  int pattern_written = snprintf(pattern, sizeof(pattern), "\"%s\"", field_name);
+  if ((pattern_written <= 0) || ((size_t)pattern_written >= sizeof(pattern))) {
+    return -1;
+  }
+
+  const char *field = start;
+  while ((field = strstr(field, pattern)) != NULL) {
+    if (field >= end) {
+      break;
+    }
+
+    const char *colon = strchr(field + pattern_written, ':');
+    if ((colon == NULL) || (colon >= end)) {
+      field += pattern_written;
+      continue;
+    }
+
+    const char *cursor = colon + 1;
+    while ((cursor < end) && isspace((unsigned char)*cursor)) {
+      cursor++;
+    }
+    if ((cursor >= end) || (*cursor != '{')) {
+      field += pattern_written;
+      continue;
+    }
+
+    const char *object_end = find_matching_bracket(cursor, '{', '}');
+    if ((object_end == NULL) || (object_end >= end)) {
+      field += pattern_written;
+      continue;
+    }
+
+    *out_object_start = cursor;
+    *out_object_end = object_end + 1;
+    return 0;
+  }
+
+  return -1;
 }
 
 /*
@@ -1990,6 +2229,33 @@ static void extract_alternative_names_metadata(
     char value[GAME_MATCHER_MAX_ALTERNATIVE_NAMES_LEN];
     if (extract_json_string_field_in_range(object_start, object_end, scalar_keys[i], value, sizeof(value)) == 0) {
       append_pipe_list_unique(entry->alternative_names, sizeof(entry->alternative_names), value);
+    }
+  }
+}
+
+static void extract_platform_metadata(
+    const char *object_start,
+    const char *object_end,
+    RomCatalogEntry *entry) {
+  if ((object_start == NULL) || (object_end == NULL) ||
+      (object_start >= object_end) || (entry == NULL)) {
+    return;
+  }
+
+  if (!has_text(entry->platform_slug)) {
+    extract_json_string_field_in_range(object_start, object_end, "platform_slug", entry->platform_slug, sizeof(entry->platform_slug));
+  }
+  if (!has_text(entry->platform_slug)) {
+    extract_json_string_field_in_range(object_start, object_end, "platformSlug", entry->platform_slug, sizeof(entry->platform_slug));
+  }
+
+  if (!has_text(entry->platform_slug)) {
+    const char *platform_start = NULL;
+    const char *platform_end = NULL;
+    if (find_object_field_range(object_start, object_end, "platform", &platform_start, &platform_end) == 0) {
+      if (extract_json_string_field_in_range(platform_start, platform_end, "slug", entry->platform_slug, sizeof(entry->platform_slug)) < 0) {
+        extract_json_string_field_in_range(platform_start, platform_end, "fs_slug", entry->platform_slug, sizeof(entry->platform_slug));
+      }
     }
   }
 }
@@ -2499,9 +2765,14 @@ static int http_send_multipart_file(
     return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
   }
 
-  unsigned char *file_data = NULL;
   size_t file_size = 0U;
-  if (read_file_to_memory(source_path, &file_data, &file_size) < 0) {
+  if (read_file_size_bounded(source_path, &file_size) < 0) {
+    app_log_write(
+        APP_LOG_LEVEL_WARN,
+        "http",
+        "upload file cannot be read or exceeds max size path=%s max=%u",
+        source_path,
+        (unsigned int)ROMM_HTTP_MAX_UPLOAD_SIZE);
     return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
   }
 
@@ -2520,31 +2791,28 @@ static int http_send_multipart_file(
       field_name,
       upload_filename);
   if ((preamble_written <= 0) || ((size_t)preamble_written >= sizeof(preamble))) {
-    free(file_data);
     return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
   }
 
   char trailer[64];
   int trailer_written = snprintf(trailer, sizeof(trailer), "\r\n--%s--\r\n", boundary);
   if ((trailer_written <= 0) || ((size_t)trailer_written >= sizeof(trailer))) {
-    free(file_data);
     return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
   }
 
   size_t payload_size = (size_t)preamble_written + file_size + (size_t)trailer_written;
   unsigned char *payload = (unsigned char *)malloc(payload_size);
   if (payload == NULL) {
-    free(file_data);
     return ROMM_CLIENT_ERR_NETWORK;
   }
 
   memcpy(payload, preamble, (size_t)preamble_written);
-  if (file_size > 0U) {
-    memcpy(payload + (size_t)preamble_written, file_data, file_size);
+  if (read_file_exact_into(source_path, payload + (size_t)preamble_written, file_size) < 0) {
+    free(payload);
+    return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
   }
   memcpy(payload + (size_t)preamble_written + file_size, trailer, (size_t)trailer_written);
 
-  free(file_data);
   int status = http_send_request(
       config,
       method,
@@ -2624,9 +2892,9 @@ static int parse_rom_catalog_entries(
       extract_json_string_field_in_range(object_start, object_end, "fs_name", entry->fs_name, sizeof(entry->fs_name));
       extract_json_string_field_in_range(object_start, object_end, "fs_name_no_tags", entry->fs_name_no_tags, sizeof(entry->fs_name_no_tags));
       extract_json_string_field_in_range(object_start, object_end, "fs_name_no_ext", entry->fs_name_no_ext, sizeof(entry->fs_name_no_ext));
-      extract_json_string_field_in_range(object_start, object_end, "platform_slug", entry->platform_slug, sizeof(entry->platform_slug));
       extract_serial_metadata(object_start, object_end, entry);
       extract_alternative_names_metadata(object_start, object_end, entry);
+      extract_platform_metadata(object_start, object_end, entry);
       count++;
     }
 
@@ -2692,18 +2960,23 @@ static int parse_platform_id_from_list(
 
 /*
  * Looks up the numeric RomM platform id used by current API versions.
- * Returns ROMM_CLIENT_OK on success, with out_platform_id set to 0 when no match exists
- * or when /api/platforms is unavailable and the legacy rom query should be used instead.
+ * The first candidate remains the legacy query fallback when /api/platforms is unavailable.
  */
-static int resolve_platform_id(
+static int resolve_platform_id_from_candidates(
     const AppConfig *config,
-    const char *platform_slug,
+    char candidates[][ROMM_HTTP_MAX_PLATFORM_SLUG],
+    int candidate_count,
+    char *out_platform_filter,
+    size_t out_platform_filter_size,
     int *out_platform_id) {
-  if ((config == NULL) || !has_text(platform_slug) || (out_platform_id == NULL)) {
+  if ((config == NULL) || (candidates == NULL) || (candidate_count <= 0) ||
+      (out_platform_filter == NULL) || (out_platform_filter_size == 0U) ||
+      (out_platform_id == NULL) || !has_text(candidates[0])) {
     return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
   }
 
   *out_platform_id = 0;
+  safe_copy(out_platform_filter, out_platform_filter_size, candidates[0]);
 
   char url[APP_CONFIG_MAX_URL_LEN + 32];
   if (build_api_url(config->romm_url, "/api/platforms", url, sizeof(url)) < 0) {
@@ -2716,13 +2989,15 @@ static int resolve_platform_id(
   }
 
   int status_code = 0;
-  app_log_write(APP_LOG_LEVEL_INFO, "http", "request GET /api/platforms slug=%s", platform_slug);
+  char candidate_summary[192];
+  build_platform_candidate_summary(candidates, candidate_count, candidate_summary, sizeof(candidate_summary));
+  app_log_write(APP_LOG_LEVEL_INFO, "http", "request GET /api/platforms slugs=%s", candidate_summary);
   int transport_status = http_get_text(config, url, &status_code, body, ROMM_HTTP_PLATFORM_BODY_SIZE);
   if (transport_status < 0) {
     free(body);
     return transport_status;
   }
-  app_log_write(APP_LOG_LEVEL_INFO, "http", "response GET /api/platforms status=%d slug=%s", status_code, platform_slug);
+  app_log_write(APP_LOG_LEVEL_INFO, "http", "response GET /api/platforms status=%d slugs=%s", status_code, candidate_summary);
   if ((status_code == 401) || (status_code == 403)) {
     free(body);
     return ROMM_CLIENT_ERR_AUTH;
@@ -2733,46 +3008,122 @@ static int resolve_platform_id(
     app_log_write(
         APP_LOG_LEVEL_WARN,
         "http",
-        "platform lookup failed status=%d slug=%s body=%s; falling back to legacy rom query",
+        "platform lookup failed status=%d slugs=%s body=%s; falling back to legacy rom query platform=%s",
         status_code,
-        platform_slug,
-        body_preview);
+        candidate_summary,
+        body_preview,
+        out_platform_filter);
     free(body);
     return ROMM_CLIENT_OK;
   }
 
-  int parse_status = parse_platform_id_from_list(body, platform_slug, out_platform_id);
-  if (parse_status < 0) {
-    app_log_write(
-        APP_LOG_LEVEL_WARN,
-        "http",
-        "platform lookup returned unsupported response format for slug=%s; falling back to legacy rom query",
-        platform_slug);
-    {
-      char body_preview[ROMM_HTTP_LOG_BODY_DEBUG];
-      build_body_preview(body, body_preview, sizeof(body_preview));
-      app_log_write(APP_LOG_LEVEL_DEBUG, "http", "platform raw response slug=%s body=%s", platform_slug, body_preview);
+  for (int i = 0; i < candidate_count; ++i) {
+    if (!has_text(candidates[i])) {
+      continue;
     }
-    free(body);
-    return ROMM_CLIENT_OK;
+
+    int candidate_platform_id = 0;
+    int parse_status = parse_platform_id_from_list(body, candidates[i], &candidate_platform_id);
+    if (parse_status < 0) {
+      app_log_write(
+          APP_LOG_LEVEL_WARN,
+          "http",
+          "platform lookup returned unsupported response format for slugs=%s; falling back to legacy rom query platform=%s",
+          candidate_summary,
+          out_platform_filter);
+      {
+        char body_preview[ROMM_HTTP_LOG_BODY_DEBUG];
+        build_body_preview(body, body_preview, sizeof(body_preview));
+        app_log_write(APP_LOG_LEVEL_DEBUG, "http", "platform raw response slugs=%s body=%s", candidate_summary, body_preview);
+      }
+      free(body);
+      return ROMM_CLIENT_OK;
+    }
+
+    if ((parse_status == 0) && (candidate_platform_id > 0)) {
+      *out_platform_id = candidate_platform_id;
+      safe_copy(out_platform_filter, out_platform_filter_size, candidates[i]);
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "http",
+          "resolved platform slug=%s -> platform_id=%d",
+          out_platform_filter,
+          *out_platform_id);
+      free(body);
+      return ROMM_CLIENT_OK;
+    }
   }
+
   free(body);
+  app_log_write(
+      APP_LOG_LEVEL_WARN,
+      "http",
+      "platform slugs=%s not found via /api/platforms; falling back to legacy rom query platform=%s",
+      candidate_summary,
+      out_platform_filter);
 
-  if (*out_platform_id > 0) {
-    app_log_write(
-        APP_LOG_LEVEL_INFO,
-        "http",
-        "resolved platform slug=%s -> platform_id=%d",
-        platform_slug,
-        *out_platform_id);
-  } else {
-    app_log_write(
-        APP_LOG_LEVEL_WARN,
-        "http",
-        "platform slug=%s not found via /api/platforms; falling back to legacy rom query",
-        platform_slug);
+  return ROMM_CLIENT_OK;
+}
+
+static int resolve_platform_for_item(
+    const AppConfig *config,
+    const SyncSaveDescriptor *item,
+    RommResolvedPlatform *cache,
+    int *cache_count,
+    char *out_platform_filter,
+    size_t out_platform_filter_size,
+    int *out_platform_id) {
+  if ((config == NULL) || (item == NULL) || (cache == NULL) || (cache_count == NULL) ||
+      (out_platform_filter == NULL) || (out_platform_filter_size == 0U) ||
+      (out_platform_id == NULL)) {
+    return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
   }
 
+  char candidates[ROMM_HTTP_MAX_PLATFORM_CANDIDATES][ROMM_HTTP_MAX_PLATFORM_SLUG];
+  memset(candidates, 0, sizeof(candidates));
+  int candidate_count = build_romm_platform_candidates(
+      config,
+      item,
+      candidates,
+      ROMM_HTTP_MAX_PLATFORM_CANDIDATES);
+  if ((candidate_count <= 0) || !has_text(candidates[0])) {
+    return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
+  }
+
+  for (int i = 0; i < *cache_count; ++i) {
+    if ((cache[i].save_platform == item->platform) &&
+        sync_string_ieq(cache[i].primary_filter, candidates[0])) {
+      safe_copy(out_platform_filter, out_platform_filter_size, cache[i].platform_filter);
+      *out_platform_id = cache[i].platform_id;
+      return ROMM_CLIENT_OK;
+    }
+  }
+
+  char resolved_filter[ROMM_HTTP_MAX_PLATFORM_SLUG];
+  int platform_id = 0;
+  int status = resolve_platform_id_from_candidates(
+      config,
+      candidates,
+      candidate_count,
+      resolved_filter,
+      sizeof(resolved_filter),
+      &platform_id);
+  if (status < 0) {
+    return status;
+  }
+
+  if (*cache_count < ROMM_SYNC_MAX_ITEMS) {
+    RommResolvedPlatform *entry = &cache[*cache_count];
+    memset(entry, 0, sizeof(*entry));
+    entry->save_platform = item->platform;
+    safe_copy(entry->primary_filter, sizeof(entry->primary_filter), candidates[0]);
+    safe_copy(entry->platform_filter, sizeof(entry->platform_filter), resolved_filter);
+    entry->platform_id = platform_id;
+    *cache_count += 1;
+  }
+
+  safe_copy(out_platform_filter, out_platform_filter_size, resolved_filter);
+  *out_platform_id = platform_id;
   return ROMM_CLIENT_OK;
 }
 
@@ -2782,6 +3133,7 @@ static int resolve_platform_id(
 static int build_rom_catalog_path(
     const char *platform_filter,
     int platform_id,
+    RommRomQueryMode query_mode,
     int limit,
     int offset,
     const char *search_term,
@@ -2791,53 +3143,125 @@ static int build_rom_catalog_path(
     return -1;
   }
 
+  char encoded_search_term[(ROMM_HTTP_MAX_SEARCH_TERM * 3) + 1];
+  encoded_search_term[0] = '\0';
+  if (has_text(search_term) &&
+      (url_encode_query_value(search_term, encoded_search_term, sizeof(encoded_search_term)) < 0)) {
+    return -1;
+  }
+
+  const char *fields = ROMM_HTTP_ROM_FIELDS;
+  int written = -1;
   if (has_text(search_term)) {
-    char encoded_search_term[(ROMM_HTTP_MAX_SEARCH_TERM * 3) + 1];
-    if (url_encode_query_value(search_term, encoded_search_term, sizeof(encoded_search_term)) < 0) {
-      return -1;
+    switch (query_mode) {
+      case ROMM_ROM_QUERY_PLATFORM_IDS:
+        if (platform_id <= 0) {
+          return -1;
+        }
+        written = snprintf(
+            out_path,
+            out_path_size,
+            "/api/roms?limit=%d&offset=%d&platform_ids=%d&search_term=%s&fields=%s",
+            limit,
+            offset,
+            platform_id,
+            encoded_search_term,
+            fields);
+        break;
+      case ROMM_ROM_QUERY_PLATFORM_ID:
+        if (platform_id <= 0) {
+          return -1;
+        }
+        written = snprintf(
+            out_path,
+            out_path_size,
+            "/api/roms?limit=%d&offset=%d&platform_id=%d&search_term=%s&fields=%s",
+            limit,
+            offset,
+            platform_id,
+            encoded_search_term,
+            fields);
+        break;
+      case ROMM_ROM_QUERY_PLATFORM_SLUG:
+        if (!has_text(platform_filter)) {
+          return -1;
+        }
+        written = snprintf(
+            out_path,
+            out_path_size,
+            "/api/roms?limit=%d&offset=%d&platform=%s&search_term=%s&fields=%s",
+            limit,
+            offset,
+            platform_filter,
+            encoded_search_term,
+            fields);
+        break;
+      case ROMM_ROM_QUERY_UNFILTERED:
+      default:
+        written = snprintf(
+            out_path,
+            out_path_size,
+            "/api/roms?limit=%d&offset=%d&search_term=%s&fields=%s",
+            limit,
+            offset,
+            encoded_search_term,
+            fields);
+        break;
     }
-
-    if (platform_id > 0) {
-      int written = snprintf(
-          out_path,
-          out_path_size,
-          "/api/roms?limit=%d&offset=%d&platform_ids=%d&search_term=%s&fields=id,name,fs_name,fs_name_no_tags,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id,alternative_names,alternativeNames",
-          limit,
-          offset,
-          platform_id,
-          encoded_search_term);
-      return ((written > 0) && ((size_t)written < out_path_size)) ? 0 : -1;
+  } else {
+    switch (query_mode) {
+      case ROMM_ROM_QUERY_PLATFORM_IDS:
+        if (platform_id <= 0) {
+          return -1;
+        }
+        written = snprintf(
+            out_path,
+            out_path_size,
+            "/api/roms?limit=%d&offset=%d&platform_ids=%d&fields=%s",
+            limit,
+            offset,
+            platform_id,
+            fields);
+        break;
+      case ROMM_ROM_QUERY_PLATFORM_ID:
+        if (platform_id <= 0) {
+          return -1;
+        }
+        written = snprintf(
+            out_path,
+            out_path_size,
+            "/api/roms?limit=%d&offset=%d&platform_id=%d&fields=%s",
+            limit,
+            offset,
+            platform_id,
+            fields);
+        break;
+      case ROMM_ROM_QUERY_PLATFORM_SLUG:
+        if (!has_text(platform_filter)) {
+          return -1;
+        }
+        written = snprintf(
+            out_path,
+            out_path_size,
+            "/api/roms?limit=%d&offset=%d&platform=%s&fields=%s",
+            limit,
+            offset,
+            platform_filter,
+            fields);
+        break;
+      case ROMM_ROM_QUERY_UNFILTERED:
+      default:
+        written = snprintf(
+            out_path,
+            out_path_size,
+            "/api/roms?limit=%d&offset=%d&fields=%s",
+            limit,
+            offset,
+            fields);
+        break;
     }
-
-    int written = snprintf(
-        out_path,
-        out_path_size,
-        "/api/roms?limit=%d&offset=%d&platform=%s&search_term=%s&fields=id,name,fs_name,fs_name_no_tags,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id,alternative_names,alternativeNames",
-        limit,
-        offset,
-        platform_filter,
-        encoded_search_term);
-    return ((written > 0) && ((size_t)written < out_path_size)) ? 0 : -1;
   }
 
-  if (platform_id > 0) {
-    int written = snprintf(
-        out_path,
-        out_path_size,
-        "/api/roms?limit=%d&offset=%d&platform_ids=%d&fields=id,name,fs_name,fs_name_no_tags,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id,alternative_names,alternativeNames",
-        limit,
-        offset,
-        platform_id);
-    return ((written > 0) && ((size_t)written < out_path_size)) ? 0 : -1;
-  }
-
-  int written = snprintf(
-      out_path,
-      out_path_size,
-      "/api/roms?limit=%d&offset=%d&platform=%s&fields=id,name,fs_name,fs_name_no_tags,fs_name_no_ext,platform_slug,serial,serials,serial_number,product_code,disc_id,game_id,alternative_names,alternativeNames",
-      limit,
-      offset,
-      platform_filter);
   return ((written > 0) && ((size_t)written < out_path_size)) ? 0 : -1;
 }
 
@@ -2848,6 +3272,7 @@ static int fetch_rom_catalog(
     const AppConfig *config,
     const char *platform_filter,
     int platform_id,
+    RommRomQueryMode query_mode,
     const char *search_term,
     RomCatalogEntry *out_catalog,
     int max_catalog,
@@ -2855,7 +3280,7 @@ static int fetch_rom_catalog(
     size_t body_size,
     int *out_catalog_count) {
   if ((config == NULL) ||
-      !has_text(platform_filter) ||
+      ((query_mode != ROMM_ROM_QUERY_UNFILTERED) && !has_text(platform_filter)) ||
       (out_catalog == NULL) ||
       (max_catalog <= 0) ||
       (body == NULL) ||
@@ -2873,6 +3298,7 @@ static int fetch_rom_catalog(
     if (build_rom_catalog_path(
             platform_filter,
             platform_id,
+            query_mode,
             ROMM_HTTP_ROM_PAGE_LIMIT,
             offset,
             search_term,
@@ -2887,15 +3313,26 @@ static int fetch_rom_catalog(
     }
 
     int status_code = 0;
+    const char *mode_label = romm_rom_query_mode_label(query_mode);
     if (has_text(search_term)) {
-      if (platform_id > 0) {
+      if ((query_mode == ROMM_ROM_QUERY_PLATFORM_IDS) ||
+          (query_mode == ROMM_ROM_QUERY_PLATFORM_ID)) {
         app_log_write(
             APP_LOG_LEVEL_INFO,
             "http",
-            "request GET /api/roms offset=%d limit=%d platform_id=%d term=%s",
+            "request GET /api/roms offset=%d limit=%d %s=%d term=%s",
             offset,
             ROMM_HTTP_ROM_PAGE_LIMIT,
+            mode_label,
             platform_id,
+            search_term);
+      } else if (query_mode == ROMM_ROM_QUERY_UNFILTERED) {
+        app_log_write(
+            APP_LOG_LEVEL_INFO,
+            "http",
+            "request GET /api/roms offset=%d limit=%d platform=none term=%s",
+            offset,
+            ROMM_HTTP_ROM_PAGE_LIMIT,
             search_term);
       } else {
         app_log_write(
@@ -2907,14 +3344,23 @@ static int fetch_rom_catalog(
             platform_filter,
             search_term);
       }
-    } else if (platform_id > 0) {
+    } else if ((query_mode == ROMM_ROM_QUERY_PLATFORM_IDS) ||
+               (query_mode == ROMM_ROM_QUERY_PLATFORM_ID)) {
       app_log_write(
           APP_LOG_LEVEL_INFO,
           "http",
-          "request GET /api/roms offset=%d limit=%d platform_id=%d",
+          "request GET /api/roms offset=%d limit=%d %s=%d",
           offset,
           ROMM_HTTP_ROM_PAGE_LIMIT,
+          mode_label,
           platform_id);
+    } else if (query_mode == ROMM_ROM_QUERY_UNFILTERED) {
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "http",
+          "request GET /api/roms offset=%d limit=%d platform=none",
+          offset,
+          ROMM_HTTP_ROM_PAGE_LIMIT);
     } else {
       app_log_write(
           APP_LOG_LEVEL_INFO,
@@ -2980,6 +3426,14 @@ static int fetch_rom_catalog(
       return ROMM_CLIENT_ERR_NETWORK;
     }
 
+    if ((parsed > 0) && (query_mode != ROMM_ROM_QUERY_UNFILTERED) && has_text(platform_filter)) {
+      for (int entry_index = catalog_count; entry_index < (catalog_count + parsed); ++entry_index) {
+        if (!has_text(out_catalog[entry_index].platform_slug)) {
+          safe_copy(out_catalog[entry_index].platform_slug, sizeof(out_catalog[entry_index].platform_slug), platform_filter);
+        }
+      }
+    }
+
     if (page_total > 0) {
       total = page_total;
     }
@@ -3036,17 +3490,19 @@ static int fetch_rom_catalog(
     app_log_write(
         APP_LOG_LEVEL_INFO,
         "http",
-        "rom search loaded entries=%d platform=%s term=%s",
+        "rom search loaded entries=%d platform=%s mode=%s term=%s",
         catalog_count,
-        platform_filter,
+        has_text(platform_filter) ? platform_filter : "none",
+        romm_rom_query_mode_label(query_mode),
         search_term);
   } else {
     app_log_write(
         APP_LOG_LEVEL_INFO,
         "http",
-        "rom catalog loaded entries=%d platform=%s",
+        "rom catalog loaded entries=%d platform=%s mode=%s",
         catalog_count,
-        platform_filter);
+        has_text(platform_filter) ? platform_filter : "none",
+        romm_rom_query_mode_label(query_mode));
   }
 
   if (catalog_count <= 0) {
@@ -3061,6 +3517,68 @@ static int fetch_rom_catalog(
           APP_LOG_LEVEL_WARN,
           "http",
           "rom catalog is empty or unsupported response format");
+    }
+  }
+
+  return ROMM_CLIENT_OK;
+}
+
+static int fetch_rom_catalog_with_fallbacks(
+    const AppConfig *config,
+    const char *platform_filter,
+    int platform_id,
+    const char *search_term,
+    RomCatalogEntry *out_catalog,
+    int max_catalog,
+    char *body,
+    size_t body_size,
+    int *out_catalog_count) {
+  if ((config == NULL) || (out_catalog == NULL) || (max_catalog <= 0) ||
+      (body == NULL) || (body_size == 0U) || (out_catalog_count == NULL)) {
+    return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
+  }
+
+  *out_catalog_count = 0;
+  RommRomQueryMode modes[4];
+  int mode_count = 0;
+  if (platform_id > 0) {
+    modes[mode_count++] = ROMM_ROM_QUERY_PLATFORM_IDS;
+    modes[mode_count++] = ROMM_ROM_QUERY_PLATFORM_ID;
+  }
+  if (has_text(platform_filter)) {
+    modes[mode_count++] = ROMM_ROM_QUERY_PLATFORM_SLUG;
+  }
+  modes[mode_count++] = ROMM_ROM_QUERY_UNFILTERED;
+
+  for (int i = 0; i < mode_count; ++i) {
+    int catalog_count = 0;
+    int status = fetch_rom_catalog(
+        config,
+        platform_filter,
+        platform_id,
+        modes[i],
+        search_term,
+        out_catalog,
+        max_catalog,
+        body,
+        body_size,
+        &catalog_count);
+    if (status < 0) {
+      return status;
+    }
+
+    *out_catalog_count = catalog_count;
+    if (catalog_count > 0) {
+      if (i > 0) {
+        app_log_write(
+            APP_LOG_LEVEL_INFO,
+            "http",
+            "rom search fallback selected mode=%s entries=%d term=%s",
+            romm_rom_query_mode_label(modes[i]),
+            catalog_count,
+            has_text(search_term) ? search_term : "(none)");
+      }
+      return ROMM_CLIENT_OK;
     }
   }
 
@@ -3232,17 +3750,14 @@ int romm_http_resolve_rom_ids(
     return ROMM_CLIENT_ERR_NETWORK;
   }
 
-  const char *platform_filter = romm_catalog_platform_filter(config);
-  int platform_id = 0;
-  int platform_status = resolve_platform_id(config, platform_filter, &platform_id);
-  if (platform_status < 0) {
-    free(body);
-    free(search_catalog);
-    return platform_status;
-  }
-
+  RommResolvedPlatform platform_cache[ROMM_SYNC_MAX_ITEMS];
+  memset(platform_cache, 0, sizeof(platform_cache));
+  int platform_cache_count = 0;
   char last_search_term[ROMM_HTTP_MAX_SEARCH_TERM];
+  char last_search_platform_filter[ROMM_HTTP_MAX_PLATFORM_SLUG];
   last_search_term[0] = '\0';
+  last_search_platform_filter[0] = '\0';
+  int last_search_platform_id = -1;
   int last_search_count = 0;
 
   int resolved_count = 0;
@@ -3255,6 +3770,22 @@ int romm_http_resolve_rom_ids(
 
     GameMatcherResolution resolution;
     int resolved_rom_id = -1;
+
+    char platform_filter[ROMM_HTTP_MAX_PLATFORM_SLUG];
+    int platform_id = 0;
+    int platform_status = resolve_platform_for_item(
+        config,
+        local_item,
+        platform_cache,
+        &platform_cache_count,
+        platform_filter,
+        sizeof(platform_filter),
+        &platform_id);
+    if (platform_status < 0) {
+      free(body);
+      free(search_catalog);
+      return platform_status;
+    }
 
     char search_terms[ROMM_HTTP_MAX_SEARCH_VARIANTS][ROMM_HTTP_MAX_SEARCH_TERM];
     char search_reasons[ROMM_HTTP_MAX_SEARCH_VARIANTS][24];
@@ -3278,8 +3809,10 @@ int romm_http_resolve_rom_ids(
       for (int term_index = 0; term_index < search_term_count; ++term_index) {
         const char *active_search_term = search_terms[term_index];
         const char *active_reason = search_reasons[term_index];
-        if (!sync_string_ieq(active_search_term, last_search_term)) {
-          int search_status = fetch_rom_catalog(
+        if (!sync_string_ieq(active_search_term, last_search_term) ||
+            !sync_string_ieq(platform_filter, last_search_platform_filter) ||
+            (platform_id != last_search_platform_id)) {
+          int search_status = fetch_rom_catalog_with_fallbacks(
               config,
               platform_filter,
               platform_id,
@@ -3295,6 +3828,8 @@ int romm_http_resolve_rom_ids(
             return search_status;
           }
           safe_copy(last_search_term, sizeof(last_search_term), active_search_term);
+          safe_copy(last_search_platform_filter, sizeof(last_search_platform_filter), platform_filter);
+          last_search_platform_id = platform_id;
         }
 
         if (last_search_count <= 0) {
@@ -3660,7 +4195,7 @@ int romm_http_upload_save_callback(
     return ROMM_CLIENT_ERR_INVALID_ARGUMENT;
   }
 
-  const char *emulator = romm_save_emulator(config);
+  const char *emulator = romm_save_emulator_for_item(config, local_item);
   char path[384];
   int http_method = SCE_HTTP_METHOD_POST;
   if (local_item->remote_id > 0) {

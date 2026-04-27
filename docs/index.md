@@ -55,8 +55,8 @@ Current integration status:
 - real HTTP device registration is implemented (`POST /api/devices`)
 - upload/download conversion logic is integrated in `SyncEngine`
 - real HTTP save transfer callbacks are wired (`list/upload/download`)
-- local Vita saves are mapped to RomM `rom_id` by trying `/api/platforms` first, then querying `/api/roms` with bounded, normalized `search_term` variants (`GAME_ID`, title raw/normalized, alias-stripped title, significant tokens) and local scoring (serial, title fuzzy, filename fallback)
-- PS Vita native save scanning is experimental and export-only: containers must belong to official retail/digital games (excluding homebrew), include `sce_sys`, `PARAM.SFO`, and `sce_sys/keystone` before they are uploaded as backup archives, and restore remains disabled until PFS/keystone signature metadata can be preserved or regenerated safely
+- local Vita saves are mapped to RomM `rom_id` by trying `/api/platforms` first, then querying `/api/roms` with bounded search variants (`GAME_ID`, title exact, title compact, title normalized, alias-stripped title, significant tokens) and local scoring (serial, title fuzzy, filename fallback)
+- PS Vita native save scanning is experimental and upload-only: eligible containers are exported as `.tar` backup archives, uploaded to RomM through the `vita3k` save backend, and compared against existing remote archive saves; restore/download remains disabled until PFS/keystone-safe writes are implemented
 
 
 ## Execution Model (Version 1)
@@ -470,7 +470,7 @@ Notes:
 
 ### PS Vita Native Save Policy
 
-PS Vita native save support is currently experimental and export-only.
+PS Vita native save support is currently experimental and upload-only. It performs real RomM mapping, remote save listing, conflict decisions, and archive upload, but it intentionally does not restore downloaded archives into `ux0:user/00/savedata` yet.
 
 Scanner behavior:
 
@@ -478,8 +478,24 @@ Scanner behavior:
 2. Filter out non-official games. Only retail and digital games matching the official Title ID format (`PCS[A-H]` followed by five digits) are eligible for synchronization. Homebrew applications are explicitly excluded.
 3. Require `sce_sys`, `sce_sys/keystone`, and `sce_sys/param.sfo` or `sce_sys/PARAM.SFO`.
 4. Skip any candidate missing `keystone`, because the keystone is part of Vita PFS/signature validation and an upload without it would create a server backup that cannot be restored as a recognized Vita save.
-5. Archive accepted containers as `.tar` files under `ux0:data/romm-vita-sync/cache/vita-native-exports/` before upload.
-6. Keep Vita native restore disabled with the reason `restore not supported yet for Vita native saves: PFS/keystone signature metadata must be preserved or regenerated safely`.
+5. Archive accepted containers as `.tar` files under `ux0:data/romm-vita-sync/cache/vita-native/` before upload.
+6. Upload archives through RomM saves using the `vita3k` backend name, independently from the PS1 `pcsx_rearmed` backend.
+7. Keep Vita native restore/download disabled with the reason `restore not supported yet for Vita native saves: PFS/keystone signature metadata must be preserved or regenerated safely`.
+
+Archive format:
+
+- each archive is a POSIX-style tar file named `<TITLE_ID>_<timestamp>.tar`
+- the archive root is the save container title id, for example `PCSF00012/`
+- all files inside the container are copied byte-for-byte, including `sce_sys/`, `sce_sys/param.sfo` or `sce_sys/PARAM.SFO`, and `sce_sys/keystone`
+- archive staging uses Vita filesystem calls (`sceIoMkdir`, `sceIoOpen`, `sceIoDopen`, `sceIoRead`, `sceIoWrite`) so `ux0:` paths are handled by the Vita I/O layer
+- one archive upload is currently bounded to 32MB because the Vita HTTP API path sends one multipart request body per transfer
+
+Synchronization behavior:
+
+- if no remote archive save exists for the mapped `rom_id`, the local archive is uploaded
+- if a remote archive save exists and the local archive is newer, upload is selected by the normal conflict policy
+- if the remote archive save is newer, download is skipped because restore is not safe yet for Vita native saves
+- if dry-run mode is enabled, the app prepares the archive and plans the transfer but does not upload it
 
 This means the server receives faithful backup archives only when the minimum signed-container metadata is present. The app does not yet import or restore Vita native saves from RomM, because copying a server-side archive back into `savedata` without a proven PFS/keystone-aware write path can leave the save unrecognized or corrupted.
 
@@ -753,7 +769,7 @@ Implementation notes:
 
 ### v3 — PS Vita Native Saves
 
-- current experimental support scans native savedata containers and uploads archive-only backups when `sce_sys`, `PARAM.SFO`, and `keystone` are present
+- current experimental support scans native savedata containers and uploads `.tar` archive backups when `sce_sys`, `PARAM.SFO`, and `keystone` are present
 - implement a proven restore path that preserves or regenerates PFS/keystone signature metadata before enabling imports from RomM
 - investigate extraction and decrypted-write workflows
 - integrate bidirectional native save support only after restore safety is validated
@@ -816,8 +832,8 @@ Save listing/upload/download are now wired to real HTTP callbacks in `main.c` (`
 Local Vita items are resolved to server `rom_id` before sync decisions by:
 
 - resolving the configured platform through `/api/platforms` when available, otherwise falling back to the legacy RomM `platform=` query
-- trying a targeted RomM lookup first through `/api/roms` with `search_term`, using `platform_ids=...` when a numeric platform id is available and `platform=...` otherwise
-- generating bounded, deduplicated search-term variants per local save (`GAME_ID`, title raw, title normalized, alias-stripped title, significant-title tokens)
+- trying a targeted RomM lookup first through `/api/roms` with `search_term`, using `platform_ids=...`, then `platform_id=...`, then `platform=...`, then an unfiltered search when earlier forms return no entries
+- generating bounded, deduplicated search-term variants per local save (`GAME_ID`, title exact, title compact, title normalized, alias-stripped title, significant-title tokens)
 - normalizing titles with unicode-aware cleanup (lowercase, diacritics folding, symbol/punctuation cleanup, whitespace collapse, roman/arabic number compatibility)
 - matching candidates by serial metadata first, then title scoring across `fs_name_no_tags`, `name`, `fs_name_no_ext`, and `alternative_names`
 - using composite title scoring (exact match, token-set/token-sort similarity, Levenshtein, serial bonus, sequel mismatch penalty) with confidence threshold and ambiguity margin
@@ -828,6 +844,8 @@ Conversion is now wired in the app sync flow:
 
 - upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback, then either creates a new remote save or overwrites the matched remote save
 - download path: remote `.SRM` is reconstructed to local `.VMP` and re-signed in-app
+- Vita native upload path: local savedata containers are exported to `.tar`, then uploaded through RomM save sync using the `vita3k` backend name and a `.tar` filename
+- Vita native download path: remote archive download is intentionally blocked until a PFS/keystone-safe restore path exists
 - when one game has both local PS1 cards, only the newest local card is mapped and synchronized; exact timestamp ties keep `SCEVMC0.VMP` and warn the user
 - if the server copy is newer and the remote save is a standard single-card SRM, the download target remains that selected local card
 - if the server copy is newer and the remote save is a dual-card SRM, the app restores both `SCEVMC0.VMP` and `SCEVMC1.VMP`
@@ -842,11 +860,12 @@ Current Rom ID mapping flow:
 2. If `/api/platforms` is unavailable or returns an unsupported response, Rom ID lookup falls back to the legacy `/api/roms?...&platform=...` query path.
 3. For each local save without `rom_id`, the app builds a bounded list of search-term variants:
    - local `GAME_ID` (when available)
-   - title raw (compact punctuation-normalized form)
+   - title exact, preserving punctuation from `PARAM.SFO`
+   - title compact, with punctuation collapsed to spaces
    - title normalized (unicode-aware lowercase/diacritics cleanup)
    - title without short alias prefix (example: `R4 RIDGE RACER TYPE 4` -> `RIDGE RACER TYPE 4`)
    - significant title tokens (noise words removed)
-4. The app queries `/api/roms?...&search_term=...` for each variant (deduplicated, capped), using `platform_ids=...` when available and `platform=...` otherwise.
+4. The app queries `/api/roms?...&search_term=...` for each variant (deduplicated, capped), trying `platform_ids=...`, `platform_id=...`, `platform=...`, then an unfiltered search if RomM returns no entries.
 5. For each candidate set returned by RomM, stage 1 tries exact serial metadata matches (`serial`, `serials`, related aliases).
 6. If serial stage is not deterministically unique, stage 2 computes title scores against `fs_name_no_tags`, `name`, `fs_name_no_ext`, and `alternative_names`.
 7. Title scoring combines exact/containment checks, token-based fuzzy similarity (set/sort), Levenshtein similarity, serial coherence bonus, and strong sequel-number mismatch penalty (`3` vs `4`, including roman/arabic variants).

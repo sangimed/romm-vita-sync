@@ -10,13 +10,14 @@
 #include <string.h>
 
 #include "app_log.h"
-#include "backup_manager.h"
 #include "sfo_parser.h"
 #include "sync_types.h"
 #include "vita_native_save_policy.h"
 
 #define VITA_NATIVE_MAX_DEPTH 8
 #define VITA_TAR_BLOCK_SIZE 512
+#define VITA_NATIVE_FILE_MODE (SCE_S_IRUSR | SCE_S_IWUSR | SCE_S_IRSYS | SCE_S_IWSYS)
+#define VITA_NATIVE_DIRECTORY_MODE (SCE_S_IRWXU | SCE_S_IRWXS)
 #define SQLITE_OK 0
 #define SQLITE_ROW 100
 #define SQLITE_DONE 101
@@ -188,6 +189,84 @@ static int path_is_directory_local(const char *path) {
   }
   sceIoDclose(dfd);
   return 1;
+}
+
+static int path_is_directory_stat(const char *path) {
+  SceIoStat st;
+  if (!has_text_local(path)) {
+    return 0;
+  }
+  memset(&st, 0, sizeof(st));
+  if (sceIoGetstat(path, &st) < 0) {
+    return 0;
+  }
+  return SCE_S_ISDIR(st.st_mode) || SCE_SO_ISDIR(st.st_attr);
+}
+
+static int is_path_separator(char c) {
+  return (c == '/') || (c == '\\');
+}
+
+static int is_device_root_path(const char *path) {
+  if (!has_text_local(path)) {
+    return 0;
+  }
+
+  const char *colon = strchr(path, ':');
+  if (colon == NULL) {
+    return 0;
+  }
+  if (colon[1] == '\0') {
+    return 1;
+  }
+  return (is_path_separator(colon[1]) && (colon[2] == '\0'));
+}
+
+static int create_vita_directory_one(const char *path) {
+  if (!has_text_local(path) || is_device_root_path(path)) {
+    return 0;
+  }
+  if (path_is_directory_stat(path)) {
+    return 0;
+  }
+
+  int status = sceIoMkdir(path, VITA_NATIVE_DIRECTORY_MODE);
+  if (status >= 0 || path_is_directory_stat(path)) {
+    return 0;
+  }
+  return status;
+}
+
+static int ensure_vita_directory_tree(const char *directory_path) {
+  if (!has_text_local(directory_path)) {
+    return -1;
+  }
+
+  char path_copy[ROMM_MAX_PATH_LEN];
+  size_t length = strlen(directory_path);
+  if (length >= sizeof(path_copy)) {
+    return -1;
+  }
+  memcpy(path_copy, directory_path, length + 1U);
+
+  for (size_t i = 0U; i < length; ++i) {
+    if (!is_path_separator(path_copy[i])) {
+      continue;
+    }
+    if (i == 0U) {
+      continue;
+    }
+
+    char previous = path_copy[i];
+    path_copy[i] = '\0';
+    int status = create_vita_directory_one(path_copy);
+    path_copy[i] = previous;
+    if (status < 0) {
+      return status;
+    }
+  }
+
+  return create_vita_directory_one(path_copy);
 }
 
 static int copy_truncated(char *out, size_t out_size, const char *value) {
@@ -826,9 +905,10 @@ static int tar_add_path(SceUID tar_fd, const char *filesystem_path, const char *
       return dfd;
     }
     SceIoDirent entry;
+    int read = 0;
     for (;;) {
       memset(&entry, 0, sizeof(entry));
-      int read = sceIoDread(dfd, &entry);
+      read = sceIoDread(dfd, &entry);
       if (read <= 0) {
         break;
       }
@@ -841,11 +921,19 @@ static int tar_add_path(SceUID tar_fd, const char *filesystem_path, const char *
           join_path_suffix(child_fs, entry.d_name, child_fs, sizeof(child_fs)) < 0 ||
           join_path_suffix(archive_name, "/", child_archive, sizeof(child_archive)) < 0 ||
           join_path_suffix(child_archive, entry.d_name, child_archive, sizeof(child_archive)) < 0) {
-        continue;
+        sceIoDclose(dfd);
+        return -1;
       }
-      tar_add_path(tar_fd, child_fs, child_archive, depth + 1);
+      int child_status = tar_add_path(tar_fd, child_fs, child_archive, depth + 1);
+      if (child_status < 0) {
+        sceIoDclose(dfd);
+        return child_status;
+      }
     }
     sceIoDclose(dfd);
+    if (read < 0) {
+      return read;
+    }
     return 0;
   }
 
@@ -895,8 +983,14 @@ int vita_native_prepare_export_archives(
   }
 
   const char *cache_dir = has_text_local(cache_directory) ? cache_directory : VITA_NATIVE_EXPORT_CACHE_DIR;
-  int ensure_status = backup_manager_ensure_directory(cache_dir);
-  if (ensure_status != BACKUP_MANAGER_OK) {
+  int ensure_status = ensure_vita_directory_tree(cache_dir);
+  if (ensure_status < 0) {
+    app_log_write(
+        APP_LOG_LEVEL_ERROR,
+        "vita-native",
+        "archive cache directory creation failed path=%s status=0x%08X",
+        cache_dir,
+        (unsigned int)ensure_status);
     return ensure_status;
   }
 
@@ -916,8 +1010,14 @@ int vita_native_prepare_export_archives(
       return -1;
     }
 
-    SceUID tar_fd = sceIoOpen(archive_path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0644);
+    SceUID tar_fd = sceIoOpen(archive_path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, VITA_NATIVE_FILE_MODE);
     if (tar_fd < 0) {
+      app_log_write(
+          APP_LOG_LEVEL_ERROR,
+          "vita-native",
+          "archive open failed path=%s status=0x%08X",
+          archive_path,
+          (unsigned int)tar_fd);
       return tar_fd;
     }
     int tar_status = tar_add_path(tar_fd, original_path, item->game_id, 0);
@@ -928,6 +1028,13 @@ int vita_native_prepare_export_archives(
     sceIoClose(tar_fd);
     if (tar_status < 0) {
       sceIoRemove(archive_path);
+      app_log_write(
+          APP_LOG_LEVEL_ERROR,
+          "vita-native",
+          "archive tar failed source=%s archive=%s status=0x%08X",
+          original_path,
+          archive_path,
+          (unsigned int)tar_status);
       return tar_status;
     }
 

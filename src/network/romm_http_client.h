@@ -57,4 +57,10 @@ int romm_http_resolve_rom_ids(
     SyncSaveDescriptor *items,
     int item_count);
 
+/*
+ * Returns the save backend name used by RomM for a platform when no explicit
+ * per-run override is configured.
+ */
+const char *romm_http_default_save_emulator_for_platform(SyncSavePlatform platform);
+
 #endif
