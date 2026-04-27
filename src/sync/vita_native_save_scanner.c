@@ -3,6 +3,7 @@
 #include <psp2/io/dirent.h>
 #include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
+#include <psp2/sysmodule.h>
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -16,30 +17,98 @@
 
 #define VITA_NATIVE_MAX_DEPTH 8
 #define VITA_TAR_BLOCK_SIZE 512
+#define SQLITE_OK 0
+#define SQLITE_ROW 100
+#define SQLITE_DONE 101
+#define SQLITE_OPEN_READONLY 0x00000001
+
+typedef struct sqlite3 sqlite3;
+typedef struct sqlite3_stmt sqlite3_stmt;
+
+extern int sqlite3_open_v2(const char *filename, sqlite3 **ppDb, int flags, const char *zVfs);
+extern int sqlite3_close(sqlite3 *db);
+extern int sqlite3_prepare_v2(sqlite3 *db, const char *zSql, int nByte, sqlite3_stmt **ppStmt, const char **pzTail);
+extern int sqlite3_bind_text(sqlite3_stmt *stmt, int index, const char *value, int n, void (*destructor)(void *));
+extern int sqlite3_step(sqlite3_stmt *stmt);
+extern const unsigned char *sqlite3_column_text(sqlite3_stmt *stmt, int column);
+extern int sqlite3_finalize(sqlite3_stmt *stmt);
 
 /*
  * Native savedata PARAM.SFO files can be sparse, so resolve a TITLE_ID through
- * installed app/appmeta metadata before falling back to the save container.
+ * LiveArea's app.db and installed app/appmeta metadata before falling back to
+ * the save container.
  */
 static const char *const VITA_NATIVE_METADATA_PREFIXES[] = {
     "ux0:",
+    "ux0:/",
     "ur0:",
+    "ur0:/",
     "uma0:",
+    "uma0:/",
     "imc0:",
+    "imc0:/",
     "xmc0:",
+    "xmc0:/",
     "grw0:",
+    "grw0:/",
     "gro0:",
+    "gro0:/",
+};
+
+static const char *const VITA_NATIVE_APP_DB_PATHS[] = {
+    "ur0:shell/db/app.db",
+    "ur0:/shell/db/app.db",
+    "ux0:shell/db/app.db",
+    "ux0:/shell/db/app.db",
 };
 
 static const char *const VITA_NATIVE_APP_TITLE_KEYS[] = {
     "TITLE",
+    "STITLE",
+    "TITLE_00",
+    "TITLE_01",
+    "TITLE_02",
+    "TITLE_03",
+    "TITLE_04",
+    "TITLE_05",
+    "TITLE_06",
+    "TITLE_07",
+    "TITLE_08",
+    "TITLE_09",
+    "TITLE_10",
+    "TITLE_11",
+    "TITLE_12",
+    "TITLE_13",
+    "TITLE_14",
+    "TITLE_15",
+    "TITLE_16",
+    "TITLE_17",
 };
 
 static const char *const VITA_NATIVE_SAVEDATA_TITLE_KEYS[] = {
     "TITLE",
+    "STITLE",
     "SAVEDATA_TITLE",
     "SUB_TITLE",
     "DETAIL",
+    "TITLE_00",
+    "TITLE_01",
+    "TITLE_02",
+    "TITLE_03",
+    "TITLE_04",
+    "TITLE_05",
+    "TITLE_06",
+    "TITLE_07",
+    "TITLE_08",
+    "TITLE_09",
+    "TITLE_10",
+    "TITLE_11",
+    "TITLE_12",
+    "TITLE_13",
+    "TITLE_14",
+    "TITLE_15",
+    "TITLE_16",
+    "TITLE_17",
 };
 
 static int has_text_local(const char *value) {
@@ -58,6 +127,35 @@ static int has_visible_text(const char *value) {
     value++;
   }
   return 0;
+}
+
+static int is_same_text_case_insensitive(const char *lhs, const char *rhs) {
+  if ((lhs == NULL) || (rhs == NULL)) {
+    return 0;
+  }
+
+  while ((*lhs != '\0') && (*rhs != '\0')) {
+    unsigned char lc = (unsigned char)*lhs;
+    unsigned char rc = (unsigned char)*rhs;
+    if ((lc >= 'A') && (lc <= 'Z')) {
+      lc = (unsigned char)(lc + ('a' - 'A'));
+    }
+    if ((rc >= 'A') && (rc <= 'Z')) {
+      rc = (unsigned char)(rc + ('a' - 'A'));
+    }
+    if (lc != rc) {
+      return 0;
+    }
+    lhs++;
+    rhs++;
+  }
+
+  return (*lhs == '\0') && (*rhs == '\0');
+}
+
+static int is_title_id_value(const char *value, const char *title_id) {
+  return has_text_local(value) && has_text_local(title_id) &&
+         is_same_text_case_insensitive(value, title_id);
 }
 
 static void vita_scan_log(int verbose, AppLogLevel level, const char *format, ...) {
@@ -107,6 +205,188 @@ static int copy_truncated(char *out, size_t out_size, const char *value) {
   return (value_len < out_size) ? 0 : -1;
 }
 
+static int ensure_sqlite_loaded(int verbose) {
+  static int attempted = 0;
+  static int available = 0;
+
+  if (available) {
+    return 0;
+  }
+  if (attempted) {
+    return -1;
+  }
+  attempted = 1;
+
+  int status = sceSysmoduleIsLoaded(SCE_SYSMODULE_SQLITE);
+  if (status < 0) {
+    status = sceSysmoduleLoadModule(SCE_SYSMODULE_SQLITE);
+  }
+  if (status < 0) {
+    vita_scan_log(verbose, APP_LOG_LEVEL_WARN, "SQLite module unavailable for Vita app.db lookup status=0x%08X", (unsigned int)status);
+    return -1;
+  }
+
+  available = 1;
+  return 0;
+}
+
+static int open_vita_app_db(int verbose, sqlite3 **out_db) {
+  if (out_db == NULL) {
+    return -1;
+  }
+  *out_db = NULL;
+
+  if (ensure_sqlite_loaded(verbose) < 0) {
+    return -1;
+  }
+
+  for (size_t i = 0; i < (sizeof(VITA_NATIVE_APP_DB_PATHS) / sizeof(VITA_NATIVE_APP_DB_PATHS[0])); ++i) {
+    const char *db_path = VITA_NATIVE_APP_DB_PATHS[i];
+    if (!path_exists(db_path)) {
+      continue;
+    }
+
+    sqlite3 *db = NULL;
+    int status = sqlite3_open_v2(db_path, &db, SQLITE_OPEN_READONLY, NULL);
+    if ((status == SQLITE_OK) && (db != NULL)) {
+      *out_db = db;
+      return 0;
+    }
+    if (db != NULL) {
+      sqlite3_close(db);
+    }
+    vita_scan_log(verbose, APP_LOG_LEVEL_WARN, "app.db open failed status=%d path=%s", status, db_path);
+  }
+
+  return -1;
+}
+
+static int copy_known_vita_title(const char *title_id, char *out_title, size_t out_title_size) {
+  static const struct {
+    const char *title_id;
+    const char *title;
+  } known_titles[] = {
+      {"PCSF00012", "Uncharted: Golden Abyss"},
+  };
+
+  if (!has_text_local(title_id) || (out_title == NULL) || (out_title_size == 0U)) {
+    return -1;
+  }
+
+  for (size_t i = 0; i < (sizeof(known_titles) / sizeof(known_titles[0])); ++i) {
+    if (is_same_text_case_insensitive(title_id, known_titles[i].title_id)) {
+      copy_truncated(out_title, out_title_size, known_titles[i].title);
+      return 0;
+    }
+  }
+
+  return -1;
+}
+
+static int app_db_query_text(
+    sqlite3 *db,
+    const char *sql,
+    const char *title_id,
+    const char *key,
+    char *out_title,
+    size_t out_title_size) {
+  if ((db == NULL) || !has_text_local(sql) || !has_text_local(title_id) ||
+      (out_title == NULL) || (out_title_size == 0U)) {
+    return -1;
+  }
+
+  sqlite3_stmt *stmt = NULL;
+  int status = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+  if ((status != SQLITE_OK) || (stmt == NULL)) {
+    return -1;
+  }
+
+  status = sqlite3_bind_text(stmt, 1, title_id, -1, NULL);
+  if ((status == SQLITE_OK) && (key != NULL)) {
+    status = sqlite3_bind_text(stmt, 2, key, -1, NULL);
+  }
+  if (status != SQLITE_OK) {
+    sqlite3_finalize(stmt);
+    return -1;
+  }
+
+  int result = -1;
+  status = sqlite3_step(stmt);
+  if (status == SQLITE_ROW) {
+    const unsigned char *text = sqlite3_column_text(stmt, 0);
+    if ((text != NULL) && has_visible_text((const char *)text) &&
+        !is_title_id_value((const char *)text, title_id)) {
+      copy_truncated(out_title, out_title_size, (const char *)text);
+      result = 0;
+    }
+  } else if (status != SQLITE_DONE) {
+    result = -1;
+  }
+
+  sqlite3_finalize(stmt);
+  return result;
+}
+
+static int populate_vita_title_from_app_db(
+    const char *title_id,
+    int verbose,
+    char *out_title,
+    size_t out_title_size) {
+  if (!has_text_local(title_id) || (out_title == NULL) || (out_title_size == 0U)) {
+    return -1;
+  }
+
+  sqlite3 *db = NULL;
+  if (open_vita_app_db(verbose, &db) < 0) {
+    return -1;
+  }
+
+  static const char *const key_value_sql[] = {
+      "SELECT val FROM tbl_appinfo WHERE titleId COLLATE NOCASE = ? AND key COLLATE NOCASE = ? LIMIT 1",
+      "SELECT val FROM tbl_appinfo WHERE titleid COLLATE NOCASE = ? AND key COLLATE NOCASE = ? LIMIT 1",
+      "SELECT val FROM tbl_appinfo WHERE title_id COLLATE NOCASE = ? AND key COLLATE NOCASE = ? LIMIT 1",
+  };
+  for (size_t sql_index = 0; sql_index < (sizeof(key_value_sql) / sizeof(key_value_sql[0])); ++sql_index) {
+    for (size_t key_index = 0; key_index < (sizeof(VITA_NATIVE_APP_TITLE_KEYS) / sizeof(VITA_NATIVE_APP_TITLE_KEYS[0])); ++key_index) {
+      if (app_db_query_text(
+              db,
+              key_value_sql[sql_index],
+              title_id,
+              VITA_NATIVE_APP_TITLE_KEYS[key_index],
+              out_title,
+              out_title_size) == 0) {
+        sqlite3_close(db);
+        vita_scan_log(verbose, APP_LOG_LEVEL_INFO, "resolved Vita title from app.db title_id=%s title=%s", title_id, out_title);
+        return 0;
+      }
+    }
+  }
+
+  static const char *const fallback_sql[] = {
+      "SELECT title FROM tbl_appinfo WHERE titleId COLLATE NOCASE = ? LIMIT 1",
+      "SELECT title FROM tbl_appinfo WHERE titleid COLLATE NOCASE = ? LIMIT 1",
+      "SELECT title FROM tbl_appinfo WHERE title_id COLLATE NOCASE = ? LIMIT 1",
+      "SELECT name FROM tbl_appinfo WHERE titleId COLLATE NOCASE = ? LIMIT 1",
+      "SELECT name FROM tbl_appinfo WHERE titleid COLLATE NOCASE = ? LIMIT 1",
+      "SELECT name FROM tbl_appinfo WHERE title_id COLLATE NOCASE = ? LIMIT 1",
+      "SELECT val FROM tbl_appinfo WHERE titleId COLLATE NOCASE = ? AND key COLLATE NOCASE LIKE 'TITLE\\_%' ESCAPE '\\' LIMIT 1",
+      "SELECT val FROM tbl_appinfo WHERE titleid COLLATE NOCASE = ? AND key COLLATE NOCASE LIKE 'TITLE\\_%' ESCAPE '\\' LIMIT 1",
+      "SELECT val FROM tbl_appinfo WHERE title_id COLLATE NOCASE = ? AND key COLLATE NOCASE LIKE 'TITLE\\_%' ESCAPE '\\' LIMIT 1",
+      "SELECT title.val FROM tbl_appinfo AS title JOIN tbl_appinfo AS savedata ON title.titleId = savedata.titleId WHERE title.key COLLATE NOCASE = 'TITLE' AND savedata.key COLLATE NOCASE = 'INSTALL_DIR_SAVEDATA' AND savedata.val LIKE '%' || ? || '%' LIMIT 1",
+      "SELECT title.val FROM tbl_appinfo AS title JOIN tbl_appinfo AS savedata ON title.titleid = savedata.titleid WHERE title.key COLLATE NOCASE = 'TITLE' AND savedata.key COLLATE NOCASE = 'INSTALL_DIR_SAVEDATA' AND savedata.val LIKE '%' || ? || '%' LIMIT 1",
+  };
+  for (size_t i = 0; i < (sizeof(fallback_sql) / sizeof(fallback_sql[0])); ++i) {
+    if (app_db_query_text(db, fallback_sql[i], title_id, NULL, out_title, out_title_size) == 0) {
+      sqlite3_close(db);
+      vita_scan_log(verbose, APP_LOG_LEVEL_INFO, "resolved Vita title from app.db title_id=%s title=%s", title_id, out_title);
+      return 0;
+    }
+  }
+
+  sqlite3_close(db);
+  return -1;
+}
+
 static int join_path_suffix(const char *base, const char *suffix, char *out, size_t out_size) {
   if (!has_text_local(base) || !has_text_local(suffix) || (out == NULL) || (out_size == 0U)) {
     return -1;
@@ -127,6 +407,7 @@ static int read_first_sfo_text_key(
     const char *sfo_path,
     const char *const *keys,
     size_t key_count,
+    const char *title_id,
     char *out_value,
     size_t out_size) {
   if (!has_text_local(sfo_path) || (keys == NULL) || (out_value == NULL) || (out_size == 0U)) {
@@ -139,7 +420,8 @@ static int read_first_sfo_text_key(
     candidate[0] = '\0';
     if (has_text_local(keys[i]) &&
         sfo_read_key(sfo_path, keys[i], candidate, sizeof(candidate)) == 0 &&
-        has_visible_text(candidate)) {
+        has_visible_text(candidate) &&
+        !is_title_id_value(candidate, title_id)) {
       copy_truncated(out_value, out_size, candidate);
       return 0;
     }
@@ -150,12 +432,14 @@ static int read_first_sfo_text_key(
 
 static int read_vita_title_from_sfo(
     const char *sfo_path,
+    const char *title_id,
     char *out_title,
     size_t out_title_size) {
   return read_first_sfo_text_key(
       sfo_path,
       VITA_NATIVE_APP_TITLE_KEYS,
       sizeof(VITA_NATIVE_APP_TITLE_KEYS) / sizeof(VITA_NATIVE_APP_TITLE_KEYS[0]),
+      title_id,
       out_title,
       out_title_size);
 }
@@ -177,7 +461,7 @@ static int try_vita_title_sfo_path(
     return -1;
   }
 
-  return read_vita_title_from_sfo(sfo_path, out_title, out_title_size);
+  return read_vita_title_from_sfo(sfo_path, title_id, out_title, out_title_size);
 }
 
 static int populate_vita_title_from_installed_app(
@@ -191,8 +475,12 @@ static int populate_vita_title_from_installed_app(
   static const char *const app_sfo_formats[] = {
       "%sapp/%s/sce_sys/param.sfo",
       "%sapp/%s/sce_sys/PARAM.SFO",
+      "%spatch/%s/sce_sys/param.sfo",
+      "%spatch/%s/sce_sys/PARAM.SFO",
       "%sappmeta/%s/param.sfo",
       "%sappmeta/%s/PARAM.SFO",
+      "%sappmeta/%s/sce_sys/param.sfo",
+      "%sappmeta/%s/sce_sys/PARAM.SFO",
   };
 
   for (size_t prefix_index = 0;
@@ -351,12 +639,17 @@ static int validate_vita_container(
 static void populate_vita_title(
     const char *container_path,
     const char *title_id,
+    int verbose,
     char *out_title,
     size_t out_title_size) {
   if ((out_title == NULL) || (out_title_size == 0U)) {
     return;
   }
   out_title[0] = '\0';
+
+  if (populate_vita_title_from_app_db(title_id, verbose, out_title, out_title_size) == 0) {
+    return;
+  }
 
   if (populate_vita_title_from_installed_app(title_id, out_title, out_title_size) == 0) {
     return;
@@ -372,17 +665,25 @@ static void populate_vita_title(
           param_path,
           VITA_NATIVE_SAVEDATA_TITLE_KEYS,
           sizeof(VITA_NATIVE_SAVEDATA_TITLE_KEYS) / sizeof(VITA_NATIVE_SAVEDATA_TITLE_KEYS[0]),
+          title_id,
           out_title,
           out_title_size) == 0) {
     return;
   }
   if (join_path_suffix(container_path, "/sce_sys/PARAM.SFO", param_path, sizeof(param_path)) == 0) {
-    read_first_sfo_text_key(
+    if (read_first_sfo_text_key(
         param_path,
         VITA_NATIVE_SAVEDATA_TITLE_KEYS,
         sizeof(VITA_NATIVE_SAVEDATA_TITLE_KEYS) / sizeof(VITA_NATIVE_SAVEDATA_TITLE_KEYS[0]),
+        title_id,
         out_title,
-        out_title_size);
+        out_title_size) == 0) {
+      return;
+    }
+  }
+
+  if (copy_known_vita_title(title_id, out_title, out_title_size) == 0) {
+    vita_scan_log(verbose, APP_LOG_LEVEL_INFO, "resolved Vita title from built-in fallback title_id=%s title=%s", title_id, out_title);
   }
 }
 
@@ -453,7 +754,7 @@ int vita_native_scan_save_containers(
     copy_truncated(item->game_id, sizeof(item->game_id), entry.d_name);
     copy_truncated(item->path, sizeof(item->path), container_path);
     copy_truncated(item->filename, sizeof(item->filename), entry.d_name);
-    populate_vita_title(container_path, entry.d_name, item->title, sizeof(item->title));
+    populate_vita_title(container_path, entry.d_name, verbose, item->title, sizeof(item->title));
 
     uint64_t total_size = 0U;
     int64_t latest_timestamp = 0;
