@@ -663,15 +663,36 @@ static int is_ps1_platform_slug(const char *platform_slug) {
 }
 
 /*
- * Accepts only explicit PS1 platform slugs.
+ * Returns non-zero when a platform slug likely refers to PS Vita content.
  */
-static int candidate_is_ps1_eligible(const GameMatcherRomCandidate *candidate) {
+static int is_vita_platform_slug(const char *platform_slug) {
+  char normalized[GAME_MATCHER_MAX_PLATFORM_SLUG_LEN];
+  normalize_identifier(platform_slug, normalized, sizeof(normalized));
+  if (!has_text(normalized)) {
+    return 0;
+  }
+
+  return strstr(normalized, "vita") != NULL;
+}
+
+/*
+ * Accepts only candidates from the local save platform.
+ */
+static int candidate_matches_local_platform(
+    const SyncSaveDescriptor *local_item,
+    const GameMatcherRomCandidate *candidate) {
   if (candidate == NULL) {
     return 0;
   }
   if (!has_text(candidate->platform_slug)) {
     return 0;
   }
+
+  SyncSavePlatform local_platform = (local_item != NULL) ? local_item->platform : SYNC_SAVE_PLATFORM_UNKNOWN;
+  if (local_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+    return is_vita_platform_slug(candidate->platform_slug);
+  }
+
   return is_ps1_platform_slug(candidate->platform_slug);
 }
 
@@ -1428,7 +1449,7 @@ static int resolve_rom_id_by_serial(
   int ambiguous = 0;
   for (int i = 0; i < catalog_count; ++i) {
     const GameMatcherRomCandidate *candidate = &catalog[i];
-    if ((candidate->rom_id <= 0) || !candidate_is_ps1_eligible(candidate)) {
+    if ((candidate->rom_id <= 0) || !candidate_matches_local_platform(local_item, candidate)) {
       continue;
     }
 
@@ -1507,7 +1528,7 @@ static int resolve_rom_id_by_title(
   memset(&best_breakdown, 0, sizeof(best_breakdown));
   for (int i = 0; i < catalog_count; ++i) {
     const GameMatcherRomCandidate *candidate = &catalog[i];
-    if ((candidate->rom_id <= 0) || !candidate_is_ps1_eligible(candidate)) {
+    if ((candidate->rom_id <= 0) || !candidate_matches_local_platform(local_item, candidate)) {
       continue;
     }
 
@@ -1756,7 +1777,7 @@ static int resolve_rom_id_by_filename_patterns(
   int ambiguous = 0;
   for (int i = 0; i < catalog_count; ++i) {
     const GameMatcherRomCandidate *candidate = &catalog[i];
-    if (!candidate_is_ps1_eligible(candidate)) {
+    if (!candidate_matches_local_platform(local_item, candidate)) {
       continue;
     }
 
@@ -1848,7 +1869,7 @@ int game_matcher_find_remote_index(
 }
 
 /*
- * Resolves a local PS1 save to one RomM rom_id through deterministic fallbacks.
+ * Resolves a local save to one RomM rom_id through deterministic fallbacks.
  */
 int game_matcher_resolve_rom_id_with_details(
     const SyncSaveDescriptor *local_item,

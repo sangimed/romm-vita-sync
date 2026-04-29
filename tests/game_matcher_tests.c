@@ -8,6 +8,7 @@
 static SyncSaveDescriptor make_local_item(const char *game_id, const char *title) {
   SyncSaveDescriptor item;
   sync_save_descriptor_init(&item);
+  item.platform = SYNC_SAVE_PLATFORM_PSONE;
   if (game_id != NULL) {
     snprintf(item.game_id, sizeof(item.game_id), "%s", game_id);
   }
@@ -48,6 +49,11 @@ static GameMatcherRomCandidate make_candidate(
     snprintf(candidate.alternative_names, sizeof(candidate.alternative_names), "%s", alternative_names);
   }
   return candidate;
+}
+
+static void set_candidate_platform(GameMatcherRomCandidate *candidate, const char *platform_slug) {
+  assert(candidate != NULL);
+  snprintf(candidate->platform_slug, sizeof(candidate->platform_slug), "%s", platform_slug);
 }
 
 static void test_normalization_symbols_and_tags(void) {
@@ -131,6 +137,22 @@ static void test_sequel_mismatch_penalty(void) {
   assert(resolution.stage == GAME_MATCHER_MATCH_STAGE_TITLE);
 }
 
+static void test_vita_native_platform_match(void) {
+  SyncSaveDescriptor local = make_local_item("PCSF00012", "Uncharted: Golden Abyss");
+  local.platform = SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL;
+
+  GameMatcherRomCandidate catalog[] = {
+      make_candidate(1001, "Uncharted: Golden Abyss", "Uncharted: Golden Abyss", "Uncharted: Golden Abyss", "PCSF00012", "PCSF00012", NULL),
+      make_candidate(37576, "Uncharted: Golden Abyss", "Uncharted: Golden Abyss", "Uncharted: Golden Abyss", "PCSF00012", "PCSF00012", NULL)};
+  set_candidate_platform(&catalog[0], "psx");
+  set_candidate_platform(&catalog[1], "psvita");
+
+  GameMatcherResolution resolution;
+  int rom_id = game_matcher_resolve_rom_id_with_details(&local, catalog, 2, &resolution);
+  assert(rom_id == 37576);
+  assert(resolution.stage == GAME_MATCHER_MATCH_STAGE_SERIAL);
+}
+
 int main(void) {
   test_normalization_symbols_and_tags();
   test_r4_matches_ridge_racer_type_4();
@@ -139,6 +161,7 @@ int main(void) {
   test_regression_crash_bandicoot_3();
   test_diacritics_title_match();
   test_sequel_mismatch_penalty();
+  test_vita_native_platform_match();
 
   printf("All game_matcher tests passed.\n");
   return 0;

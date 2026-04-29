@@ -16,7 +16,9 @@
 #include "scan_to_sync_adapter.h"
 #include "save_scanner.h"
 #include "sync_engine.h"
+#include "vita_native_save_scanner.h"
 #include "ui_common.h"
+#include "ui_config_editor.h"
 #include "ui_dialogs.h"
 #include "ui_navigation.h"
 #include "ui_render.h"
@@ -151,6 +153,7 @@ static const char *ui_sync_local_selection_reason_str(SyncLocalSelectionReason r
 static int ui_prepare_ps1_sync_candidates(
     SyncSaveDescriptor *items,
     int item_count,
+    SyncSavePlatform platform,
     int *out_warning_count) {
   if ((items == NULL) || (item_count < 0) || (item_count > ROMM_SYNC_MAX_ITEMS)) {
     return 0;
@@ -174,7 +177,8 @@ static int ui_prepare_ps1_sync_candidates(
   if ((item_count > 0) && (selected_count != item_count)) {
     ui_sync_log_write(
         APP_LOG_LEVEL_INFO,
-        "PS1 latest-card rule active: %d sync candidate(s) selected from %d local target(s)",
+        "%s latest-local rule active: %d sync candidate(s) selected from %d local target(s)",
+        sync_save_platform_short_label(platform),
         selected_count,
         item_count);
   }
@@ -189,7 +193,8 @@ static int ui_prepare_ps1_sync_candidates(
     sync_format_timestamp(items[i].timestamp_unix, selected_timestamp, sizeof(selected_timestamp));
     ui_sync_log_write(
         APP_LOG_LEVEL_INFO,
-        "PS1 candidate selected: game=%s file=%s slot=%s timestamp=%s unix=%lld reason=%s",
+        "%s candidate selected: game=%s file=%s slot=%s timestamp=%s unix=%lld reason=%s",
+        sync_save_platform_short_label(platform),
         has_text(items[i].game_id) ? items[i].game_id : "(unknown)",
         has_text(items[i].filename) ? items[i].filename : items[i].path,
         sync_slot_str(items[i].slot),
@@ -621,38 +626,59 @@ int ui_refresh_local_inventory(UiAppState *state) {
     previous_selected_count += 1;
   }
 
-  ui_set_status(state, "Scanning local PS1 saves...");
-  ui_render_busy_screen("Scanning local PS1 saves", "Path: ux0:pspemu/PSP/SAVEDATA");
+  if (state->selected_save_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+    ui_set_status(state, "Scanning local Vita native saves...");
+    ui_render_busy_screen("Scanning local Vita native saves", "Path: ux0:user/00/savedata");
+    app_log_write(APP_LOG_LEVEL_INFO, "ui", "selected sync platform=%s", sync_save_platform_id(state->selected_save_platform));
 
-  memset(&state->scan_result, 0, sizeof(state->scan_result));
-  int scan_status = scan_vmp_files(
-      kPs1VmpCandidateRoots,
-      (int)PS1_VMP_CANDIDATE_ROOT_COUNT,
-      2,
-      state->config.log_scan_verbose,
-      &state->scan_result);
-  if (scan_status < 0) {
-    state->local_count = 0;
-    state->game_count = 0;
-    state->active_game_index = -1;
-    state->game_scroll = 0;
-    ui_set_status(state, "Local scan failed: %d", scan_status);
-    app_log_write(APP_LOG_LEVEL_ERROR, "ui", "local scan failed status=%d", scan_status);
-    return scan_status;
-  }
+    state->local_count = vita_native_scan_save_containers(
+        VITA_NATIVE_SAVEDATA_ROOT,
+        state->config.log_scan_verbose,
+        state->local_items,
+        (int)(sizeof(state->local_items) / sizeof(state->local_items[0])));
+    if (state->local_count < 0) {
+      state->local_count = 0;
+      state->game_count = 0;
+      state->active_game_index = -1;
+      state->game_scroll = 0;
+      ui_set_status(state, "Local Vita native scan failed");
+      app_log_write(APP_LOG_LEVEL_ERROR, "ui", "vita native scan failed");
+      return -1;
+    }
+  } else {
+    ui_set_status(state, "Scanning local PS1 saves...");
+    ui_render_busy_screen("Scanning local PS1 saves", "Path: ux0:pspemu/PSP/SAVEDATA");
 
-  state->local_count = scan_result_to_sync_saves(
-      &state->scan_result,
-      state->local_items,
-      (int)(sizeof(state->local_items) / sizeof(state->local_items[0])));
-  if (state->local_count < 0) {
-    state->local_count = 0;
-    state->game_count = 0;
-    state->active_game_index = -1;
-    state->game_scroll = 0;
-    ui_set_status(state, "Failed to build sync inventory from scan result");
-    app_log_write(APP_LOG_LEVEL_ERROR, "ui", "scan_result_to_sync_saves failed");
-    return -1;
+    memset(&state->scan_result, 0, sizeof(state->scan_result));
+    int scan_status = scan_vmp_files(
+        kPs1VmpCandidateRoots,
+        (int)PS1_VMP_CANDIDATE_ROOT_COUNT,
+        2,
+        state->config.log_scan_verbose,
+        &state->scan_result);
+    if (scan_status < 0) {
+      state->local_count = 0;
+      state->game_count = 0;
+      state->active_game_index = -1;
+      state->game_scroll = 0;
+      ui_set_status(state, "Local scan failed: %d", scan_status);
+      app_log_write(APP_LOG_LEVEL_ERROR, "ui", "local scan failed status=%d", scan_status);
+      return scan_status;
+    }
+
+    state->local_count = scan_result_to_sync_saves(
+        &state->scan_result,
+        state->local_items,
+        (int)(sizeof(state->local_items) / sizeof(state->local_items[0])));
+    if (state->local_count < 0) {
+      state->local_count = 0;
+      state->game_count = 0;
+      state->active_game_index = -1;
+      state->game_scroll = 0;
+      ui_set_status(state, "Failed to build sync inventory from scan result");
+      app_log_write(APP_LOG_LEVEL_ERROR, "ui", "scan_result_to_sync_saves failed");
+      return -1;
+    }
   }
 
   state->game_count = ui_build_game_entries(
@@ -691,8 +717,9 @@ int ui_refresh_local_inventory(UiAppState *state) {
   state->game_scroll = 0;
   ui_set_status(
       state,
-      "Scan complete: %d PS1 games (%d local target%s)",
+      "Scan complete: %d %s games (%d local target%s)",
       state->game_count,
+      sync_save_platform_short_label(state->selected_save_platform),
       state->local_count,
       (state->local_count == 1) ? "" : "s");
   app_log_write(
@@ -745,9 +772,13 @@ int ui_run_sync_pipeline(
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "... %d more local save(s) omitted", detected_item_count - preview_count);
   }
 
-  work_item_count = ui_prepare_ps1_sync_candidates(work_items, detected_item_count, &selection_warning_count);
+  work_item_count = ui_prepare_ps1_sync_candidates(
+      work_items,
+      detected_item_count,
+      state->selected_save_platform,
+      &selection_warning_count);
   if (work_item_count <= 0) {
-    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync failed: no PS1 sync candidate was selected");
+    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync failed: no sync candidate was selected");
     ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: no sync candidate selected");
     state->sync_feedback.running = 0;
     state->sync_feedback.completed = 1;
@@ -838,18 +869,82 @@ int ui_run_sync_pipeline(
         has_text(item->filename) ? item->filename : "(unknown)");
   }
   if (unresolved_count > 0) {
-    ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync aborted: %d save(s) have no rom_id after mapping", unresolved_count);
-    ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: unresolved RomM mapping");
-    state->sync_feedback.running = 0;
-    state->sync_feedback.completed = 1;
-    state->sync_feedback.success = 0;
-    state->sync_feedback.sync_status = SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID;
-    ui_sync_feedback_set_progress(&state->sync_feedback, total_units, total_units);
-    ui_sync_render_live(state);
-    return SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID;
+    if (state->selected_save_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+      int write_index = 0;
+      for (int i = 0; i < work_item_count; ++i) {
+        if (work_items[i].rom_id > 0) {
+          if (write_index != i) {
+            memmove(&work_items[write_index], &work_items[i], sizeof(work_items[write_index]));
+          }
+          write_index += 1;
+          continue;
+        }
+        ui_sync_log_write(
+            APP_LOG_LEVEL_WARN,
+            "mapping failed; skipping Vita container: game=%s title=%s file=%s",
+            has_text(work_items[i].game_id) ? work_items[i].game_id : "(unknown)",
+            has_text(work_items[i].title) ? work_items[i].title : "(unknown)",
+            has_text(work_items[i].filename) ? work_items[i].filename : "(unknown)");
+      }
+      work_item_count = write_index;
+      if (work_item_count <= 0) {
+        ui_sync_log_write(APP_LOG_LEVEL_WARN, "Sync skipped: no Vita native save container mapped to RomM");
+        ui_sync_feedback_set_message(&state->sync_feedback, "Sync skipped: no mapped Vita saves");
+        state->sync_feedback.running = 0;
+        state->sync_feedback.completed = 1;
+        state->sync_feedback.success = 1;
+        state->sync_feedback.sync_status = SYNC_ENGINE_OK;
+        ui_sync_feedback_set_progress(&state->sync_feedback, total_units, total_units);
+        ui_sync_render_live(state);
+        return SYNC_ENGINE_OK;
+      }
+      ui_sync_log_write(APP_LOG_LEVEL_INFO, "Continuing with %d mapped Vita save container(s)", work_item_count);
+    } else {
+      ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync aborted: %d save(s) have no rom_id after mapping", unresolved_count);
+      ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: unresolved RomM mapping");
+      state->sync_feedback.running = 0;
+      state->sync_feedback.completed = 1;
+      state->sync_feedback.success = 0;
+      state->sync_feedback.sync_status = SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID;
+      ui_sync_feedback_set_progress(&state->sync_feedback, total_units, total_units);
+      ui_sync_render_live(state);
+      return SYNC_ENGINE_ERR_UNRESOLVED_ROM_ID;
+    }
   }
   ui_sync_feedback_set_progress(&state->sync_feedback, 3, total_units);
   ui_sync_render_live(state);
+
+  if (state->selected_save_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+    ui_sync_feedback_set_message(&state->sync_feedback, "Preparing Vita archive export...");
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Vita native restore/download is disabled; upload archive sync is enabled");
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Preparing archive-only export for %d Vita native save container(s)", work_item_count);
+    int archive_status = vita_native_prepare_export_archives(
+        work_items,
+        work_item_count,
+        VITA_NATIVE_EXPORT_CACHE_DIR,
+        state->config.log_scan_verbose);
+    if (archive_status < 0) {
+      ui_sync_log_write(APP_LOG_LEVEL_ERROR, "Sync failed: Vita archive export preparation failed (%d)", archive_status);
+      ui_sync_feedback_set_message(&state->sync_feedback, "Sync failed: Vita archive export failed");
+      state->sync_feedback.running = 0;
+      state->sync_feedback.completed = 1;
+      state->sync_feedback.success = 0;
+      state->sync_feedback.sync_status = archive_status;
+      ui_sync_feedback_set_progress(&state->sync_feedback, total_units, total_units);
+      ui_sync_render_live(state);
+      return archive_status;
+    }
+    for (int i = 0; i < work_item_count; ++i) {
+      ui_sync_log_write(
+          APP_LOG_LEVEL_INFO,
+          "Vita archive export ready: title_id=%s archive=%s size=%llu platform=%s",
+          has_text(work_items[i].game_id) ? work_items[i].game_id : "(unknown)",
+          has_text(work_items[i].path) ? work_items[i].path : "(unknown)",
+          (unsigned long long)work_items[i].size_bytes,
+          sync_save_platform_id(work_items[i].platform));
+    }
+    ui_sync_render_live(state);
+  }
 
   state->config.sync_auto_apply_conflicts = 1;
   ui_sync_log_write(
@@ -863,6 +958,22 @@ int ui_run_sync_pipeline(
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "Dry-run enabled: transfers will not execute");
   }
   ui_sync_log_write(APP_LOG_LEVEL_INFO, "Auto-apply conflicts enabled: recommended actions will execute without confirmation");
+
+  AppConfig sync_http_config;
+  RommClient sync_client;
+  const RommClient *active_client = &state->romm_client;
+  if (state->selected_save_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+    memcpy(&sync_http_config, &state->config, sizeof(sync_http_config));
+    snprintf(
+        sync_http_config.romm_save_emulator,
+        sizeof(sync_http_config.romm_save_emulator),
+        "%s",
+        romm_http_default_save_emulator_for_platform(SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL));
+    memcpy(&sync_client, &state->romm_client, sizeof(sync_client));
+    sync_client.context = &sync_http_config;
+    active_client = &sync_client;
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Using RomM save backend for Vita native archives: %s", sync_http_config.romm_save_emulator);
+  }
 
   SyncEngineConfig config;
   sync_engine_config_init(&config);
@@ -890,7 +1001,7 @@ int ui_run_sync_pipeline(
   config.progress_user_data = &progress_bridge;
 
   int sync_status = sync_engine_run(
-      &config, work_items, work_item_count, &state->romm_client, &state->sync_report);
+      &config, work_items, work_item_count, active_client, &state->sync_report);
 
   state->sync_feedback.running = 0;
   state->sync_feedback.completed = 1;

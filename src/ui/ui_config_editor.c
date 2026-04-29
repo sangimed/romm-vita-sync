@@ -485,6 +485,17 @@ void ui_activate_selection(UiAppState *state) {
     return;
   }
 
+  if (state->selected_index == UI_SELECT_PLATFORM) {
+    state->selected_save_platform = (state->selected_save_platform == SYNC_SAVE_PLATFORM_PSONE)
+                                    ? SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL
+                                    : SYNC_SAVE_PLATFORM_PSONE;
+    app_log_write(APP_LOG_LEVEL_INFO, "ui", "selected sync platform=%s", sync_save_platform_id(state->selected_save_platform));
+    ui_set_status(state, "Save platform: %s", sync_save_platform_display_name(state->selected_save_platform));
+    ui_refresh_local_inventory(state);
+    ui_clamp_selection(state);
+    return;
+  }
+
   if (state->selected_index == UI_SELECT_DRY_RUN) {
     int previous_dry_run = state->config.sync_dry_run;
     state->config.sync_dry_run = state->config.sync_dry_run ? 0 : 1;
@@ -503,7 +514,7 @@ void ui_activate_selection(UiAppState *state) {
 
   if (state->selected_index == UI_SELECT_SYNC_PRIMARY) {
     if (ui_selected_game_count(state) <= 0) {
-      ui_set_status(state, "Check at least one PS1 game before synchronizing");
+      ui_set_status(state, "Check at least one game before synchronizing");
       return;
     }
     if (!app_config_has_server_url(&state->config)) {
@@ -522,7 +533,7 @@ void ui_activate_selection(UiAppState *state) {
 
   if (state->selected_index == UI_SELECT_SYNC_ALL) {
     if (state->local_count <= 0) {
-      ui_set_status(state, "No local PS1 saves were detected");
+      ui_set_status(state, "No local saves were detected");
       return;
     }
     if (!app_config_has_server_url(&state->config)) {

@@ -37,6 +37,8 @@ add_executable(${PROJECT_NAME}
   src/sync/conflict_resolver.c
   src/sync/game_matcher.c
   src/sync/save_scanner.c
+  src/sync/vita_native_save_scanner.c
+  src/sync/vita_native_save_policy.c
   src/sync/scan_to_sync_adapter.c
   src/sync/sync_engine.c
   src/sync/sync_state_store.c
@@ -77,6 +79,7 @@ target_link_libraries(${PROJECT_NAME}
   SceTouch_stub
   SceIofilemgr_stub
   SceSysmodule_stub
+  SceSqlite_stub
   SceGxm_stub
   ScePgf_stub
   SceKernelDmacMgr_stub

@@ -29,7 +29,7 @@ void ui_render_header(const UiAppState *state) {
       620.0f,
       UI_COLOR_TEXT_MUTED,
       0.68f,
-      "Configure the RoMM server, check one or more PS1 games, then start a manual or startup synchronization.");
+      "Configure the RoMM server, choose psOne or psVita, check one or more games, then start synchronization.");
 
   ui_draw_text_right(928.0f, 28.0f, UI_COLOR_TEXT_DIM, 0.72f, "Status");
   ui_draw_truncated_text_right(928.0f, 52.0f, 240.0f, status_color, 0.76f, status_text);
@@ -46,10 +46,12 @@ void ui_render_connection_panel(const UiAppState *state) {
   char url_display[APP_CONFIG_MAX_URL_LEN + 16];
   char username_display[APP_CONFIG_MAX_USERNAME_LEN + 16];
   char password_display[APP_CONFIG_MAX_PASSWORD_LEN + 16];
+  char platform_display[64];
   char dry_run_display[24];
   ui_format_field_display(state->config.romm_url, 0, url_display, sizeof(url_display));
   ui_format_field_display(state->config.romm_username, 0, username_display, sizeof(username_display));
   ui_format_field_display(state->config.romm_password, 1, password_display, sizeof(password_display));
+  snprintf(platform_display, sizeof(platform_display), "%s", sync_save_platform_display_name(state->selected_save_platform));
   snprintf(dry_run_display, sizeof(dry_run_display), "%s", state->config.sync_dry_run ? "Enabled" : "Disabled");
 
   ui_draw_panel(layout.connection_x, layout.connection_y, layout.connection_w, layout.connection_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
@@ -82,6 +84,14 @@ void ui_render_connection_panel(const UiAppState *state) {
   ui_draw_field_row(
       layout.connection_row_x,
       layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 3.0f),
+      layout.connection_row_w,
+      layout.connection_row_h,
+      state->selected_index == UI_SELECT_PLATFORM,
+      "Save platform",
+      platform_display);
+  ui_draw_field_row(
+      layout.connection_row_x,
+      layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 4.0f),
       layout.connection_row_w,
       layout.connection_row_h,
       state->selected_index == UI_SELECT_DRY_RUN,
@@ -136,7 +146,7 @@ void ui_render_sync_panel(const UiAppState *state) {
     }
   } else {
     snprintf(title_display, sizeof(title_display), "No game checked");
-    snprintf(detail, sizeof(detail), "Open Detected PS1 Games and check one or more entries to sync.");
+    snprintf(detail, sizeof(detail), "Open Detected Games and check one or more entries to sync.");
   }
 
   if (state->sync_feedback.running) {
@@ -146,10 +156,10 @@ void ui_render_sync_panel(const UiAppState *state) {
     snprintf(readiness, sizeof(readiness), "%s", state->sync_feedback.message);
     readiness_color = state->sync_feedback.success ? UI_COLOR_SUCCESS : UI_COLOR_DANGER;
   } else if (state->game_count <= 0) {
-    snprintf(readiness, sizeof(readiness), "No local PS1 saves detected yet.");
+    snprintf(readiness, sizeof(readiness), "No local %s saves detected yet.", sync_save_platform_short_label(state->selected_save_platform));
     readiness_color = UI_COLOR_WARNING;
   } else if (selected_games <= 0) {
-    snprintf(readiness, sizeof(readiness), "Check one or more PS1 games in the list to enable sync.");
+    snprintf(readiness, sizeof(readiness), "Check one or more %s games in the list to enable sync.", sync_save_platform_short_label(state->selected_save_platform));
     readiness_color = UI_COLOR_WARNING;
   } else if (!app_config_has_server_url(&state->config)) {
     snprintf(readiness, sizeof(readiness), "Enter the RoMM server address first.");
@@ -225,7 +235,9 @@ void ui_render_game_panel(const UiAppState *state) {
   ui_build_main_layout(&layout);
 
   ui_draw_panel(layout.game_x, layout.game_y, layout.game_w, layout.game_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
-  ui_draw_text(layout.game_x + 16.0f, layout.game_y + 24.0f, UI_COLOR_TEXT, 0.84f, "Detected PS1 Games");
+  char panel_title[64];
+  snprintf(panel_title, sizeof(panel_title), "Detected %s Games", sync_save_platform_short_label(state->selected_save_platform));
+  ui_draw_text(layout.game_x + 16.0f, layout.game_y + 24.0f, UI_COLOR_TEXT, 0.84f, panel_title);
 
   if (state->game_count <= 0) {
     ui_draw_truncated_text(
@@ -234,7 +246,7 @@ void ui_render_game_panel(const UiAppState *state) {
         layout.game_w - 32.0f,
         UI_COLOR_TEXT_MUTED,
         0.72f,
-        "No PS1 save targets were detected on this Vita.");
+        "No save targets were detected for the selected platform.");
     return;
   }
 
@@ -258,9 +270,13 @@ void ui_render_game_panel(const UiAppState *state) {
   float row_y = layout.game_first_row_y;
   for (int i = start; i < end; ++i) {
     const UiGameEntry *game = &state->games[i];
-    char full_title[ROMM_GAME_TITLE_LEN + ROMM_GAME_ID_LEN + 8];
+    char full_title[ROMM_GAME_TITLE_LEN + ROMM_GAME_ID_LEN + 64];
     const char *resolved_title = has_text(game->title) ? game->title : game->game_id;
-    snprintf(full_title, sizeof(full_title), "%s [%s]", resolved_title, game->game_id);
+    if (state->selected_save_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+      snprintf(full_title, sizeof(full_title), "[VITA] %s [%s] (experimental) - restore disabled", resolved_title, game->game_id);
+    } else {
+      snprintf(full_title, sizeof(full_title), "%s [%s]", resolved_title, game->game_id);
+    }
 
     ui_draw_game_row(
         layout.game_row_x,

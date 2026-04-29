@@ -13,6 +13,7 @@
 #include "conflict_resolver.h"
 #include "game_matcher.h"
 #include "sync_state_store.h"
+#include "vita_native_save_policy.h"
 #include "vmp_signer.h"
 #include "vmp_srm_converter.h"
 
@@ -1774,6 +1775,17 @@ int sync_engine_run(
       } else {
         decision = SYNC_ACTION_SKIP;
       }
+    }
+
+    if ((decision == SYNC_ACTION_DOWNLOAD) &&
+        !sync_save_platform_restore_supported(local_item->platform)) {
+      decision = SYNC_ACTION_SKIP;
+      app_log_write(
+          APP_LOG_LEVEL_WARN,
+          "sync",
+          "%s",
+          vita_native_save_restore_unsupported_reason());
+      set_reason(action, "%s", vita_native_save_restore_unsupported_reason());
     }
 
     action->action = decision;

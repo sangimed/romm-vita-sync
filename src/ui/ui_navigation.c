@@ -60,6 +60,7 @@ static int ui_try_move_selection_shortcut(UiAppState *state, int direction) {
       ((state->selected_index == UI_SELECT_SERVER_URL) ||
        (state->selected_index == UI_SELECT_USERNAME) ||
        (state->selected_index == UI_SELECT_PASSWORD) ||
+       (state->selected_index == UI_SELECT_PLATFORM) ||
        (state->selected_index == UI_SELECT_DRY_RUN) ||
        (state->selected_index >= UI_SELECT_GAME_BASE))) {
     state->selected_index = UI_SELECT_SYNC_PRIMARY;
@@ -103,9 +104,15 @@ int ui_get_selection_anchor(const UiAppState *state, int index, float *out_x, fl
              (layout.connection_row_h * 0.5f);
     return 0;
   }
-  if (index == UI_SELECT_DRY_RUN) {
+  if (index == UI_SELECT_PLATFORM) {
     *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
     *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 3.0f) +
+             (layout.connection_row_h * 0.5f);
+    return 0;
+  }
+  if (index == UI_SELECT_DRY_RUN) {
+    *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
+    *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 4.0f) +
              (layout.connection_row_h * 0.5f);
     return 0;
   }
