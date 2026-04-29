@@ -387,7 +387,7 @@ static int ui_edit_text_field(
     }
 
     if (state != NULL) {
-      ui_render_main_screen(state);
+      ui_render_active_screen(state);
     } else {
       ui_begin_frame();
       ui_end_frame();
@@ -462,53 +462,115 @@ static void ui_edit_config_field(
   }
 }
 
+/*
+ * Edits the transient game-search query with the Vita keyboard, then rebuilds
+ * the visible game list without changing persisted settings.
+ */
+static void ui_edit_game_search(UiAppState *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  char previous_query[UI_GAME_SEARCH_QUERY_LEN];
+  snprintf(previous_query, sizeof(previous_query), "%s", state->game_search_query);
+
+  int edited = ui_edit_text_field(
+      state,
+      "Search Games",
+      state->game_search_query,
+      sizeof(state->game_search_query),
+      SCE_IME_TYPE_BASIC_LATIN,
+      SCE_IME_DIALOG_TEXTBOX_MODE_DEFAULT);
+  if (edited == 0) {
+    ui_set_status(state, "Game search edit canceled");
+    return;
+  }
+  if (edited < 0) {
+    return;
+  }
+
+  ui_trim_ascii_whitespace(state->game_search_query);
+  ui_refresh_game_filter(state);
+  ui_clamp_selection(state);
+  ui_update_game_scroll(state);
+
+  if (strcmp(previous_query, state->game_search_query) == 0) {
+    ui_set_status(state, "Game search unchanged");
+  } else if (has_text(state->game_search_query)) {
+    int match_count = ui_visible_game_count(state);
+    ui_set_status(state, "Game search: %d match%s", match_count, (match_count == 1) ? "" : "es");
+  } else {
+    ui_set_status(state, "Game search cleared");
+  }
+}
+
 void ui_activate_selection(UiAppState *state) {
   if (state == NULL) {
     return;
   }
 
-  if (state->selected_index == UI_SELECT_SERVER_URL) {
-    ui_edit_config_field(state, "Server URL", state->config.romm_url,
-        sizeof(state->config.romm_url), SCE_IME_TYPE_URL, 0, 1);
-    return;
-  }
-
-  if (state->selected_index == UI_SELECT_USERNAME) {
-    ui_edit_config_field(state, "Username", state->config.romm_username,
-        sizeof(state->config.romm_username), SCE_IME_TYPE_BASIC_LATIN, 0, 1);
-    return;
-  }
-
-  if (state->selected_index == UI_SELECT_PASSWORD) {
-    ui_edit_config_field(state, "Password", state->config.romm_password,
-        sizeof(state->config.romm_password), SCE_IME_TYPE_BASIC_LATIN, 1, 0);
-    return;
-  }
-
-  if (state->selected_index == UI_SELECT_PLATFORM) {
-    state->selected_save_platform = (state->selected_save_platform == SYNC_SAVE_PLATFORM_PSONE)
-                                    ? SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL
-                                    : SYNC_SAVE_PLATFORM_PSONE;
-    app_log_write(APP_LOG_LEVEL_INFO, "ui", "selected sync platform=%s", sync_save_platform_id(state->selected_save_platform));
-    ui_set_status(state, "Save platform: %s", sync_save_platform_display_name(state->selected_save_platform));
-    ui_refresh_local_inventory(state);
-    ui_clamp_selection(state);
-    return;
-  }
-
-  if (state->selected_index == UI_SELECT_DRY_RUN) {
-    int previous_dry_run = state->config.sync_dry_run;
-    state->config.sync_dry_run = state->config.sync_dry_run ? 0 : 1;
-    int save_status = ui_save_config(state, state->config.sync_dry_run ? "Dry-run enabled" : "Dry-run disabled");
-    if (save_status != APP_CONFIG_OK) {
-      state->config.sync_dry_run = previous_dry_run;
+  if (state->active_screen == UI_ACTIVE_SCREEN_SETTINGS) {
+    if (state->selected_index == UI_SELECT_SETTINGS_BACK) {
+      ui_close_settings_screen(state);
       return;
     }
 
-    if (save_status == APP_CONFIG_OK) {
-      app_log_write(APP_LOG_LEVEL_INFO, "ui",
-          "dry-run %s from the home screen", state->config.sync_dry_run ? "enabled" : "disabled");
+    if (state->selected_index == UI_SELECT_SERVER_URL) {
+      ui_edit_config_field(state, "Server URL", state->config.romm_url,
+          sizeof(state->config.romm_url), SCE_IME_TYPE_URL, 0, 1);
+      return;
     }
+
+    if (state->selected_index == UI_SELECT_USERNAME) {
+      ui_edit_config_field(state, "Username", state->config.romm_username,
+          sizeof(state->config.romm_username), SCE_IME_TYPE_BASIC_LATIN, 0, 1);
+      return;
+    }
+
+    if (state->selected_index == UI_SELECT_PASSWORD) {
+      ui_edit_config_field(state, "Password", state->config.romm_password,
+          sizeof(state->config.romm_password), SCE_IME_TYPE_BASIC_LATIN, 1, 0);
+      return;
+    }
+
+    if (state->selected_index == UI_SELECT_PLATFORM) {
+      state->selected_save_platform = (state->selected_save_platform == SYNC_SAVE_PLATFORM_PSONE)
+                                      ? SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL
+                                      : SYNC_SAVE_PLATFORM_PSONE;
+      app_log_write(APP_LOG_LEVEL_INFO, "ui", "selected sync platform=%s", sync_save_platform_id(state->selected_save_platform));
+      ui_set_status(state, "Save platform: %s", sync_save_platform_display_name(state->selected_save_platform));
+      ui_refresh_local_inventory(state);
+      ui_refresh_game_filter(state);
+      ui_clamp_selection(state);
+      return;
+    }
+
+    if (state->selected_index == UI_SELECT_DRY_RUN) {
+      int previous_dry_run = state->config.sync_dry_run;
+      state->config.sync_dry_run = state->config.sync_dry_run ? 0 : 1;
+      int save_status = ui_save_config(state, state->config.sync_dry_run ? "Dry-run enabled" : "Dry-run disabled");
+      if (save_status != APP_CONFIG_OK) {
+        state->config.sync_dry_run = previous_dry_run;
+        return;
+      }
+
+      if (save_status == APP_CONFIG_OK) {
+        app_log_write(APP_LOG_LEVEL_INFO, "ui",
+            "dry-run %s from settings", state->config.sync_dry_run ? "enabled" : "disabled");
+      }
+      return;
+    }
+
+    return;
+  }
+
+  if (state->selected_index == UI_SELECT_GAME_SEARCH) {
+    ui_edit_game_search(state);
+    return;
+  }
+
+  if (state->selected_index == UI_SELECT_OPEN_SETTINGS) {
+    ui_open_settings_screen(state);
     return;
   }
 
@@ -557,7 +619,12 @@ void ui_activate_selection(UiAppState *state) {
   }
 
   if (state->selected_index >= UI_SELECT_GAME_BASE) {
-    int game_index = state->selected_index - UI_SELECT_GAME_BASE;
+    int visible_index = state->selected_index - UI_SELECT_GAME_BASE;
+    int game_index = ui_game_index_for_visible_row(state, visible_index);
+    if (game_index < 0) {
+      ui_set_status(state, "No game is selected in the current search");
+      return;
+    }
     state->active_game_index = game_index;
     state->games[game_index].selected_for_sync = state->games[game_index].selected_for_sync ? 0 : 1;
     ui_set_status(state, "%s %s for synchronization",

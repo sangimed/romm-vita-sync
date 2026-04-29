@@ -124,7 +124,8 @@ static void ui_initialize_state(UiAppState *state) {
   if (state->pending_auto_sync) {
     ui_set_status(state, "Automatic startup sync is queued");
   }
-  state->selected_index = UI_SELECT_SERVER_URL;
+  state->active_screen = UI_ACTIVE_SCREEN_MAIN;
+  state->selected_index = UI_SELECT_GAME_SEARCH;
   state->nav_hold_direction = UI_NAV_NONE;
   state->nav_hold_frames = 0;
 }
@@ -163,18 +164,25 @@ int main(int argc, char *argv[]) {
     ui_pump_app_events();
     ui_clamp_selection(state);
     ui_update_game_scroll(state);
-    ui_render_main_screen(state);
+    ui_render_active_screen(state);
 
     UiControllerState controller = ui_poll_controller_state();
     unsigned int pressed = ui_compute_pressed(controller.buttons, &previous_buttons);
     if (pressed & SCE_CTRL_START) {
       break;
     }
+    if (pressed & SCE_CTRL_SELECT) {
+      if (state->active_screen == UI_ACTIVE_SCREEN_SETTINGS) {
+        ui_close_settings_screen(state);
+      } else {
+        ui_open_settings_screen(state);
+      }
+      previous_buttons = ui_poll_buttons();
+      continue;
+    }
 
     ui_handle_navigation_input(state, controller.buttons, controller.left_x, controller.left_y);
-    if (state->selected_index >= UI_SELECT_GAME_BASE) {
-      state->active_game_index = state->selected_index - UI_SELECT_GAME_BASE;
-    }
+    ui_sync_active_game_from_selection(state);
     if (pressed & ui_primary_action_button()) {
       ui_activate_selection(state);
       previous_buttons = ui_poll_buttons();

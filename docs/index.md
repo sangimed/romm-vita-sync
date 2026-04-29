@@ -144,21 +144,21 @@ Commands:
 
 1. Launch the app on Vita
 2. The app automatically creates `ux0:data/romm-vita-sync/`
-3. Select the connection fields and enter the RomM `url`, `username`, and `password` (or set `romm_api_token` manually in `settings.ini`)
-4. Optionally toggle `Dry-run mode` before the first sync
+3. Open `Settings`, then enter the RomM `url`, `username`, and `password` (or set `romm_api_token` manually in `settings.ini`)
+4. Optionally toggle `Dry-run mode` in `Settings` before the first sync
 5. Confirm each field saves immediately after closing the system keyboard
 
 ### First Sync
 
 1. Ensure Vita can reach the RomM URL
 2. In the game list, check one or more detected PS1 games
-3. Return to `Synchronize Selected Games` and press the system confirm button (`X` or `O`)
+3. Return to `Sync Selected` and press the system confirm button (`X` or `O`)
 4. Follow progress in the sync modal for manual runs; automatic startup sync updates the header state and `Synchronize` panel status without opening a modal
 
 Notes:
 
 - The RomM URL, API token, username, and password are currently stored in plain text (no encryption) in `settings.ini`.
-- Default `dry_run = true`; you can disable it directly from the home screen or set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
+- Default `dry_run = true`; you can disable it from `Settings` or set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
 - Conflict auto-apply is always enabled internally so recommended conflict actions run automatically.
 
 ## Configuration (`settings.ini`)
@@ -231,16 +231,18 @@ Authentication rule:
 
 Current in-app UI behavior:
 
-- The home screen exposes dedicated fields for the RomM `url`, `username`, and `password`.
+- The home screen focuses on searching detected games, checking games, and launching synchronization.
+- The `Settings` screen exposes dedicated fields for the RomM `url`, `username`, and `password`.
 - `romm_api_token` is currently set via manual `settings.ini` editing.
-- The home screen includes a `Dry-run mode` toggle with immediate save.
+- The `Settings` screen includes a `Dry-run mode` toggle with immediate save.
 - Editing those fields opens the official PS Vita system keyboard (`SceImeDialog`).
 - Confirming keyboard input persists values immediately to `ux0:data/romm-vita-sync/settings.ini`.
-- The main screen keeps a visible primary `Synchronize Selected Games` action plus secondary `Synchronize All Saves` and `Rescan Local Saves` actions.
-- `Detected PS1 Games` supports multi-selection with checkboxes; pressing the confirm button on a row toggles its checked state.
+- The main screen keeps a visible primary `Sync Selected` action plus secondary `Sync All` and `Rescan Saves` actions.
+- `Detected PS1 Games` includes a non-persistent `Search games` field that filters by title, game ID, or internal game key.
+- `Detected PS1 Games` supports multi-selection with checkboxes; pressing the confirm button on a visible row toggles its checked state.
 - The detected list keeps a focused row for navigation while checked rows define the actual sync selection set.
-- The main screen uses three larger panels (`Connection`, `Synchronize`, `Detected PS1 Games`) instead of a separate sync-activity side panel.
-- Connection values wrap inside their rows, and long single-line labels such as game-list entries and footer status text ellipsize to stay inside their bounds.
+- The main screen uses focused panels for synchronization, Settings entry, and detected games; connection fields live on the separate `Settings` screen.
+- Connection values wrap inside their Settings rows, and long single-line labels such as game-list entries and footer status text ellipsize to stay inside their bounds.
 - Manual sync runs now open a blocking modal with a wider layout, wrapped text, a real progress bar, and live scrolling logs.
 - While a manual sync is running, the modal cannot be closed; once complete, it shows success/failure and can be closed manually.
 - Manual sync logs support held `UP/DOWN` scrolling after the viewport leaves auto-follow mode, and they can also be dragged with the front touchscreen.
@@ -282,9 +284,9 @@ Host toolchain alternative:
 
 1. Launch the app on Vita.
 2. Confirm the app creates `ux0:data/romm-vita-sync/`.
-3. Select each connection field and enter the RomM `url`, `username`, and `password` (or set `romm_api_token` manually in `settings.ini`).
+3. Open `Settings`, then select each connection field and enter the RomM `url`, `username`, and `password` (or set `romm_api_token` manually in `settings.ini`).
 4. Confirm that each field saves immediately after closing the system keyboard.
-5. Toggle `Dry-run mode` directly from the home screen if you want to execute real transfers immediately.
+5. Toggle `Dry-run mode` from `Settings` if you want to execute real transfers immediately.
 
 ### 3. Network And Auth Preconditions
 
@@ -294,8 +296,8 @@ Host toolchain alternative:
 
 ### 4. Sync Validation
 
-1. Move through the detected PS1 game list and check one or more games to include.
-2. Return to `Synchronize Selected Games` and press the system confirm button (`X` or `O`).
+1. Use `Search games` if needed, then move through the detected PS1 game list and check one or more games to include.
+2. Return to `Sync Selected` and press the system confirm button (`X` or `O`).
 3. Confirm manual sync shows a blocking progress modal with live logs and completion state.
 4. Confirm automatic startup sync (when enabled) updates the header state and `Synchronize` panel without opening a modal.
 5. On first successful authenticated sync, confirm `device_id` is persisted in `settings.ini`.

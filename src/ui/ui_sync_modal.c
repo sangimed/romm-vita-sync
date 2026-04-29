@@ -397,6 +397,6 @@ void ui_sync_render_live(UiAppState *state) {
     ui_sync_modal_handle_input(state);
     ui_render_sync_modal(state);
   } else {
-    ui_render_main_screen(state);
+    ui_render_active_screen(state);
   }
 }

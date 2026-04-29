@@ -641,6 +641,7 @@ int ui_refresh_local_inventory(UiAppState *state) {
       state->game_count = 0;
       state->active_game_index = -1;
       state->game_scroll = 0;
+      ui_refresh_game_filter(state);
       ui_set_status(state, "Local Vita native scan failed");
       app_log_write(APP_LOG_LEVEL_ERROR, "ui", "vita native scan failed");
       return -1;
@@ -661,6 +662,7 @@ int ui_refresh_local_inventory(UiAppState *state) {
       state->game_count = 0;
       state->active_game_index = -1;
       state->game_scroll = 0;
+      ui_refresh_game_filter(state);
       ui_set_status(state, "Local scan failed: %d", scan_status);
       app_log_write(APP_LOG_LEVEL_ERROR, "ui", "local scan failed status=%d", scan_status);
       return scan_status;
@@ -675,6 +677,7 @@ int ui_refresh_local_inventory(UiAppState *state) {
       state->game_count = 0;
       state->active_game_index = -1;
       state->game_scroll = 0;
+      ui_refresh_game_filter(state);
       ui_set_status(state, "Failed to build sync inventory from scan result");
       app_log_write(APP_LOG_LEVEL_ERROR, "ui", "scan_result_to_sync_saves failed");
       return -1;
@@ -715,6 +718,7 @@ int ui_refresh_local_inventory(UiAppState *state) {
   }
 
   state->game_scroll = 0;
+  ui_refresh_game_filter(state);
   ui_set_status(
       state,
       "Scan complete: %d %s games (%d local target%s)",

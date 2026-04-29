@@ -11,21 +11,26 @@
 #include "save_scanner.h"
 #include "sync_types.h"
 
+#define UI_SELECT_GAME_SEARCH 0
+#define UI_SELECT_SYNC_PRIMARY 1
+#define UI_SELECT_SYNC_ALL 2
+#define UI_SELECT_RESCAN 3
+#define UI_SELECT_OPEN_SETTINGS 4
+#define UI_SELECT_GAME_BASE 5
+
 #define UI_SELECT_SERVER_URL 0
 #define UI_SELECT_USERNAME 1
 #define UI_SELECT_PASSWORD 2
 #define UI_SELECT_PLATFORM 3
 #define UI_SELECT_DRY_RUN 4
-#define UI_SELECT_SYNC_PRIMARY 5
-#define UI_SELECT_SYNC_ALL 6
-#define UI_SELECT_RESCAN 7
-#define UI_SELECT_GAME_BASE 8
+#define UI_SELECT_SETTINGS_BACK 5
 
 #define UI_SCREEN_WIDTH 960.0f
 #define UI_SCREEN_HEIGHT 544.0f
 
 #define UI_GAME_LIST_VISIBLE 4
-#define UI_GAME_ROW_HEIGHT 28.0f
+#define UI_GAME_ROW_HEIGHT 32.0f
+#define UI_GAME_SEARCH_QUERY_LEN 96
 #define UI_LOG_TOP_PADDING 18.0f
 #define UI_LOG_BOTTOM_PADDING 10.0f
 #define UI_LOG_LINE_HEIGHT 18.0f
@@ -50,24 +55,26 @@
 #define UI_COLOR_PANEL_BORDER_ACTIVE RGBA8(94, 155, 255, 220)
 #define UI_COLOR_FIELD RGBA8(28, 37, 51, 255)
 #define UI_COLOR_FIELD_ACTIVE RGBA8(37, 52, 74, 255)
-#define UI_COLOR_BUTTON RGBA8(60, 122, 218, 255)
-#define UI_COLOR_BUTTON_ACTIVE RGBA8(84, 146, 244, 255)
+#define UI_COLOR_BUTTON RGBA8(25, 154, 188, 255)
+#define UI_COLOR_BUTTON_ACTIVE RGBA8(50, 190, 220, 255)
 #define UI_COLOR_BUTTON_DISABLED RGBA8(52, 60, 72, 255)
 #define UI_COLOR_BUTTON_BORDER RGBA8(182, 214, 255, 96)
 #define UI_COLOR_TEXT RGBA8(248, 250, 252, 255)
 #define UI_COLOR_TEXT_MUTED RGBA8(191, 200, 214, 255)
 #define UI_COLOR_TEXT_DIM RGBA8(130, 142, 160, 255)
 #define UI_COLOR_STATUS RGBA8(224, 231, 241, 255)
-#define UI_COLOR_ACCENT RGBA8(94, 155, 255, 255)
-#define UI_COLOR_ACCENT_SOFT RGBA8(94, 155, 255, 56)
+#define UI_COLOR_ACCENT RGBA8(54, 211, 233, 255)
+#define UI_COLOR_ACCENT_SOFT RGBA8(54, 211, 233, 48)
+#define UI_COLOR_GOLD RGBA8(255, 207, 111, 255)
+#define UI_COLOR_GOLD_SOFT RGBA8(255, 207, 111, 42)
 #define UI_COLOR_SUCCESS RGBA8(138, 214, 167, 255)
 #define UI_COLOR_WARNING RGBA8(255, 194, 119, 255)
 #define UI_COLOR_DANGER RGBA8(255, 140, 140, 255)
 
-#define UI_TEXT_SCALE_BOOST 1.14f
+#define UI_TEXT_SCALE_BOOST 1.18f
 #define UI_TEXT_SCALE_MIN 0.82f
 #define UI_TEXT_SCALE_MAX 1.46f
-#define UI_TEXT_SCALE_STEP 0.125f
+#define UI_TEXT_SCALE_STEP 0.0625f
 #define UI_TEXT_SHADOW_OFFSET_X 1.0f
 #define UI_TEXT_SHADOW_OFFSET_Y 1.0f
 #define UI_TEXT_SHADOW_ALPHA_MIN 32U
@@ -98,6 +105,11 @@ typedef struct UiGameEntry {
   int card_count;
   int selected_for_sync;
 } UiGameEntry;
+
+typedef enum UiActiveScreen {
+  UI_ACTIVE_SCREEN_MAIN = 0,
+  UI_ACTIVE_SCREEN_SETTINGS = 1
+} UiActiveScreen;
 
 typedef enum UiSyncTrigger {
   UI_SYNC_TRIGGER_MANUAL = 0,
@@ -148,6 +160,34 @@ typedef struct UiMainLayout {
   float sync_button_gap;
   float sync_first_button_y;
 
+  float settings_x;
+  float settings_y;
+  float settings_w;
+  float settings_h;
+  float settings_button_x;
+  float settings_button_y;
+  float settings_button_w;
+  float settings_button_h;
+
+  float settings_options_x;
+  float settings_options_y;
+  float settings_options_w;
+  float settings_options_h;
+  float settings_options_row_x;
+  float settings_options_row_w;
+  float settings_options_row_h;
+  float settings_options_row_gap;
+  float settings_options_first_row_y;
+  float settings_back_button_x;
+  float settings_back_button_y;
+  float settings_back_button_w;
+  float settings_back_button_h;
+
+  float search_row_x;
+  float search_row_y;
+  float search_row_w;
+  float search_row_h;
+
   float game_x;
   float game_y;
   float game_w;
@@ -197,7 +237,11 @@ typedef struct UiAppState {
 
   UiGameEntry games[ROMM_SYNC_MAX_ITEMS];
   int game_count;
+  int filtered_game_indices[ROMM_SYNC_MAX_ITEMS];
+  int filtered_game_count;
+  char game_search_query[UI_GAME_SEARCH_QUERY_LEN];
 
+  UiActiveScreen active_screen;
   int selected_index;
   int active_game_index;
   int game_scroll;

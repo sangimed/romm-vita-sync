@@ -186,12 +186,14 @@ void ui_begin_frame(void) {
   vita2d_clear_screen();
 
   vita2d_draw_rectangle(0.0f, 0.0f, UI_SCREEN_WIDTH, UI_SCREEN_HEIGHT, UI_COLOR_BACKGROUND);
-  vita2d_draw_rectangle(0.0f, 0.0f, UI_SCREEN_WIDTH, 74.0f, UI_COLOR_HEADER);
-  vita2d_draw_rectangle(0.0f, 74.0f, UI_SCREEN_WIDTH, 1.0f, UI_COLOR_PANEL_BORDER);
+  vita2d_draw_rectangle(0.0f, 0.0f, UI_SCREEN_WIDTH, 78.0f, UI_COLOR_HEADER);
+  vita2d_draw_rectangle(0.0f, 0.0f, UI_SCREEN_WIDTH, 3.0f, UI_COLOR_ACCENT);
+  vita2d_draw_rectangle(0.0f, 74.0f, UI_SCREEN_WIDTH, 4.0f, UI_COLOR_GOLD_SOFT);
+  vita2d_draw_rectangle(0.0f, 78.0f, UI_SCREEN_WIDTH, 1.0f, UI_COLOR_PANEL_BORDER);
   vita2d_draw_rectangle(0.0f, 74.0f, UI_SCREEN_WIDTH, 421.0f, UI_COLOR_BACKGROUND_ALT);
   vita2d_draw_rectangle(0.0f, 496.0f, UI_SCREEN_WIDTH, UI_SCREEN_HEIGHT - 496.0f, UI_COLOR_FOOTER);
   vita2d_draw_rectangle(0.0f, 495.0f, UI_SCREEN_WIDTH, 1.0f, UI_COLOR_PANEL_BORDER);
-  vita2d_draw_rectangle(32.0f, 88.0f, 3.0f, 398.0f, UI_COLOR_ACCENT_SOFT);
+  vita2d_draw_rectangle(32.0f, 88.0f, 3.0f, 398.0f, UI_COLOR_ACCENT);
 }
 
 void ui_end_frame(void) {
@@ -644,11 +646,6 @@ void ui_draw_field_row(float x, float y, float w, float h, int selected, const c
   unsigned int fill = selected ? UI_COLOR_FIELD_ACTIVE : UI_COLOR_FIELD;
   unsigned int border = selected ? UI_COLOR_PANEL_BORDER_ACTIVE : UI_COLOR_PANEL_BORDER;
   unsigned int value_color = has_text(value) ? UI_COLOR_TEXT : UI_COLOR_TEXT_DIM;
-  float label_scale = (h >= 52.0f) ? 0.66f : 0.60f;
-  float value_scale = (h >= 52.0f) ? 0.70f : 0.64f;
-  float label_y = y + ((h >= 52.0f) ? 16.0f : 13.0f);
-  float value_y = y + ((h >= 52.0f) ? 32.0f : 25.0f);
-  float line_spacing = (h >= 52.0f) ? 1.0f : 0.0f;
 
   ui_draw_panel(x, y, w, h, fill, border);
   if (selected) {
@@ -657,6 +654,27 @@ void ui_draw_field_row(float x, float y, float w, float h, int selected, const c
 
   float inner_x = x + 14.0f;
   float inner_w = w - 28.0f;
+  if (h < 42.0f) {
+    char compact_label[96];
+    char compact_value[UI_EDITOR_BUFFER_LEN];
+    float label_scale = 0.56f;
+    float value_scale = 0.62f;
+    float label_w = ui_estimate_text_width(label, label_scale) + 12.0f;
+    if (label_w > (inner_w * 0.38f)) {
+      label_w = inner_w * 0.38f;
+    }
+    ui_truncate_text_to_width(label, label_scale, label_w, compact_label, sizeof(compact_label));
+    ui_truncate_text_to_width(value, value_scale, inner_w - label_w, compact_value, sizeof(compact_value));
+    ui_draw_text(inner_x, y + (h * 0.62f), UI_COLOR_TEXT_DIM, label_scale, "%s", compact_label);
+    ui_draw_truncated_text(inner_x + label_w, y + (h * 0.62f), inner_w - label_w, value_color, value_scale, compact_value);
+    return;
+  }
+
+  float label_scale = (h >= 52.0f) ? 0.66f : 0.58f;
+  float value_scale = (h >= 52.0f) ? 0.70f : 0.62f;
+  float label_y = y + ((h >= 52.0f) ? 16.0f : 14.0f);
+  float value_y = y + ((h >= 52.0f) ? 32.0f : 29.0f);
+  float line_spacing = (h >= 52.0f) ? 1.0f : 0.0f;
   ui_draw_truncated_text(inner_x, label_y, inner_w, UI_COLOR_TEXT_DIM, label_scale, label);
   ui_draw_wrapped_text_block(inner_x, value_y, inner_w, value_color, value_scale, line_spacing, 2, value);
 }
@@ -679,7 +697,10 @@ void ui_draw_button(float x, float y, float w, float h, int primary, int selecte
     vita2d_draw_rectangle(ui_snap_to_pixel(x), ui_snap_to_pixel(y), 4.0f, ui_snap_to_pixel(h), UI_COLOR_ACCENT);
   }
 
-  ui_draw_text_center(x + (w * 0.5f), y + (h * 0.62f), text_color, primary ? 0.82f : 0.76f, title);
+  char display_title[128];
+  float title_scale = primary ? 0.80f : 0.74f;
+  ui_truncate_text_to_width(title, title_scale, w - 18.0f, display_title, sizeof(display_title));
+  ui_draw_text_center(x + (w * 0.5f), y + (h * 0.62f), text_color, title_scale, display_title);
 }
 
 void ui_draw_game_row(
@@ -734,8 +755,8 @@ void ui_draw_game_row(
     title_width = 80.0f;
   }
 
-  ui_draw_truncated_text(title_x, y + 18.0f, title_width, title_color, 0.72f, title);
-  ui_draw_text_right(x + w - 12.0f, y + 18.0f, count_color, count_scale, count_text);
+  ui_draw_truncated_text(title_x, y + 20.0f, title_width, title_color, 0.76f, title);
+  ui_draw_text_right(x + w - 12.0f, y + 20.0f, count_color, count_scale, count_text);
 }
 
 int ui_renderer_init(void) {
