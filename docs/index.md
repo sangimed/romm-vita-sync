@@ -144,7 +144,7 @@ Commands:
 
 1. Launch the app on Vita
 2. The app automatically creates `ux0:data/romm-vita-sync/`
-3. Open `Settings`, then enter the RomM `url`, `username`, and `password` (or set `romm_api_token` manually in `settings.ini`)
+3. Open `Settings`, then enter the RomM `url` and preferred `API token` (or use username/password fallback)
 4. Optionally toggle `Dry-run mode` in `Settings` before the first sync
 5. Confirm each field saves immediately after closing the system keyboard
 
@@ -170,8 +170,7 @@ Connection and sync runtime options are read from:
 Format is INI-style (conventional in C/C++ desktop and embedded projects).
 
 The app now creates `ux0:data/romm-vita-sync/` automatically on startup.
-You can configure the URL, username, password, and dry-run mode directly in the in-app UI; manual file creation is not required.
-`romm_api_token` is currently configured through `settings.ini`.
+You can configure the URL, preferred API token, username/password fallback, and dry-run mode directly in the in-app UI; manual file creation is not required.
 
 Reference template (optional, for manual editing/debug):
 
@@ -232,23 +231,22 @@ Authentication rule:
 Current in-app UI behavior:
 
 - The home screen focuses on searching detected games, checking games, and launching synchronization.
-- The `Settings` screen exposes dedicated fields for the RomM `url`, `username`, and `password`.
-- `romm_api_token` is currently set via manual `settings.ini` editing.
-- The `Settings` screen includes a `Dry-run mode` toggle with immediate save.
+- The `Settings` screen exposes dedicated fields for the RomM `url`, preferred API token, and username/password fallback.
+- The `Settings` screen includes a `Dry-run mode` toggle with immediate save and preview/live wording.
 - Editing those fields opens the official PS Vita system keyboard (`SceImeDialog`).
 - Confirming keyboard input persists values immediately to `ux0:data/romm-vita-sync/settings.ini`.
-- The main screen keeps a visible primary `Sync Selected` action plus secondary `Sync All` and `Rescan Saves` actions.
+- The main screen keeps a visible primary `Sync Selected` action plus secondary `Sync All` and `Rescan Saves` actions, with dry-run/live mode shown before sync.
 - `Detected PS1 Games` includes a non-persistent `Search games` field that filters by title, game ID, or internal game key.
-- `Detected PS1 Games` supports multi-selection with checkboxes; pressing the confirm button on a visible row toggles its checked state.
+- `Detected PS1 Games` supports multi-selection with larger three-row checkboxes; pressing the confirm button on a visible row toggles its checked state.
 - The detected list keeps a focused row for navigation while checked rows define the actual sync selection set.
 - The main screen uses focused panels for synchronization, Settings entry, and detected games; connection fields live on the separate `Settings` screen.
 - Connection values wrap inside their Settings rows, and long single-line labels such as game-list entries and footer status text ellipsize to stay inside their bounds.
-- Manual sync runs now open a blocking modal with a wider layout, wrapped text, a real progress bar, and live scrolling logs.
+- Manual sync runs now open a blocking modal with a wider layout, wrapped text, a real progress bar, live scrolling logs, and concise result summaries for uploads, downloads, skipped actions, conflicts, and errors.
 - While a manual sync is running, the modal cannot be closed; once complete, it shows success/failure and can be closed manually.
 - Manual sync logs support held `UP/DOWN` scrolling after the viewport leaves auto-follow mode, and they can also be dragged with the front touchscreen.
 - Recommended conflict actions execute automatically without exposing a dedicated conflict toggle in the home screen.
 - Automatic startup sync keeps using the same sync pipeline, but its live state is now reflected through the header status and `Synchronize` panel messaging on the home screen.
-- The current UI uses a sober single-screen Vita layout with wider panels, clearer spacing, controller navigation, and sharper text placement.
+- The current UI uses the native Vita Latin PVF font renderer with larger system-like text sizing, a branded header mark, layered panels, higher-contrast focus states, and clearer spacing for controller navigation.
 
 The sync engine now treats server `409 Conflict` responses as synchronization conflicts (remote newer) rather than generic transfer errors, aligned with `romm-retroarch-sync` behavior.
 
@@ -284,7 +282,7 @@ Host toolchain alternative:
 
 1. Launch the app on Vita.
 2. Confirm the app creates `ux0:data/romm-vita-sync/`.
-3. Open `Settings`, then select each connection field and enter the RomM `url`, `username`, and `password` (or set `romm_api_token` manually in `settings.ini`).
+3. Open `Settings`, then select each connection field and enter the RomM `url` plus the preferred API token, or use username/password fallback.
 4. Confirm that each field saves immediately after closing the system keyboard.
 5. Toggle `Dry-run mode` from `Settings` if you want to execute real transfers immediately.
 
@@ -317,7 +315,7 @@ Host toolchain alternative:
 ### 7. `dry_run` Validation
 
 1. Default is `dry_run = true` for safety-first runs.
-2. Set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
+2. Toggle `Dry-run mode` from `Settings` or set `[Sync].dry_run = false` in `settings.ini` to execute real transfers.
 3. Upload flow sends `.SRM` through `POST /api/saves` for new remote saves and `PUT /api/saves/{id}` when a matching remote save already exists; download flow pulls `GET /api/saves/{id}/content` then rebuilds/signs `.VMP`.
 
 ### 8. Conflict Auto-Apply Behavior
