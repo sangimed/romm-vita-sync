@@ -55,42 +55,69 @@ void ui_build_main_layout(UiMainLayout *layout) {
 
   memset(layout, 0, sizeof(*layout));
 
-  layout->connection_x = 32.0f;
-  layout->connection_y = 88.0f;
-  layout->connection_w = 332.0f;
-  layout->connection_h = 256.0f;
-  layout->connection_row_x = layout->connection_x + 16.0f;
-  layout->connection_row_w = layout->connection_w - 32.0f;
+  layout->connection_x = 48.0f;
+  layout->connection_y = 94.0f;
+  layout->connection_w = 864.0f;
+  layout->connection_h = 398.0f;
+  layout->connection_row_x = layout->connection_x + 28.0f;
+  layout->connection_row_w = layout->connection_w - 56.0f;
   layout->connection_row_h = 38.0f;
-  layout->connection_row_gap = 3.0f;
-  layout->connection_first_row_y = layout->connection_y + 46.0f;
+  layout->connection_row_gap = 6.0f;
+  layout->connection_first_row_y = layout->connection_y + 62.0f;
 
-  layout->sync_x = layout->connection_x + layout->connection_w + 20.0f;
-  layout->sync_y = layout->connection_y;
-  layout->sync_w = 544.0f;
-  layout->sync_h = layout->connection_h;
-  layout->sync_content_x = layout->sync_x + 16.0f;
-  layout->sync_content_w = layout->sync_w - 32.0f;
-  layout->sync_button_x = layout->sync_content_x;
-  layout->sync_button_w = layout->sync_content_w;
-  layout->sync_button_h = 30.0f;
+  layout->sync_x = 32.0f;
+  layout->sync_y = 94.0f;
+  layout->sync_w = 624.0f;
+  layout->sync_h = 164.0f;
+  layout->sync_content_x = layout->sync_x + 22.0f;
+  layout->sync_content_w = layout->sync_w - 306.0f;
+  layout->sync_button_x = layout->sync_x + layout->sync_w - 258.0f;
+  layout->sync_button_w = 236.0f;
+  layout->sync_button_h = 36.0f;
   layout->sync_button_gap = 8.0f;
-  layout->sync_first_button_y = layout->sync_y + layout->sync_h - 16.0f -
-                                (layout->sync_button_h * 3.0f) -
-                                (layout->sync_button_gap * 2.0f);
+  layout->sync_first_button_y = layout->sync_y + 34.0f;
+
+  layout->settings_x = layout->sync_x + layout->sync_w + 16.0f;
+  layout->settings_y = layout->sync_y;
+  layout->settings_w = 272.0f;
+  layout->settings_h = layout->sync_h;
+  layout->settings_button_x = layout->settings_x + 16.0f;
+  layout->settings_button_y = layout->settings_y + layout->settings_h - 44.0f;
+  layout->settings_button_w = layout->settings_w - 32.0f;
+  layout->settings_button_h = 34.0f;
+
+  layout->settings_options_x = layout->connection_x;
+  layout->settings_options_y = layout->connection_y;
+  layout->settings_options_w = layout->connection_w;
+  layout->settings_options_h = layout->connection_h;
+  layout->settings_options_row_x = layout->connection_row_x;
+  layout->settings_options_row_w = layout->connection_row_w;
+  layout->settings_options_row_h = layout->connection_row_h;
+  layout->settings_options_row_gap = layout->connection_row_gap;
+  layout->settings_options_first_row_y = layout->connection_first_row_y +
+                                         ((layout->connection_row_h + layout->connection_row_gap) * 4.0f) +
+                                         32.0f;
+  layout->settings_back_button_x = layout->settings_options_row_x;
+  layout->settings_back_button_y = layout->settings_options_y + layout->settings_options_h - 40.0f;
+  layout->settings_back_button_w = layout->settings_options_row_w;
+  layout->settings_back_button_h = 34.0f;
 
   layout->game_x = 32.0f;
-  layout->game_y = layout->connection_y + layout->connection_h + 18.0f;
+  layout->game_y = layout->sync_y + layout->sync_h + 16.0f;
   layout->game_w = 896.0f;
-  layout->game_h = 148.0f;
-  layout->game_row_x = layout->game_x + 16.0f;
-  layout->game_row_w = layout->game_w - 32.0f;
-  layout->game_first_row_y = layout->game_y + 36.0f;
+  layout->game_h = 222.0f;
+  layout->game_row_x = layout->game_x + 22.0f;
+  layout->game_row_w = layout->game_w - 44.0f;
+  layout->search_row_x = layout->game_x + 22.0f;
+  layout->search_row_y = layout->game_y + 46.0f;
+  layout->search_row_w = layout->game_w - 44.0f;
+  layout->search_row_h = 38.0f;
+  layout->game_first_row_y = layout->search_row_y + layout->search_row_h + 8.0f;
 
-  layout->footer_status_x = 92.0f;
-  layout->footer_status_w = 392.0f;
+  layout->footer_status_x = 104.0f;
+  layout->footer_status_w = 440.0f;
   layout->footer_hint_right_x = 928.0f;
-  layout->footer_hint_w = 380.0f;
+  layout->footer_hint_w = 350.0f;
 }
 
 const char *ui_dialog_confirm_button_label(void) {

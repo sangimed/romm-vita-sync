@@ -3,6 +3,20 @@
 
 #include "ui_common.h"
 
+typedef enum UiIcon {
+  UI_ICON_NONE = 0,
+  UI_ICON_SYNC,
+  UI_ICON_STACK,
+  UI_ICON_SEARCH,
+  UI_ICON_SETTINGS,
+  UI_ICON_CHECK,
+  UI_ICON_GAMEPAD,
+  UI_ICON_INFO,
+  UI_ICON_STATUS,
+  UI_ICON_OPEN,
+  UI_ICON_BACK
+} UiIcon;
+
 void ui_truncate_text(const char *source, char *out_text, size_t out_size);
 void ui_truncate_text_to_width(const char *source, float scale, float max_width, char *out_text, size_t out_size);
 void ui_mask_secret(const char *secret, char *out_masked, size_t out_size);
@@ -16,6 +30,8 @@ unsigned int ui_text_shadow_color(unsigned int text_color);
 
 void ui_begin_frame(void);
 void ui_end_frame(void);
+void ui_draw_brand_mark(float x, float y, float size);
+void ui_draw_icon(UiIcon icon, float center_x, float center_y, float size, unsigned int color);
 void ui_draw_text(float x, float y, unsigned int color, float scale, const char *format, ...);
 float ui_estimate_text_width(const char *text, float scale);
 float ui_estimate_text_height(float scale);
@@ -29,6 +45,7 @@ void ui_draw_panel(float x, float y, float w, float h, unsigned int fill, unsign
 void ui_draw_progress_bar(float x, float y, float w, float h, float ratio);
 void ui_draw_field_row(float x, float y, float w, float h, int selected, const char *label, const char *value);
 void ui_draw_button(float x, float y, float w, float h, int primary, int selected, int enabled, const char *title);
+void ui_draw_button_with_icon(float x, float y, float w, float h, int primary, int selected, int enabled, UiIcon icon, const char *title);
 void ui_draw_game_row(float x, float y, float w, float h, int focused, int checked, const char *title, int card_count);
 
 unsigned int ui_log_line_color(const char *line);

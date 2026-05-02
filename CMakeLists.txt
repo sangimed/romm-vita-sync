@@ -82,17 +82,18 @@ target_link_libraries(${PROJECT_NAME}
   SceSqlite_stub
   SceGxm_stub
   ScePgf_stub
+  ScePvf_stub
   SceKernelDmacMgr_stub
   SceShaccCg_stub
   SceNet_stub
   SceNetCtl_stub
   SceHttp_stub
   SceSsl_stub
-  m
-  z
   jpeg
-  png
   freetype
+  png
+  z
+  m
 )
 
 vita_create_self(${PROJECT_NAME}.self ${PROJECT_NAME}

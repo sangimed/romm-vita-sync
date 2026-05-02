@@ -641,6 +641,7 @@ int ui_refresh_local_inventory(UiAppState *state) {
       state->game_count = 0;
       state->active_game_index = -1;
       state->game_scroll = 0;
+      ui_refresh_game_filter(state);
       ui_set_status(state, "Local Vita native scan failed");
       app_log_write(APP_LOG_LEVEL_ERROR, "ui", "vita native scan failed");
       return -1;
@@ -661,6 +662,7 @@ int ui_refresh_local_inventory(UiAppState *state) {
       state->game_count = 0;
       state->active_game_index = -1;
       state->game_scroll = 0;
+      ui_refresh_game_filter(state);
       ui_set_status(state, "Local scan failed: %d", scan_status);
       app_log_write(APP_LOG_LEVEL_ERROR, "ui", "local scan failed status=%d", scan_status);
       return scan_status;
@@ -675,6 +677,7 @@ int ui_refresh_local_inventory(UiAppState *state) {
       state->game_count = 0;
       state->active_game_index = -1;
       state->game_scroll = 0;
+      ui_refresh_game_filter(state);
       ui_set_status(state, "Failed to build sync inventory from scan result");
       app_log_write(APP_LOG_LEVEL_ERROR, "ui", "scan_result_to_sync_saves failed");
       return -1;
@@ -715,6 +718,7 @@ int ui_refresh_local_inventory(UiAppState *state) {
   }
 
   state->game_scroll = 0;
+  ui_refresh_game_filter(state);
   ui_set_status(
       state,
       "Scan complete: %d %s games (%d local target%s)",
@@ -1028,6 +1032,46 @@ int ui_run_sync_pipeline(
   return sync_status;
 }
 
+/*
+ * Writes a compact controller-screen status after a sync run. Dry-run reports
+ * use planned transfers, while live runs use executed transfers so the footer
+ * tells users what happened without opening the log modal again.
+ */
+static void ui_set_sync_result_status(UiAppState *state, const char *scope, int sync_status) {
+  if (state == NULL) {
+    return;
+  }
+
+  const char *scope_label = has_text(scope) ? scope : "Sync";
+  if (sync_status != SYNC_ENGINE_OK) {
+    ui_set_status(state, "%s failed: %s", scope_label, sync_engine_status_str(sync_status));
+    return;
+  }
+
+  if (state->config.sync_dry_run) {
+    ui_set_status(
+        state,
+        "%s preview: uploads=%d downloads=%d skipped=%d conflicts=%d errors=%d",
+        scope_label,
+        state->sync_report.uploads_planned,
+        state->sync_report.downloads_planned,
+        state->sync_report.skipped,
+        state->sync_report.conflicts_detected,
+        state->sync_report.transfer_errors);
+    return;
+  }
+
+  ui_set_status(
+      state,
+      "%s complete: uploads=%d downloads=%d skipped=%d conflicts=%d errors=%d",
+      scope_label,
+      state->sync_report.uploads_executed,
+      state->sync_report.downloads_executed,
+      state->sync_report.skipped,
+      state->sync_report.conflicts_detected,
+      state->sync_report.transfer_errors);
+}
+
 void ui_run_sync_for_selected_games(UiAppState *state) {
   if (state == NULL) {
     return;
@@ -1041,10 +1085,13 @@ void ui_run_sync_for_selected_games(UiAppState *state) {
       &selected_game_count, &selected_target_count);
   int sync_candidate_count = ui_estimate_ps1_sync_candidate_count(state->sync_work_items, work_item_count);
 
-  char confirm_msg[256];
+  const char *mode_line = state->config.sync_dry_run
+                              ? "Dry-run preview: no files will be written."
+                              : "Live sync may upload/download saves. Backups and conflict rules apply.";
+  char confirm_msg[320];
   snprintf(confirm_msg, sizeof(confirm_msg),
-      "Synchronize %d selected game(s)?\n%d sync candidate(s) selected from %d local target(s).",
-      selected_game_count, sync_candidate_count, selected_target_count);
+      "%s\n\nSynchronize %d selected game(s)?\n%d sync candidate(s) selected from %d local target(s).",
+      mode_line, selected_game_count, sync_candidate_count, selected_target_count);
   if (ui_dialog_confirm(confirm_msg) != 1) {
     ui_set_status(state, "Sync canceled for selected games");
     return;
@@ -1062,12 +1109,7 @@ void ui_run_sync_for_selected_games(UiAppState *state) {
   int sync_status = ui_run_sync_pipeline(state, state->sync_work_items, work_item_count,
       UI_SYNC_TRIGGER_MANUAL, "Manual Synchronization", ctx);
 
-  if (sync_status == SYNC_ENGINE_OK) {
-    ui_set_status(state, "Sync finished for selected games (uploads=%d, downloads=%d, errors=%d)",
-        state->sync_report.uploads_executed, state->sync_report.downloads_executed, state->sync_report.transfer_errors);
-  } else {
-    ui_set_status(state, "Sync failed for selected games");
-  }
+  ui_set_sync_result_status(state, "Selected sync", sync_status);
 
   ui_present_completed_manual_sync(state);
 }
@@ -1089,10 +1131,13 @@ void ui_run_sync_all_saves(UiAppState *state) {
   memcpy(state->sync_work_items, state->local_items, sizeof(state->sync_work_items[0]) * (size_t)work_item_count);
   int sync_candidate_count = ui_estimate_ps1_sync_candidate_count(state->sync_work_items, work_item_count);
 
-  char confirm_msg[256];
+  const char *mode_line = state->config.sync_dry_run
+                              ? "Dry-run preview: no files will be written."
+                              : "Live sync may upload/download saves. Backups and conflict rules apply.";
+  char confirm_msg[320];
   snprintf(confirm_msg, sizeof(confirm_msg),
-      "Synchronize all detected PS1 saves?\n%d sync candidate(s) selected from %d local target(s) across %d game(s).",
-      sync_candidate_count, work_item_count, state->game_count);
+      "%s\n\nSynchronize all detected PS1 saves?\n%d sync candidate(s) selected from %d local target(s) across %d game(s).",
+      mode_line, sync_candidate_count, work_item_count, state->game_count);
   if (ui_dialog_confirm(confirm_msg) != 1) {
     ui_set_status(state, "Sync canceled for all games");
     return;
@@ -1105,12 +1150,7 @@ void ui_run_sync_all_saves(UiAppState *state) {
   int sync_status = ui_run_sync_pipeline(state, state->sync_work_items, work_item_count,
       UI_SYNC_TRIGGER_MANUAL, "Manual Synchronization", ctx);
 
-  if (sync_status == SYNC_ENGINE_OK) {
-    ui_set_status(state, "Sync finished for all games (uploads=%d, downloads=%d, errors=%d)",
-        state->sync_report.uploads_executed, state->sync_report.downloads_executed, state->sync_report.transfer_errors);
-  } else {
-    ui_set_status(state, "Sync failed for all games");
-  }
+  ui_set_sync_result_status(state, "All sync", sync_status);
 
   ui_present_completed_manual_sync(state);
 }
@@ -1146,12 +1186,7 @@ void ui_run_pending_auto_sync(UiAppState *state) {
   int sync_status = ui_run_sync_pipeline(state, state->sync_work_items, work_item_count,
       UI_SYNC_TRIGGER_AUTOMATIC, "Automatic Synchronization", ctx);
 
-  if (sync_status == SYNC_ENGINE_OK) {
-    ui_set_status(state, "Auto sync finished (uploads=%d, downloads=%d, errors=%d)",
-        state->sync_report.uploads_executed, state->sync_report.downloads_executed, state->sync_report.transfer_errors);
-  } else {
-    ui_set_status(state, "Auto sync failed");
-  }
+  ui_set_sync_result_status(state, "Auto sync", sync_status);
 
   ui_refresh_local_inventory(state);
   ui_clamp_selection(state);

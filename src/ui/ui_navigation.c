@@ -9,6 +9,62 @@
 
 #include "ui_common.h"
 
+static int ui_ascii_casecmp(const char *lhs, const char *rhs) {
+  if (lhs == rhs) {
+    return 0;
+  }
+  if (lhs == NULL) {
+    return -1;
+  }
+  if (rhs == NULL) {
+    return 1;
+  }
+
+  while ((*lhs != '\0') && (*rhs != '\0')) {
+    char l = (char)tolower((unsigned char)*lhs);
+    char r = (char)tolower((unsigned char)*rhs);
+    if (l != r) {
+      return (l < r) ? -1 : 1;
+    }
+    lhs++;
+    rhs++;
+  }
+
+  if (*lhs == '\0' && *rhs == '\0') {
+    return 0;
+  }
+
+  return (*lhs == '\0') ? -1 : 1;
+}
+
+static int ui_ascii_contains(const char *text, const char *query) {
+  if (!has_text(query)) {
+    return 1;
+  }
+  if (!has_text(text)) {
+    return 0;
+  }
+
+  size_t query_len = strlen(query);
+  if (query_len == 0U) {
+    return 1;
+  }
+
+  for (size_t i = 0U; text[i] != '\0'; ++i) {
+    size_t j = 0U;
+    while ((query[j] != '\0') &&
+           (text[i + j] != '\0') &&
+           (tolower((unsigned char)text[i + j]) == tolower((unsigned char)query[j]))) {
+      j++;
+    }
+    if (j == query_len) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
 UiControllerState ui_poll_controller_state(void) {
   UiControllerState state;
   memset(&state, 0, sizeof(state));
@@ -42,13 +98,160 @@ unsigned int ui_poll_pressed(unsigned int *io_previous_buttons) {
 
 int ui_total_selectable_entries(const UiAppState *state) {
   if (state == NULL) {
-    return UI_SELECT_GAME_BASE;
+    return 0;
   }
-  return UI_SELECT_GAME_BASE + state->game_count;
+
+  if (state->active_screen == UI_ACTIVE_SCREEN_SETTINGS) {
+    return UI_SELECT_SETTINGS_BACK + 1;
+  }
+  return UI_SELECT_GAME_BASE + ui_visible_game_count(state);
 }
 
 int ui_is_sync_button_index(int index) {
   return (index >= UI_SELECT_SYNC_PRIMARY) && (index <= UI_SELECT_RESCAN);
+}
+
+/*
+ * Opens the Settings screen and resets held navigation so the next input starts
+ * from the first editable connection field.
+ */
+void ui_open_settings_screen(UiAppState *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  state->active_screen = UI_ACTIVE_SCREEN_SETTINGS;
+  state->selected_index = UI_SELECT_SERVER_URL;
+  state->nav_hold_direction = UI_NAV_NONE;
+  state->nav_hold_frames = 0;
+}
+
+/*
+ * Returns to the main synchronization screen with focus on the Settings entry
+ * that opened the secondary screen.
+ */
+void ui_close_settings_screen(UiAppState *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  state->active_screen = UI_ACTIVE_SCREEN_MAIN;
+  state->selected_index = UI_SELECT_OPEN_SETTINGS;
+  state->nav_hold_direction = UI_NAV_NONE;
+  state->nav_hold_frames = 0;
+}
+
+static int ui_game_matches_search_query(const UiGameEntry *game, const char *query) {
+  if (game == NULL) {
+    return 0;
+  }
+  if (!has_text(query)) {
+    return 1;
+  }
+
+  return ui_ascii_contains(game->title, query) ||
+         ui_ascii_contains(game->game_id, query) ||
+         ui_ascii_contains(game->key, query);
+}
+
+/*
+ * Rebuilds the visible game index map used by navigation and rendering while
+ * preserving the complete detected-game list and each game's checked state.
+ */
+void ui_refresh_game_filter(UiAppState *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  int visible_count = 0;
+  for (int i = 0; i < state->game_count; ++i) {
+    if (!ui_game_matches_search_query(&state->games[i], state->game_search_query)) {
+      continue;
+    }
+    if (visible_count >= ROMM_SYNC_MAX_ITEMS) {
+      break;
+    }
+    state->filtered_game_indices[visible_count] = i;
+    visible_count += 1;
+  }
+
+  state->filtered_game_count = visible_count;
+  if (visible_count <= 0) {
+    state->active_game_index = -1;
+    state->game_scroll = 0;
+    if ((state->active_screen == UI_ACTIVE_SCREEN_MAIN) && (state->selected_index >= UI_SELECT_GAME_BASE)) {
+      state->selected_index = UI_SELECT_GAME_SEARCH;
+    }
+    return;
+  }
+
+  if (ui_visible_row_for_game_index(state, state->active_game_index) < 0) {
+    state->active_game_index = state->filtered_game_indices[0];
+  }
+}
+
+/*
+ * Returns the number of games currently visible after applying the in-memory
+ * search query; checked games outside the filter remain selected.
+ */
+int ui_visible_game_count(const UiAppState *state) {
+  if (state == NULL) {
+    return 0;
+  }
+  return state->filtered_game_count;
+}
+
+/*
+ * Maps a visible row to the backing game index so rendering and activation can
+ * operate on the complete detected-game array.
+ */
+int ui_game_index_for_visible_row(const UiAppState *state, int visible_index) {
+  if ((state == NULL) || (visible_index < 0) || (visible_index >= state->filtered_game_count)) {
+    return -1;
+  }
+
+  int game_index = state->filtered_game_indices[visible_index];
+  if ((game_index < 0) || (game_index >= state->game_count)) {
+    return -1;
+  }
+  return game_index;
+}
+
+/*
+ * Finds the visible row for a backing game index, or -1 when the current search
+ * hides that game.
+ */
+int ui_visible_row_for_game_index(const UiAppState *state, int game_index) {
+  if ((state == NULL) || (game_index < 0) || (game_index >= state->game_count)) {
+    return -1;
+  }
+
+  for (int i = 0; i < state->filtered_game_count; ++i) {
+    if (state->filtered_game_indices[i] == game_index) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/*
+ * Keeps the backing active game aligned with the focused visible row after
+ * navigation moves through a filtered list.
+ */
+void ui_sync_active_game_from_selection(UiAppState *state) {
+  if ((state == NULL) || (state->active_screen != UI_ACTIVE_SCREEN_MAIN)) {
+    return;
+  }
+
+  if (state->selected_index < UI_SELECT_GAME_BASE) {
+    return;
+  }
+
+  int visible_index = state->selected_index - UI_SELECT_GAME_BASE;
+  int game_index = ui_game_index_for_visible_row(state, visible_index);
+  if (game_index >= 0) {
+    state->active_game_index = game_index;
+  }
 }
 
 static int ui_try_move_selection_shortcut(UiAppState *state, int direction) {
@@ -56,22 +259,23 @@ static int ui_try_move_selection_shortcut(UiAppState *state, int direction) {
     return 0;
   }
 
+  if (state->active_screen == UI_ACTIVE_SCREEN_SETTINGS) {
+    return 0;
+  }
+
   if ((direction == UI_NAV_RIGHT) &&
-      ((state->selected_index == UI_SELECT_SERVER_URL) ||
-       (state->selected_index == UI_SELECT_USERNAME) ||
-       (state->selected_index == UI_SELECT_PASSWORD) ||
-       (state->selected_index == UI_SELECT_PLATFORM) ||
-       (state->selected_index == UI_SELECT_DRY_RUN) ||
+      ((state->selected_index == UI_SELECT_GAME_SEARCH) ||
        (state->selected_index >= UI_SELECT_GAME_BASE))) {
     state->selected_index = UI_SELECT_SYNC_PRIMARY;
     return 1;
   }
 
   if ((direction == UI_NAV_LEFT) && ui_is_sync_button_index(state->selected_index)) {
-    if ((state->active_game_index >= 0) && (state->active_game_index < state->game_count)) {
-      state->selected_index = UI_SELECT_GAME_BASE + state->active_game_index;
+    int visible_index = ui_visible_row_for_game_index(state, state->active_game_index);
+    if (visible_index >= 0) {
+      state->selected_index = UI_SELECT_GAME_BASE + visible_index;
     } else {
-      state->selected_index = UI_SELECT_DRY_RUN;
+      state->selected_index = UI_SELECT_GAME_SEARCH;
     }
     return 1;
   }
@@ -87,33 +291,54 @@ int ui_get_selection_anchor(const UiAppState *state, int index, float *out_x, fl
   UiMainLayout layout;
   ui_build_main_layout(&layout);
 
-  if (index == UI_SELECT_SERVER_URL) {
-    *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
-    *out_y = layout.connection_first_row_y + (layout.connection_row_h * 0.5f);
-    return 0;
+  if (state->active_screen == UI_ACTIVE_SCREEN_SETTINGS) {
+    if (index == UI_SELECT_SETTINGS_BACK) {
+      *out_x = layout.settings_back_button_x + (layout.settings_back_button_w * 0.5f);
+      *out_y = layout.settings_back_button_y + (layout.settings_back_button_h * 0.5f);
+      return 0;
+    }
+    if (index == UI_SELECT_SERVER_URL) {
+      *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
+      *out_y = layout.connection_first_row_y + (layout.connection_row_h * 0.5f);
+      return 0;
+    }
+    if (index == UI_SELECT_API_TOKEN) {
+      *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
+      *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 1.0f) +
+               (layout.connection_row_h * 0.5f);
+      return 0;
+    }
+    if (index == UI_SELECT_USERNAME) {
+      *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
+      *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 2.0f) +
+               (layout.connection_row_h * 0.5f);
+      return 0;
+    }
+    if (index == UI_SELECT_PASSWORD) {
+      *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
+      *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 3.0f) +
+               (layout.connection_row_h * 0.5f);
+      return 0;
+    }
+    if (index == UI_SELECT_PLATFORM) {
+      *out_x = layout.settings_options_row_x + (layout.settings_options_row_w * 0.5f);
+      *out_y = layout.settings_options_first_row_y + (layout.settings_options_row_h * 0.5f);
+      return 0;
+    }
+    if (index == UI_SELECT_DRY_RUN) {
+      *out_x = layout.settings_options_row_x + (layout.settings_options_row_w * 0.5f);
+      *out_y = layout.settings_options_first_row_y +
+               layout.settings_options_row_h +
+               layout.settings_options_row_gap +
+               (layout.settings_options_row_h * 0.5f);
+      return 0;
+    }
+    return -1;
   }
-  if (index == UI_SELECT_USERNAME) {
-    *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
-    *out_y = layout.connection_first_row_y + layout.connection_row_h +
-             layout.connection_row_gap + (layout.connection_row_h * 0.5f);
-    return 0;
-  }
-  if (index == UI_SELECT_PASSWORD) {
-    *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
-    *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 2.0f) +
-             (layout.connection_row_h * 0.5f);
-    return 0;
-  }
-  if (index == UI_SELECT_PLATFORM) {
-    *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
-    *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 3.0f) +
-             (layout.connection_row_h * 0.5f);
-    return 0;
-  }
-  if (index == UI_SELECT_DRY_RUN) {
-    *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
-    *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 4.0f) +
-             (layout.connection_row_h * 0.5f);
+
+  if (index == UI_SELECT_GAME_SEARCH) {
+    *out_x = layout.search_row_x + (layout.search_row_w * 0.5f);
+    *out_y = layout.search_row_y + (layout.search_row_h * 0.5f);
     return 0;
   }
   if (index == UI_SELECT_SYNC_PRIMARY) {
@@ -133,15 +358,22 @@ int ui_get_selection_anchor(const UiAppState *state, int index, float *out_x, fl
              (layout.sync_button_h * 0.5f);
     return 0;
   }
+  if (index == UI_SELECT_OPEN_SETTINGS) {
+    *out_x = layout.settings_button_x + (layout.settings_button_w * 0.5f);
+    *out_y = layout.settings_button_y + (layout.settings_button_h * 0.5f);
+    return 0;
+  }
 
   if (index >= UI_SELECT_GAME_BASE) {
-    int game_index = index - UI_SELECT_GAME_BASE;
-    if ((game_index < 0) || (game_index >= state->game_count)) {
+    int visible_index = index - UI_SELECT_GAME_BASE;
+    if (ui_game_index_for_visible_row(state, visible_index) < 0) {
       return -1;
     }
 
     *out_x = layout.game_row_x + (layout.game_row_w * 0.5f);
-    *out_y = layout.game_first_row_y + (UI_GAME_ROW_HEIGHT * (float)game_index) + (UI_GAME_ROW_HEIGHT * 0.5f);
+    *out_y = layout.game_first_row_y +
+             (UI_GAME_ROW_HEIGHT * (float)(visible_index - state->game_scroll)) +
+             (UI_GAME_ROW_HEIGHT * 0.5f);
     return 0;
   }
 
@@ -154,9 +386,7 @@ static int ui_move_selection_direction(UiAppState *state, int direction) {
   }
 
   if (ui_try_move_selection_shortcut(state, direction)) {
-    if (state->selected_index >= UI_SELECT_GAME_BASE) {
-      state->active_game_index = state->selected_index - UI_SELECT_GAME_BASE;
-    }
+    ui_sync_active_game_from_selection(state);
     return 1;
   }
 
@@ -236,9 +466,7 @@ static int ui_move_selection_direction(UiAppState *state, int direction) {
   }
 
   state->selected_index = best_index;
-  if (state->selected_index >= UI_SELECT_GAME_BASE) {
-    state->active_game_index = state->selected_index - UI_SELECT_GAME_BASE;
-  }
+  ui_sync_active_game_from_selection(state);
   return 1;
 }
 
@@ -266,9 +494,7 @@ static void ui_move_selection_with_fallback(UiAppState *state, int direction) {
     }
   }
 
-  if (state->selected_index >= UI_SELECT_GAME_BASE) {
-    state->active_game_index = state->selected_index - UI_SELECT_GAME_BASE;
-  }
+  ui_sync_active_game_from_selection(state);
 }
 
 static int ui_analog_axis_direction(unsigned char axis_value) {
@@ -362,16 +588,17 @@ void ui_clamp_active_game(UiAppState *state) {
     return;
   }
 
-  if (state->game_count <= 0) {
+  int visible_count = ui_visible_game_count(state);
+  if ((state->game_count <= 0) || (visible_count <= 0)) {
     state->active_game_index = -1;
     return;
   }
 
-  if (state->active_game_index < 0) {
-    state->active_game_index = 0;
+  if ((state->active_game_index < 0) || (state->active_game_index >= state->game_count)) {
+    state->active_game_index = state->filtered_game_indices[0];
   }
-  if (state->active_game_index >= state->game_count) {
-    state->active_game_index = state->game_count - 1;
+  if (ui_visible_row_for_game_index(state, state->active_game_index) < 0) {
+    state->active_game_index = state->filtered_game_indices[0];
   }
 }
 
@@ -394,6 +621,7 @@ void ui_clamp_selection(UiAppState *state) {
   }
 
   ui_clamp_active_game(state);
+  ui_sync_active_game_from_selection(state);
 }
 
 void ui_update_game_scroll(UiAppState *state) {
@@ -401,28 +629,34 @@ void ui_update_game_scroll(UiAppState *state) {
     return;
   }
 
-  if ((state->game_count <= 0) || (state->active_game_index < 0)) {
+  int visible_count = ui_visible_game_count(state);
+  int visible_index = ui_visible_row_for_game_index(state, state->active_game_index);
+  if ((visible_count <= 0) || (visible_index < 0)) {
     state->game_scroll = 0;
     return;
   }
 
-  if (state->active_game_index < state->game_scroll) {
-    state->game_scroll = state->active_game_index;
-  } else if (state->active_game_index >= (state->game_scroll + UI_GAME_LIST_VISIBLE)) {
-    state->game_scroll = state->active_game_index - UI_GAME_LIST_VISIBLE + 1;
+  if (visible_index < state->game_scroll) {
+    state->game_scroll = visible_index;
+  } else if (visible_index >= (state->game_scroll + UI_GAME_LIST_VISIBLE)) {
+    state->game_scroll = visible_index - UI_GAME_LIST_VISIBLE + 1;
   }
 
   if (state->game_scroll < 0) {
     state->game_scroll = 0;
   }
-  if (state->game_scroll > (state->game_count - UI_GAME_LIST_VISIBLE)) {
-    state->game_scroll = state->game_count - UI_GAME_LIST_VISIBLE;
+  if (state->game_scroll > (visible_count - UI_GAME_LIST_VISIBLE)) {
+    state->game_scroll = visible_count - UI_GAME_LIST_VISIBLE;
     if (state->game_scroll < 0) {
       state->game_scroll = 0;
     }
   }
 }
 
+/*
+ * Returns the focused backing game, independent of whether a search filter is
+ * currently hiding other detected games.
+ */
 const UiGameEntry *ui_active_game(const UiAppState *state) {
   if ((state == NULL) || (state->game_count <= 0)) {
     return NULL;
@@ -433,6 +667,22 @@ const UiGameEntry *ui_active_game(const UiAppState *state) {
   }
 
   return &state->games[state->active_game_index];
+}
+
+/*
+ * Returns a game entry by visible row in the filtered list, or NULL when the row
+ * is outside the current search result.
+ */
+const UiGameEntry *ui_visible_game(const UiAppState *state, int visible_index) {
+  if (state == NULL) {
+    return NULL;
+  }
+
+  int game_index = ui_game_index_for_visible_row(state, visible_index);
+  if (game_index < 0) {
+    return NULL;
+  }
+  return &state->games[game_index];
 }
 
 int ui_selected_game_count(const UiAppState *state) {
@@ -532,34 +782,6 @@ int ui_find_game_entry(const UiGameEntry *games, int game_count, const char *key
   }
 
   return -1;
-}
-
-static int ui_ascii_casecmp(const char *lhs, const char *rhs) {
-  if (lhs == rhs) {
-    return 0;
-  }
-  if (lhs == NULL) {
-    return -1;
-  }
-  if (rhs == NULL) {
-    return 1;
-  }
-
-  while ((*lhs != '\0') && (*rhs != '\0')) {
-    char l = (char)tolower((unsigned char)*lhs);
-    char r = (char)tolower((unsigned char)*rhs);
-    if (l != r) {
-      return (l < r) ? -1 : 1;
-    }
-    lhs++;
-    rhs++;
-  }
-
-  if (*lhs == '\0' && *rhs == '\0') {
-    return 0;
-  }
-
-  return (*lhs == '\0') ? -1 : 1;
 }
 
 static void ui_sort_game_entries(UiGameEntry *games, int game_count) {

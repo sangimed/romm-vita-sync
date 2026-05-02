@@ -10,7 +10,8 @@
 #include "app_log.h"
 #include "ui_common.h"
 
-extern vita2d_pgf *g_ui_font;
+extern vita2d_pvf *g_ui_font;
+extern vita2d_texture *g_ui_logo;
 extern int g_common_dialog_active;
 
 void ui_truncate_text(const char *source, char *out_text, size_t out_size) {
@@ -131,11 +132,8 @@ float ui_snap_to_pixel(float value) {
 }
 
 float ui_snap_to_text_grid(float value, float scale) {
-  if (scale <= 0.0f) {
-    return ui_snap_to_pixel(value);
-  }
-
-  return ui_snap_to_pixel(value * scale) / scale;
+  (void)scale;
+  return ui_snap_to_pixel(value);
 }
 
 float ui_quantize_text_scale(float scale) {
@@ -186,12 +184,15 @@ void ui_begin_frame(void) {
   vita2d_clear_screen();
 
   vita2d_draw_rectangle(0.0f, 0.0f, UI_SCREEN_WIDTH, UI_SCREEN_HEIGHT, UI_COLOR_BACKGROUND);
-  vita2d_draw_rectangle(0.0f, 0.0f, UI_SCREEN_WIDTH, 74.0f, UI_COLOR_HEADER);
-  vita2d_draw_rectangle(0.0f, 74.0f, UI_SCREEN_WIDTH, 1.0f, UI_COLOR_PANEL_BORDER);
-  vita2d_draw_rectangle(0.0f, 74.0f, UI_SCREEN_WIDTH, 421.0f, UI_COLOR_BACKGROUND_ALT);
+  vita2d_draw_rectangle(0.0f, 78.0f, UI_SCREEN_WIDTH, 418.0f, UI_COLOR_BACKGROUND_ALT);
+  vita2d_draw_rectangle(0.0f, 0.0f, UI_SCREEN_WIDTH, 78.0f, UI_COLOR_HEADER);
+  vita2d_draw_rectangle(0.0f, 0.0f, UI_SCREEN_WIDTH, 2.0f, UI_COLOR_ACCENT);
+  vita2d_draw_rectangle(0.0f, 72.0f, 560.0f, 3.0f, UI_COLOR_ACCENT);
+  vita2d_draw_rectangle(560.0f, 72.0f, 400.0f, 3.0f, UI_COLOR_GOLD);
+  vita2d_draw_rectangle(0.0f, 78.0f, UI_SCREEN_WIDTH, 1.0f, UI_COLOR_PANEL_BORDER);
   vita2d_draw_rectangle(0.0f, 496.0f, UI_SCREEN_WIDTH, UI_SCREEN_HEIGHT - 496.0f, UI_COLOR_FOOTER);
+  vita2d_draw_rectangle(0.0f, 496.0f, UI_SCREEN_WIDTH, 2.0f, UI_COLOR_PANEL_BORDER);
   vita2d_draw_rectangle(0.0f, 495.0f, UI_SCREEN_WIDTH, 1.0f, UI_COLOR_PANEL_BORDER);
-  vita2d_draw_rectangle(32.0f, 88.0f, 3.0f, 398.0f, UI_COLOR_ACCENT_SOFT);
 }
 
 void ui_end_frame(void) {
@@ -200,6 +201,138 @@ void ui_end_frame(void) {
     vita2d_common_dialog_update();
   }
   vita2d_swap_buffers();
+}
+
+/*
+ * Draws the packaged LiveArea icon as a compact brand mark, with a geometric
+ * fallback so the header still has visual weight if the PNG cannot be loaded.
+ */
+void ui_draw_brand_mark(float x, float y, float size) {
+  if (size <= 0.0f) {
+    return;
+  }
+
+  if (g_ui_logo == NULL) {
+    ui_draw_panel(x, y, size, size, UI_COLOR_FIELD_ACTIVE, UI_COLOR_ACCENT);
+    vita2d_draw_rectangle(x + 8.0f, y + 8.0f, size - 16.0f, 3.0f, UI_COLOR_MAGENTA);
+    vita2d_draw_rectangle(x + 8.0f, y + 17.0f, size - 16.0f, 3.0f, UI_COLOR_GOLD);
+    vita2d_draw_rectangle(x + 8.0f, y + 26.0f, size - 16.0f, 3.0f, UI_COLOR_ACCENT);
+    return;
+  }
+
+  float scale = size / 128.0f;
+  vita2d_draw_rectangle(
+      ui_snap_to_pixel(x + 3.0f),
+      ui_snap_to_pixel(y + 4.0f),
+      ui_snap_to_pixel(size),
+      ui_snap_to_pixel(size),
+      UI_COLOR_PANEL_SHADOW);
+  vita2d_draw_texture_tint_scale(g_ui_logo, ui_snap_to_pixel(x), ui_snap_to_pixel(y), scale, scale, UI_COLOR_TEXT);
+}
+
+static void ui_draw_check_lines(float x, float y, float size, unsigned int color) {
+  float left_x = x + (size * 0.24f);
+  float mid_x = x + (size * 0.43f);
+  float right_x = x + (size * 0.80f);
+  float low_y = y + (size * 0.62f);
+  float mid_y = y + (size * 0.78f);
+  float high_y = y + (size * 0.30f);
+
+  vita2d_draw_line(left_x, low_y, mid_x, mid_y, color);
+  vita2d_draw_line(left_x, low_y + 1.0f, mid_x, mid_y + 1.0f, color);
+  vita2d_draw_line(mid_x, mid_y, right_x, high_y, color);
+  vita2d_draw_line(mid_x, mid_y + 1.0f, right_x, high_y + 1.0f, color);
+}
+
+void ui_draw_icon(UiIcon icon, float center_x, float center_y, float size, unsigned int color) {
+  if ((icon == UI_ICON_NONE) || (size <= 0.0f)) {
+    return;
+  }
+
+  float x = ui_snap_to_pixel(center_x - (size * 0.5f));
+  float y = ui_snap_to_pixel(center_y - (size * 0.5f));
+  float w = ui_snap_to_pixel(size);
+  float h = ui_snap_to_pixel(size);
+  float cx = ui_snap_to_pixel(center_x);
+  float cy = ui_snap_to_pixel(center_y);
+
+  switch (icon) {
+    case UI_ICON_SYNC:
+      vita2d_draw_line(x + (w * 0.24f), cy, x + (w * 0.46f), y + (h * 0.22f), color);
+      vita2d_draw_line(x + (w * 0.46f), y + (h * 0.22f), x + (w * 0.76f), y + (h * 0.22f), color);
+      vita2d_draw_line(x + (w * 0.76f), y + (h * 0.22f), x + (w * 0.66f), y + (h * 0.12f), color);
+      vita2d_draw_line(x + (w * 0.76f), y + (h * 0.22f), x + (w * 0.66f), y + (h * 0.34f), color);
+      vita2d_draw_line(x + (w * 0.76f), cy, x + (w * 0.54f), y + (h * 0.78f), color);
+      vita2d_draw_line(x + (w * 0.54f), y + (h * 0.78f), x + (w * 0.24f), y + (h * 0.78f), color);
+      vita2d_draw_line(x + (w * 0.24f), y + (h * 0.78f), x + (w * 0.34f), y + (h * 0.66f), color);
+      vita2d_draw_line(x + (w * 0.24f), y + (h * 0.78f), x + (w * 0.34f), y + (h * 0.90f), color);
+      break;
+    case UI_ICON_STACK:
+      vita2d_draw_line(x + (w * 0.20f), y + (h * 0.34f), cx, y + (h * 0.18f), color);
+      vita2d_draw_line(cx, y + (h * 0.18f), x + (w * 0.80f), y + (h * 0.34f), color);
+      vita2d_draw_line(x + (w * 0.20f), y + (h * 0.50f), cx, y + (h * 0.66f), color);
+      vita2d_draw_line(cx, y + (h * 0.66f), x + (w * 0.80f), y + (h * 0.50f), color);
+      vita2d_draw_line(x + (w * 0.24f), y + (h * 0.60f), cx, y + (h * 0.78f), color);
+      vita2d_draw_line(cx, y + (h * 0.78f), x + (w * 0.76f), y + (h * 0.60f), color);
+      break;
+    case UI_ICON_SEARCH:
+      vita2d_draw_line(x + (w * 0.20f), y + (h * 0.20f), x + (w * 0.56f), y + (h * 0.20f), color);
+      vita2d_draw_line(x + (w * 0.20f), y + (h * 0.20f), x + (w * 0.20f), y + (h * 0.56f), color);
+      vita2d_draw_line(x + (w * 0.56f), y + (h * 0.20f), x + (w * 0.56f), y + (h * 0.56f), color);
+      vita2d_draw_line(x + (w * 0.20f), y + (h * 0.56f), x + (w * 0.56f), y + (h * 0.56f), color);
+      vita2d_draw_line(x + (w * 0.52f), y + (h * 0.52f), x + (w * 0.82f), y + (h * 0.82f), color);
+      break;
+    case UI_ICON_SETTINGS:
+      vita2d_draw_fill_circle(cx, cy, w * 0.22f, color);
+      vita2d_draw_fill_circle(cx, cy, w * 0.11f, UI_COLOR_PANEL);
+      vita2d_draw_rectangle(cx - 1.0f, y + (h * 0.10f), 2.0f, h * 0.20f, color);
+      vita2d_draw_rectangle(cx - 1.0f, y + (h * 0.70f), 2.0f, h * 0.20f, color);
+      vita2d_draw_rectangle(x + (w * 0.10f), cy - 1.0f, w * 0.20f, 2.0f, color);
+      vita2d_draw_rectangle(x + (w * 0.70f), cy - 1.0f, w * 0.20f, 2.0f, color);
+      vita2d_draw_line(x + (w * 0.22f), y + (h * 0.22f), x + (w * 0.34f), y + (h * 0.34f), color);
+      vita2d_draw_line(x + (w * 0.78f), y + (h * 0.22f), x + (w * 0.66f), y + (h * 0.34f), color);
+      vita2d_draw_line(x + (w * 0.22f), y + (h * 0.78f), x + (w * 0.34f), y + (h * 0.66f), color);
+      vita2d_draw_line(x + (w * 0.78f), y + (h * 0.78f), x + (w * 0.66f), y + (h * 0.66f), color);
+      break;
+    case UI_ICON_CHECK:
+      ui_draw_check_lines(x, y, w, color);
+      break;
+    case UI_ICON_GAMEPAD:
+      vita2d_draw_line(x + (w * 0.16f), y + (h * 0.36f), x + (w * 0.84f), y + (h * 0.36f), color);
+      vita2d_draw_line(x + (w * 0.16f), y + (h * 0.70f), x + (w * 0.84f), y + (h * 0.70f), color);
+      vita2d_draw_line(x + (w * 0.16f), y + (h * 0.36f), x + (w * 0.16f), y + (h * 0.70f), color);
+      vita2d_draw_line(x + (w * 0.84f), y + (h * 0.36f), x + (w * 0.84f), y + (h * 0.70f), color);
+      vita2d_draw_rectangle(x + (w * 0.28f), y + (h * 0.48f), w * 0.18f, 2.0f, color);
+      vita2d_draw_rectangle(x + (w * 0.35f), y + (h * 0.42f), 2.0f, h * 0.18f, color);
+      vita2d_draw_fill_circle(x + (w * 0.64f), y + (h * 0.48f), w * 0.04f, color);
+      vita2d_draw_fill_circle(x + (w * 0.73f), y + (h * 0.56f), w * 0.04f, color);
+      break;
+    case UI_ICON_INFO:
+      vita2d_draw_fill_circle(cx, cy, w * 0.42f, color);
+      vita2d_draw_fill_circle(cx, cy, w * 0.33f, UI_COLOR_FOOTER);
+      vita2d_draw_rectangle(cx - 1.0f, y + (h * 0.42f), 2.0f, h * 0.28f, color);
+      vita2d_draw_rectangle(cx - 1.0f, y + (h * 0.28f), 2.0f, 2.0f, color);
+      break;
+    case UI_ICON_STATUS:
+      vita2d_draw_fill_circle(cx, cy, w * 0.30f, color);
+      break;
+    case UI_ICON_OPEN:
+      vita2d_draw_rectangle(x + (w * 0.18f), y + (h * 0.26f), w * 0.46f, 2.0f, color);
+      vita2d_draw_rectangle(x + (w * 0.18f), y + (h * 0.26f), 2.0f, h * 0.56f, color);
+      vita2d_draw_rectangle(x + (w * 0.18f), y + (h * 0.80f), w * 0.56f, 2.0f, color);
+      vita2d_draw_rectangle(x + (w * 0.72f), y + (h * 0.50f), 2.0f, h * 0.32f, color);
+      vita2d_draw_line(x + (w * 0.48f), y + (h * 0.52f), x + (w * 0.82f), y + (h * 0.18f), color);
+      vita2d_draw_line(x + (w * 0.62f), y + (h * 0.18f), x + (w * 0.82f), y + (h * 0.18f), color);
+      vita2d_draw_line(x + (w * 0.82f), y + (h * 0.18f), x + (w * 0.82f), y + (h * 0.38f), color);
+      break;
+    case UI_ICON_BACK:
+      vita2d_draw_line(x + (w * 0.72f), cy, x + (w * 0.28f), cy, color);
+      vita2d_draw_line(x + (w * 0.28f), cy, x + (w * 0.46f), y + (h * 0.30f), color);
+      vita2d_draw_line(x + (w * 0.28f), cy, x + (w * 0.46f), y + (h * 0.70f), color);
+      break;
+    default:
+      break;
+  }
 }
 
 void ui_draw_text(float x, float y, unsigned int color, float scale, const char *format, ...) {
@@ -217,9 +350,9 @@ void ui_draw_text(float x, float y, unsigned int color, float scale, const char 
   float draw_x = ui_snap_to_text_grid(x, draw_scale);
   float draw_y = ui_snap_to_text_grid(y, draw_scale);
 
-  unsigned int shadow_color = ui_text_shadow_color(color);
+  unsigned int shadow_color = (draw_scale >= UI_TEXT_SHADOW_MIN_SCALE) ? ui_text_shadow_color(color) : 0U;
   if (shadow_color != 0U) {
-    vita2d_pgf_draw_text(
+    vita2d_pvf_draw_text(
         g_ui_font,
         ui_snap_to_text_grid(draw_x + UI_TEXT_SHADOW_OFFSET_X, draw_scale),
         ui_snap_to_text_grid(draw_y + UI_TEXT_SHADOW_OFFSET_Y, draw_scale),
@@ -228,14 +361,14 @@ void ui_draw_text(float x, float y, unsigned int color, float scale, const char 
         line);
   }
 
-  vita2d_pgf_draw_text(g_ui_font, draw_x, draw_y, color, draw_scale, line);
+  vita2d_pvf_draw_text(g_ui_font, draw_x, draw_y, color, draw_scale, line);
 }
 
 float ui_estimate_text_width(const char *text, float scale) {
   if ((g_ui_font == NULL) || !has_text(text)) {
     return 0.0f;
   }
-  return (float)vita2d_pgf_text_width(g_ui_font, ui_resolve_text_scale(scale), text);
+  return (float)vita2d_pvf_text_width(g_ui_font, ui_resolve_text_scale(scale), text);
 }
 
 float ui_estimate_text_height(float scale) {
@@ -245,7 +378,7 @@ float ui_estimate_text_height(float scale) {
 
   int width = 0;
   int height = 0;
-  vita2d_pgf_text_dimensions(g_ui_font, ui_resolve_text_scale(scale), "Ag", &width, &height);
+  vita2d_pvf_text_dimensions(g_ui_font, ui_resolve_text_scale(scale), "Ag", &width, &height);
   if (height <= 0) {
     return 18.0f * ui_resolve_text_scale(scale);
   }
@@ -505,7 +638,11 @@ void ui_draw_panel(float x, float y, float w, float h, unsigned int fill, unsign
   w = ui_snap_to_pixel(w);
   h = ui_snap_to_pixel(h);
 
+  vita2d_draw_rectangle(x + 2.0f, y + 2.0f, w, h, UI_COLOR_PANEL_SHADOW);
   vita2d_draw_rectangle(x, y, w, h, fill);
+  if ((w > 4.0f) && (h > 4.0f)) {
+    vita2d_draw_rectangle(x + 1.0f, y + 1.0f, w - 2.0f, 1.0f, UI_COLOR_PANEL_HIGHLIGHT);
+  }
   vita2d_draw_rectangle(x, y, w, 1.0f, border);
   vita2d_draw_rectangle(x, y + h - 1.0f, w, 1.0f, border);
   vita2d_draw_rectangle(x, y, 1.0f, h, border);
@@ -537,6 +674,12 @@ void ui_draw_progress_bar(float x, float y, float w, float h, float ratio) {
         ui_snap_to_pixel(fill_width),
         ui_snap_to_pixel(h - 2.0f),
         UI_COLOR_ACCENT);
+    vita2d_draw_rectangle(
+        ui_snap_to_pixel(x + 1.0f),
+        ui_snap_to_pixel(y + 1.0f),
+        ui_snap_to_pixel(fill_width),
+        2.0f,
+        UI_COLOR_GOLD_SOFT);
   }
 }
 
@@ -644,27 +787,54 @@ void ui_draw_field_row(float x, float y, float w, float h, int selected, const c
   unsigned int fill = selected ? UI_COLOR_FIELD_ACTIVE : UI_COLOR_FIELD;
   unsigned int border = selected ? UI_COLOR_PANEL_BORDER_ACTIVE : UI_COLOR_PANEL_BORDER;
   unsigned int value_color = has_text(value) ? UI_COLOR_TEXT : UI_COLOR_TEXT_DIM;
-  float label_scale = (h >= 52.0f) ? 0.66f : 0.60f;
-  float value_scale = (h >= 52.0f) ? 0.70f : 0.64f;
-  float label_y = y + ((h >= 52.0f) ? 16.0f : 13.0f);
-  float value_y = y + ((h >= 52.0f) ? 32.0f : 25.0f);
-  float line_spacing = (h >= 52.0f) ? 1.0f : 0.0f;
 
   ui_draw_panel(x, y, w, h, fill, border);
   if (selected) {
     vita2d_draw_rectangle(ui_snap_to_pixel(x), ui_snap_to_pixel(y), 4.0f, ui_snap_to_pixel(h), UI_COLOR_ACCENT);
+    vita2d_draw_rectangle(ui_snap_to_pixel(x + 4.0f), ui_snap_to_pixel(y), 2.0f, ui_snap_to_pixel(h), UI_COLOR_MAGENTA);
   }
 
   float inner_x = x + 14.0f;
   float inner_w = w - 28.0f;
+  if (h < 42.0f) {
+    char compact_label[96];
+    char compact_value[UI_EDITOR_BUFFER_LEN];
+    float label_scale = 0.78f;
+    float value_scale = 0.84f;
+    float label_w = ui_estimate_text_width(label, label_scale) + 12.0f;
+    if (label_w > (inner_w * 0.38f)) {
+      label_w = inner_w * 0.38f;
+    }
+    ui_truncate_text_to_width(label, label_scale, label_w, compact_label, sizeof(compact_label));
+    ui_truncate_text_to_width(value, value_scale, inner_w - label_w, compact_value, sizeof(compact_value));
+    ui_draw_text(inner_x, y + (h * 0.64f), UI_COLOR_TEXT_DIM, label_scale, "%s", compact_label);
+    ui_draw_truncated_text(inner_x + label_w, y + (h * 0.64f), inner_w - label_w, value_color, value_scale, compact_value);
+    return;
+  }
+
+  float label_scale = (h >= 52.0f) ? 0.78f : 0.78f;
+  float value_scale = (h >= 52.0f) ? 0.88f : 0.84f;
+  float label_y = y + ((h >= 52.0f) ? 16.0f : 14.0f);
+  float value_y = y + ((h >= 52.0f) ? 32.0f : 29.0f);
+  float line_spacing = (h >= 52.0f) ? 1.0f : 0.0f;
   ui_draw_truncated_text(inner_x, label_y, inner_w, UI_COLOR_TEXT_DIM, label_scale, label);
   ui_draw_wrapped_text_block(inner_x, value_y, inner_w, value_color, value_scale, line_spacing, 2, value);
 }
 
-void ui_draw_button(float x, float y, float w, float h, int primary, int selected, int enabled, const char *title) {
+void ui_draw_button_with_icon(
+    float x,
+    float y,
+    float w,
+    float h,
+    int primary,
+    int selected,
+    int enabled,
+    UiIcon icon,
+    const char *title) {
   unsigned int fill = UI_COLOR_FIELD;
   unsigned int border = selected ? UI_COLOR_PANEL_BORDER_ACTIVE : UI_COLOR_PANEL_BORDER;
   unsigned int text_color = enabled ? UI_COLOR_TEXT : UI_COLOR_TEXT_DIM;
+  unsigned int icon_color = enabled ? (primary ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED) : UI_COLOR_TEXT_DIM;
 
   if (primary) {
     fill = enabled ? (selected ? UI_COLOR_BUTTON_ACTIVE : UI_COLOR_BUTTON) : UI_COLOR_BUTTON_DISABLED;
@@ -675,11 +845,41 @@ void ui_draw_button(float x, float y, float w, float h, int primary, int selecte
   }
 
   ui_draw_panel(x, y, w, h, fill, border);
+  if (primary && enabled) {
+    vita2d_draw_rectangle(ui_snap_to_pixel(x + 1.0f), ui_snap_to_pixel(y + 1.0f), ui_snap_to_pixel(w - 2.0f), 2.0f, UI_COLOR_GOLD_SOFT);
+  }
   if (selected) {
     vita2d_draw_rectangle(ui_snap_to_pixel(x), ui_snap_to_pixel(y), 4.0f, ui_snap_to_pixel(h), UI_COLOR_ACCENT);
+    vita2d_draw_rectangle(ui_snap_to_pixel(x + w - 4.0f), ui_snap_to_pixel(y), 4.0f, ui_snap_to_pixel(h), primary ? UI_COLOR_GOLD : UI_COLOR_MAGENTA);
   }
 
-  ui_draw_text_center(x + (w * 0.5f), y + (h * 0.62f), text_color, primary ? 0.82f : 0.76f, title);
+  char display_title[128];
+  float title_scale = primary ? 0.86f : 0.82f;
+  if (icon == UI_ICON_NONE) {
+    ui_truncate_text_to_width(title, title_scale, w - 18.0f, display_title, sizeof(display_title));
+    ui_draw_text_center(x + (w * 0.5f), y + (h * 0.66f), text_color, title_scale, display_title);
+    return;
+  }
+
+  float icon_size = h * 0.42f;
+  float icon_x = x + 30.0f;
+  float text_x = x + 54.0f;
+  float text_w = w - 64.0f;
+  ui_draw_icon(icon, icon_x, y + (h * 0.50f), icon_size, icon_color);
+  ui_truncate_text_to_width(title, title_scale, text_w, display_title, sizeof(display_title));
+  ui_draw_truncated_text(text_x, y + (h * 0.66f), text_w, text_color, title_scale, display_title);
+}
+
+void ui_draw_button(float x, float y, float w, float h, int primary, int selected, int enabled, const char *title) {
+  ui_draw_button_with_icon(x, y, w, h, primary, selected, enabled, UI_ICON_NONE, title);
+}
+
+/*
+ * Renders selected game rows without relying on a text glyph, keeping the
+ * checkbox crisp at small Vita UI sizes.
+ */
+static void ui_draw_check_mark(float x, float y, float size, unsigned int color) {
+  ui_draw_check_lines(x, y, size, color);
 }
 
 void ui_draw_game_row(
@@ -699,9 +899,10 @@ void ui_draw_game_row(
   ui_draw_panel(x, y, w, h, fill, border);
   if (checked) {
     vita2d_draw_rectangle(ui_snap_to_pixel(x), ui_snap_to_pixel(y), 3.0f, ui_snap_to_pixel(h), UI_COLOR_ACCENT);
+    vita2d_draw_rectangle(ui_snap_to_pixel(x + 3.0f), ui_snap_to_pixel(y), 2.0f, ui_snap_to_pixel(h), UI_COLOR_MAGENTA);
   }
 
-  float checkbox_size = h - 14.0f;
+  float checkbox_size = h - 16.0f;
   if (checkbox_size < 12.0f) {
     checkbox_size = 12.0f;
   }
@@ -715,27 +916,22 @@ void ui_draw_game_row(
       checked ? UI_COLOR_BUTTON : UI_COLOR_FIELD,
       checked ? UI_COLOR_BUTTON_BORDER : UI_COLOR_PANEL_BORDER);
   if (checked) {
-    ui_draw_text_center(
-        checkbox_x + (checkbox_size * 0.5f),
-        checkbox_y + (checkbox_size * 0.72f),
-        UI_COLOR_TEXT,
-        0.58f,
-        "X");
+    ui_draw_check_mark(checkbox_x, checkbox_y, checkbox_size, UI_COLOR_TEXT);
   }
 
   char count_text[32];
   snprintf(count_text, sizeof(count_text), "%d card%s", card_count, (card_count == 1) ? "" : "s");
 
-  float count_scale = 0.64f;
+  float count_scale = 0.80f;
   float count_width = ui_estimate_text_width(count_text, count_scale);
-  float title_x = checkbox_x + checkbox_size + 10.0f;
+  float title_x = checkbox_x + checkbox_size + 14.0f;
   float title_width = (x + w - 12.0f) - title_x - count_width;
   if (title_width < 80.0f) {
     title_width = 80.0f;
   }
 
-  ui_draw_truncated_text(title_x, y + 18.0f, title_width, title_color, 0.72f, title);
-  ui_draw_text_right(x + w - 12.0f, y + 18.0f, count_color, count_scale, count_text);
+  ui_draw_truncated_text(title_x, y + (h * 0.66f), title_width, title_color, 0.86f, title);
+  ui_draw_text_right(x + w - 12.0f, y + (h * 0.66f), count_color, count_scale, count_text);
 }
 
 int ui_renderer_init(void) {
@@ -744,11 +940,17 @@ int ui_renderer_init(void) {
     return status;
   }
 
-  g_ui_font = vita2d_load_default_pgf();
+  vita2d_system_pvf_config latin_font_config = {SCE_PVF_LANGUAGE_LATIN, NULL};
+  g_ui_font = vita2d_load_system_pvf(1, &latin_font_config);
+  if (g_ui_font == NULL) {
+    g_ui_font = vita2d_load_default_pvf();
+  }
   if (g_ui_font == NULL) {
     vita2d_fini();
     return -1;
   }
+
+  g_ui_logo = vita2d_load_PNG_file("app0:/sce_sys/icon0.png");
 
   return 0;
 }
@@ -756,8 +958,12 @@ int ui_renderer_init(void) {
 void ui_renderer_term(void) {
   vita2d_wait_rendering_done();
   if (g_ui_font != NULL) {
-    vita2d_free_pgf(g_ui_font);
+    vita2d_free_pvf(g_ui_font);
     g_ui_font = NULL;
+  }
+  if (g_ui_logo != NULL) {
+    vita2d_free_texture(g_ui_logo);
+    g_ui_logo = NULL;
   }
   vita2d_fini();
 }

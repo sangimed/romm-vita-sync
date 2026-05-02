@@ -16,8 +16,16 @@ void ui_handle_navigation_input(UiAppState *state, unsigned int buttons, unsigne
 void ui_clamp_active_game(UiAppState *state);
 void ui_clamp_selection(UiAppState *state);
 void ui_update_game_scroll(UiAppState *state);
+void ui_open_settings_screen(UiAppState *state);
+void ui_close_settings_screen(UiAppState *state);
+void ui_refresh_game_filter(UiAppState *state);
+int ui_visible_game_count(const UiAppState *state);
+int ui_game_index_for_visible_row(const UiAppState *state, int visible_index);
+int ui_visible_row_for_game_index(const UiAppState *state, int game_index);
+void ui_sync_active_game_from_selection(UiAppState *state);
 
 const UiGameEntry *ui_active_game(const UiAppState *state);
+const UiGameEntry *ui_visible_game(const UiAppState *state, int visible_index);
 int ui_selected_game_count(const UiAppState *state);
 const UiGameEntry *ui_first_selected_game(const UiAppState *state);
 int ui_sync_action_enabled(const UiAppState *state);
