@@ -21,6 +21,7 @@
 #define SYNC_DEFAULT_CONVERSION_DIRECTORY "ux0:data/romm-vita-sync/cache/conversion"
 #define SYNC_DEFAULT_APP_TEMPLATE_SLOT0 "app0:templates/SCEVMC0.VMP"
 #define SYNC_DEFAULT_APP_TEMPLATE_SLOT1 "app0:templates/SCEVMC1.VMP"
+#define SYNC_REMOTE_UPLOAD_TIMESTAMP_TOLERANCE_SECONDS 300
 
 static int extract_parent_directory(const char *path, char *out_directory, size_t out_directory_size);
 
@@ -580,6 +581,36 @@ static int should_skip_redundant_upload(
 
   return (local_item->size_bytes == state_entry->size_bytes) &&
          (local_item->timestamp_unix == state_entry->timestamp_unix);
+}
+
+/*
+ * Returns non-zero when a matched remote save appears to be the same server
+ * object produced by the last upload from this device. RomM exposes server
+ * updated_at as the remote timestamp, so it can be newer than the savedata
+ * mtime even when the local save has not changed.
+ */
+static int remote_matches_known_uploaded_local(
+    const SyncSaveDescriptor *local_item,
+    const SyncSaveDescriptor *remote_item,
+    const SyncStateEntry *state_entry) {
+  if (!should_skip_redundant_upload(local_item, state_entry) || (remote_item == NULL)) {
+    return 0;
+  }
+
+  if ((state_entry != NULL) &&
+      has_text(state_entry->origin_device) &&
+      has_text(remote_item->origin_device) &&
+      sync_string_ieq(state_entry->origin_device, remote_item->origin_device)) {
+    return 1;
+  }
+
+  if ((state_entry == NULL) || (state_entry->last_upload_unix <= 0) ||
+      (remote_item->timestamp_unix <= 0)) {
+    return 0;
+  }
+
+  return remote_item->timestamp_unix <=
+         (state_entry->last_upload_unix + SYNC_REMOTE_UPLOAD_TIMESTAMP_TOLERANCE_SECONDS);
 }
 
 /*
@@ -1704,6 +1735,29 @@ int sync_engine_run(
           i,
           local_count,
           "Download skipped: already up to date");
+      continue;
+    }
+
+    if (remote_matches_known_uploaded_local(local_item, remote_item, state_entry)) {
+      action->action = SYNC_ACTION_SKIP;
+      out_report->skipped += 1;
+      set_reason(action, "skip unchanged local save (already uploaded)");
+      app_log_write(
+          APP_LOG_LEVEL_INFO,
+          "sync",
+          "upload skipped: matched remote save already covers unchanged local file game=%s file=%s",
+          local_item->game_id,
+          display_filename);
+      completed_engine_units = 2 + i;
+      emit_progress(
+          config,
+          completed_engine_units,
+          total_engine_units,
+          i,
+          local_count,
+          "%s: %s",
+          display_filename,
+          action->reason);
       continue;
     }
 

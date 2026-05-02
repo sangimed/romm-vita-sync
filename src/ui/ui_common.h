@@ -126,6 +126,7 @@ typedef struct UiSyncFeedback {
   int running;
   int completed;
   int success;
+  int warning;
   int sync_status;
   int completed_units;
   int total_units;

@@ -60,8 +60,8 @@ void ui_render_header(const UiAppState *state) {
     status_text = "Syncing";
     status_color = UI_COLOR_ACCENT;
   } else if (state->sync_feedback.completed) {
-    status_text = state->sync_feedback.success ? "Synced" : "Failed";
-    status_color = state->sync_feedback.success ? UI_COLOR_SUCCESS : UI_COLOR_DANGER;
+    status_text = state->sync_feedback.success ? "Synced" : (state->sync_feedback.warning ? "Skipped" : "Failed");
+    status_color = state->sync_feedback.success ? UI_COLOR_SUCCESS : (state->sync_feedback.warning ? UI_COLOR_WARNING : UI_COLOR_DANGER);
   }
 
   const char *screen_title = (state->active_screen == UI_ACTIVE_SCREEN_SETTINGS) ? "Settings" : "Sync Deck";
@@ -245,7 +245,7 @@ void ui_render_sync_panel(const UiAppState *state) {
     readiness_color = UI_COLOR_ACCENT;
   } else if (state->sync_feedback.completed) {
     snprintf(readiness, sizeof(readiness), "%s", state->sync_feedback.message);
-    readiness_color = state->sync_feedback.success ? UI_COLOR_SUCCESS : UI_COLOR_DANGER;
+    readiness_color = state->sync_feedback.success ? UI_COLOR_SUCCESS : (state->sync_feedback.warning ? UI_COLOR_WARNING : UI_COLOR_DANGER);
   } else if (state->game_count <= 0) {
     snprintf(readiness, sizeof(readiness), "No local %s saves detected yet.", sync_save_platform_short_label(state->selected_save_platform));
     readiness_color = UI_COLOR_WARNING;

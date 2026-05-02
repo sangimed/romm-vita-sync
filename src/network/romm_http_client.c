@@ -17,6 +17,7 @@
 #include "app_log.h"
 #include "game_matcher.h"
 #include "romm_client.h"
+#include "vita_native_save_policy.h"
 
 #define ROMM_NET_POOL_SIZE (1024 * 1024)
 #define ROMM_HTTP_POOL_SIZE (256 * 1024)
@@ -3652,6 +3653,16 @@ static int parse_remote_save_entries(
       if (parse_iso_timestamp(updated_at, &item->timestamp_unix) < 0) {
         item->timestamp_unix = 0;
       }
+    }
+    int64_t archive_timestamp = 0;
+    if (vita_native_save_archive_timestamp_from_filename(item->filename, &archive_timestamp) == 0) {
+      item->timestamp_unix = archive_timestamp;
+      app_log_write(
+          APP_LOG_LEVEL_DEBUG,
+          "http",
+          "remote Vita archive timestamp parsed file=%s source_unix=%lld",
+          item->filename,
+          (long long)archive_timestamp);
     }
 
     char slot_text[32];

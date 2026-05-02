@@ -336,6 +336,8 @@ void ui_render_sync_modal(UiAppState *state) {
     result_color = UI_COLOR_ACCENT;
   } else if (feedback->success) {
     result_color = UI_COLOR_SUCCESS;
+  } else if (feedback->warning) {
+    result_color = UI_COLOR_WARNING;
   } else {
     result_color = UI_COLOR_DANGER;
   }

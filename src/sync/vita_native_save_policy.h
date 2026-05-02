@@ -2,6 +2,7 @@
 #define VITA_NATIVE_SAVE_POLICY_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /*
  * Returns non-zero only when a Vita native savedata container has the minimum
@@ -33,5 +34,24 @@ int vita_native_save_title_id_is_official_game(const char *title_id);
  * metadata instead of naively copying encrypted files back into savedata.
  */
 const char *vita_native_save_restore_unsupported_reason(void);
+
+/*
+ * Returns the fixed Vita3K import notice for native Vita archive exports.
+ * These archives preserve raw PFS/container metadata and are not decrypted
+ * Vita3K save imports; users must export decrypted data separately before
+ * copying progress into an emulator save directory.
+ */
+const char *vita_native_save_vita3k_import_notice(void);
+
+/*
+ * Extracts the source savedata timestamp encoded in romm-vita-sync Vita native
+ * archive filenames. Accepts both the legacy <TITLE_ID>_<timestamp>.tar shape
+ * and the explicit <TITLE_ID>_raw-pfs-backup_<timestamp>.tar shape.
+ * Returns 0 on success, or -1 when the filename is not a recognized Vita
+ * native archive name.
+ */
+int vita_native_save_archive_timestamp_from_filename(
+    const char *filename,
+    int64_t *out_timestamp_unix);
 
 #endif

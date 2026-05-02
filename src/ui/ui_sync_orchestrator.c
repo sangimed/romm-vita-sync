@@ -16,6 +16,7 @@
 #include "scan_to_sync_adapter.h"
 #include "save_scanner.h"
 #include "sync_engine.h"
+#include "vita_native_save_policy.h"
 #include "vita_native_save_scanner.h"
 #include "ui_common.h"
 #include "ui_config_editor.h"
@@ -254,10 +255,14 @@ static void ui_sync_append_report_logs(const SyncRunReport *report) {
   for (int i = 0; i < render_count; ++i) {
     const SyncActionRecord *action = &report->actions[i];
     AppLogLevel level = (action->status_code < 0) ? APP_LOG_LEVEL_ERROR : APP_LOG_LEVEL_INFO;
+    const char *action_name = has_text(action->filename)
+                                  ? action->filename
+                                  : (has_text(action->game_id) ? action->game_id : "(unnamed)");
     ui_sync_log_write(
         level,
-        "Action %02d: %s %s %s (%s)",
+        "Action %02d: %s [%s] %s %s (%s)",
         i + 1,
+        action_name,
         sync_slot_str(action->slot),
         sync_action_type_str(action->action),
         action->executed ? "executed" : "planned",
@@ -267,6 +272,23 @@ static void ui_sync_append_report_logs(const SyncRunReport *report) {
   if (report->action_count > render_count) {
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "... %d additional action(s) omitted", report->action_count - render_count);
   }
+}
+
+static int ui_sync_report_has_restore_blocked_skip(const SyncRunReport *report) {
+  if (report == NULL) {
+    return 0;
+  }
+
+  const char *restore_reason = vita_native_save_restore_unsupported_reason();
+  for (int i = 0; i < report->action_count; ++i) {
+    const SyncActionRecord *action = &report->actions[i];
+    if ((action->action == SYNC_ACTION_SKIP) &&
+        has_text(action->reason) &&
+        (strstr(action->reason, restore_reason) != NULL)) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 static void ui_sync_engine_progress_callback(
@@ -921,6 +943,7 @@ int ui_run_sync_pipeline(
   if (state->selected_save_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
     ui_sync_feedback_set_message(&state->sync_feedback, "Preparing Vita archive export...");
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "Vita native restore/download is disabled; upload archive sync is enabled");
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "%s", vita_native_save_vita3k_import_notice());
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "Preparing archive-only export for %d Vita native save container(s)", work_item_count);
     int archive_status = vita_native_prepare_export_archives(
         work_items,
@@ -1007,16 +1030,22 @@ int ui_run_sync_pipeline(
   int sync_status = sync_engine_run(
       &config, work_items, work_item_count, active_client, &state->sync_report);
 
+  int restore_blocked_skip = ui_sync_report_has_restore_blocked_skip(&state->sync_report);
   state->sync_feedback.running = 0;
   state->sync_feedback.completed = 1;
   state->sync_feedback.sync_status = sync_status;
-  state->sync_feedback.success = (sync_status == SYNC_ENGINE_OK);
+  state->sync_feedback.warning = restore_blocked_skip;
+  state->sync_feedback.success = (sync_status == SYNC_ENGINE_OK) && !restore_blocked_skip;
   ui_sync_feedback_set_progress(&state->sync_feedback, total_units, total_units);
 
   if (sync_status == SYNC_ENGINE_OK) {
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "Sync completed");
     ui_sync_append_report_logs(&state->sync_report);
-    if (selection_warning_count > 0) {
+    if (restore_blocked_skip) {
+      ui_sync_feedback_set_message(&state->sync_feedback, "Vita restore skipped; use Open decrypted import.");
+    } else if ((selection_warning_count > 0) ||
+               (state->sync_report.skipped > 0) ||
+               (state->sync_report.conflicts_detected > 0)) {
       ui_sync_feedback_set_message(&state->sync_feedback, "Sync completed with warnings.");
     } else {
       ui_sync_feedback_set_message(&state->sync_feedback, "Sync completed successfully.");
@@ -1058,6 +1087,11 @@ static void ui_set_sync_result_status(UiAppState *state, const char *scope, int 
         state->sync_report.skipped,
         state->sync_report.conflicts_detected,
         state->sync_report.transfer_errors);
+    return;
+  }
+
+  if (ui_sync_report_has_restore_blocked_skip(&state->sync_report)) {
+    ui_set_status(state, "%s skipped: Vita native restore unsupported", scope_label);
     return;
   }
 

@@ -16,6 +16,8 @@
 
 #define VITA_NATIVE_MAX_DEPTH 8
 #define VITA_TAR_BLOCK_SIZE 512
+#define VITA_NATIVE_ARCHIVE_README_NAME "00-README-romm-vita-sync.txt"
+#define VITA_NATIVE_ARCHIVE_README_MAX 1536
 #define VITA_NATIVE_FILE_MODE (SCE_S_IRUSR | SCE_S_IWUSR | SCE_S_IRSYS | SCE_S_IWSYS)
 #define VITA_NATIVE_DIRECTORY_MODE (SCE_S_IRWXU | SCE_S_IRWXS)
 #define SQLITE_OK 0
@@ -888,6 +890,18 @@ static int tar_write_header(SceUID fd, const char *name, uint64_t size, int is_d
   return (sceIoWrite(fd, header, sizeof(header)) == (int)sizeof(header)) ? 0 : -1;
 }
 
+static int tar_write_file_padding(SceUID fd, uint64_t size) {
+  uint64_t remainder = size % VITA_TAR_BLOCK_SIZE;
+  if (remainder == 0U) {
+    return 0;
+  }
+
+  char padding[VITA_TAR_BLOCK_SIZE];
+  int padding_size = (int)(VITA_TAR_BLOCK_SIZE - remainder);
+  memset(padding, 0, sizeof(padding));
+  return (sceIoWrite(fd, padding, padding_size) == padding_size) ? 0 : -1;
+}
+
 static int tar_add_path(SceUID tar_fd, const char *filesystem_path, const char *archive_name, int depth) {
   if (!has_text_local(filesystem_path) || !has_text_local(archive_name) || (depth > VITA_NATIVE_MAX_DEPTH)) {
     return -1;
@@ -961,16 +975,70 @@ static int tar_add_path(SceUID tar_fd, const char *filesystem_path, const char *
   }
   sceIoClose(in_fd);
 
-  uint64_t remainder = ((uint64_t)st.st_size) % VITA_TAR_BLOCK_SIZE;
-  if (remainder != 0U) {
-    char padding[VITA_TAR_BLOCK_SIZE];
-    int padding_size = (int)(VITA_TAR_BLOCK_SIZE - remainder);
-    memset(padding, 0, sizeof(padding));
-    if (sceIoWrite(tar_fd, padding, padding_size) != padding_size) {
-      return -1;
-    }
+  if (tar_write_file_padding(tar_fd, (uint64_t)st.st_size) < 0) {
+    return -1;
   }
   return 0;
+}
+
+/*
+ * Builds the human-readable manifest stored in every Vita native archive.
+ * The archive intentionally preserves raw PFS/container metadata, so the
+ * manifest warns against copying the extracted payload directly into Vita3K.
+ */
+static void build_vita_native_archive_readme(
+    const SyncSaveDescriptor *item,
+    char *out_text,
+    size_t out_text_size) {
+  if ((out_text == NULL) || (out_text_size == 0U)) {
+    return;
+  }
+
+  const char *title_id = ((item != NULL) && has_text_local(item->game_id)) ? item->game_id : "(unknown)";
+  const char *title = ((item != NULL) && has_text_local(item->title)) ? item->title : "(unknown)";
+  const char *notice = vita_native_save_vita3k_import_notice();
+  const char *restore_notice = vita_native_save_restore_unsupported_reason();
+
+  snprintf(
+      out_text,
+      out_text_size,
+      "romm-vita-sync Vita native archive\n"
+      "\n"
+      "Title ID: %s\n"
+      "Title: %s\n"
+      "\n"
+      "This tar is a raw PS Vita savedata container backup. It preserves files\n"
+      "such as sce_pfs, sce_sys, PARAM.SFO, and sce_sys/keystone when present.\n"
+      "\n"
+      "Vita3K import note: %s.\n"
+      "\n"
+      "Do not copy only the game payload folder from this archive into Vita3K;\n"
+      "that can leave Vita3K's SlotParam_*.bin out of sync with the payload and\n"
+      "make the game reject the save. To move this progress into Vita3K, export\n"
+      "the same save from a Vita with VitaShell > Open decrypted or a save\n"
+      "manager, then copy the decrypted payload into the save folder generated\n"
+      "by Vita3K.\n"
+      "\n"
+      "Native restore status: %s.\n",
+      title_id,
+      title,
+      notice,
+      restore_notice);
+}
+
+static int tar_add_text_file(SceUID tar_fd, const char *archive_name, const char *text) {
+  if (!has_text_local(archive_name) || (text == NULL)) {
+    return -1;
+  }
+
+  size_t text_size = strlen(text);
+  if (tar_write_header(tar_fd, archive_name, (uint64_t)text_size, 0) < 0) {
+    return -1;
+  }
+  if ((text_size > 0U) && (sceIoWrite(tar_fd, text, (int)text_size) != (int)text_size)) {
+    return -1;
+  }
+  return tar_write_file_padding(tar_fd, (uint64_t)text_size);
 }
 
 int vita_native_prepare_export_archives(
@@ -1005,7 +1073,13 @@ int vita_native_prepare_export_archives(
 
     char archive_path[ROMM_MAX_PATH_LEN];
     int64_t stamp = item->timestamp_unix > 0 ? item->timestamp_unix : 0;
-    int wrote = snprintf(archive_path, sizeof(archive_path), "%s/%s_%lld.tar", cache_dir, item->game_id, (long long)stamp);
+    int wrote = snprintf(
+        archive_path,
+        sizeof(archive_path),
+        "%s/%s_raw-pfs-backup_%lld.tar",
+        cache_dir,
+        item->game_id,
+        (long long)stamp);
     if ((wrote < 0) || ((size_t)wrote >= sizeof(archive_path))) {
       return -1;
     }
@@ -1021,6 +1095,11 @@ int vita_native_prepare_export_archives(
       return tar_fd;
     }
     int tar_status = tar_add_path(tar_fd, original_path, item->game_id, 0);
+    if (tar_status == 0) {
+      char readme_text[VITA_NATIVE_ARCHIVE_README_MAX];
+      build_vita_native_archive_readme(item, readme_text, sizeof(readme_text));
+      tar_status = tar_add_text_file(tar_fd, VITA_NATIVE_ARCHIVE_README_NAME, readme_text);
+    }
     if (tar_status == 0) {
       tar_write_zero_block(tar_fd);
       tar_write_zero_block(tar_fd);
@@ -1045,7 +1124,8 @@ int vita_native_prepare_export_archives(
     }
     snprintf(item->path, sizeof(item->path), "%s", archive_path);
     sync_extract_filename(archive_path, item->filename, sizeof(item->filename));
-    vita_scan_log(verbose, APP_LOG_LEVEL_INFO, "archive export prepared title_id=%s archive=%s size=%llu", item->game_id, archive_path, (unsigned long long)item->size_bytes);
+    vita_scan_log(verbose, APP_LOG_LEVEL_INFO, "archive export prepared title_id=%s archive=%s size=%llu format=raw-pfs-backup readme=%s", item->game_id, archive_path, (unsigned long long)item->size_bytes, VITA_NATIVE_ARCHIVE_README_NAME);
+    vita_scan_log(verbose, APP_LOG_LEVEL_INFO, "%s", vita_native_save_vita3k_import_notice());
   }
 
   return 0;

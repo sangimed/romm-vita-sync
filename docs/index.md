@@ -56,7 +56,7 @@ Current integration status:
 - upload/download conversion logic is integrated in `SyncEngine`
 - real HTTP save transfer callbacks are wired (`list/upload/download`)
 - local Vita saves are mapped to RomM `rom_id` by trying `/api/platforms` first, then querying `/api/roms` with bounded search variants (`GAME_ID`, title exact, title compact, title normalized, alias-stripped title, significant tokens) and local scoring (serial, title fuzzy, filename fallback)
-- PS Vita native save scanning is experimental and upload-only: eligible containers are exported as `.tar` backup archives, uploaded to RomM through the `vita3k` save backend, and compared against existing remote archive saves; restore/download remains disabled until PFS/keystone-safe writes are implemented
+- PS Vita native save scanning is experimental and upload-only: eligible containers are exported as `.tar` raw PFS backup archives with an embedded import README, uploaded to RomM through the `vita3k` save backend, and compared against existing remote archive saves; these archives are not direct Vita3K imports, and restore/download remains disabled until PFS/keystone-safe writes are implemented
 
 
 ## Execution Model (Version 1)
@@ -479,14 +479,16 @@ Scanner behavior:
 3. Require `sce_sys`, `sce_sys/keystone`, and `sce_sys/param.sfo` or `sce_sys/PARAM.SFO`.
 4. Skip any candidate missing `keystone`, because the keystone is part of Vita PFS/signature validation and an upload without it would create a server backup that cannot be restored as a recognized Vita save.
 5. Archive accepted containers as `.tar` files under `ux0:data/romm-vita-sync/cache/vita-native/` before upload.
-6. Upload archives through RomM saves using the `vita3k` backend name, independently from the PS1 `pcsx_rearmed` backend.
-7. Keep Vita native restore/download disabled with the reason `restore not supported yet for Vita native saves: PFS/keystone signature metadata must be preserved or regenerated safely`.
+6. Add `00-README-romm-vita-sync.txt` to each archive so manual downloads explain that the tar is a raw Vita/PFS backup, not a decrypted Vita3K import.
+7. Upload archives through RomM saves using the `vita3k` backend name, independently from the PS1 `pcsx_rearmed` backend.
+8. Keep Vita native restore/download disabled with the reason `restore not supported yet for Vita native saves: PFS/keystone signature metadata must be preserved or regenerated safely`.
 
 Archive format:
 
-- each archive is a POSIX-style tar file named `<TITLE_ID>_<timestamp>.tar`
+- each archive is a POSIX-style tar file named `<TITLE_ID>_raw-pfs-backup_<timestamp>.tar`
 - the archive root is the save container title id, for example `PCSF00012/`
 - all files inside the container are copied byte-for-byte, including `sce_sys/`, `sce_sys/param.sfo` or `sce_sys/PARAM.SFO`, and `sce_sys/keystone`
+- `00-README-romm-vita-sync.txt` is added at the archive root; it warns that extracted raw/PFS contents should not be copied directly into Vita3K, and points users to VitaShell `Open decrypted` or an equivalent save manager export
 - archive staging uses Vita filesystem calls (`sceIoMkdir`, `sceIoOpen`, `sceIoDopen`, `sceIoRead`, `sceIoWrite`) so `ux0:` paths are handled by the Vita I/O layer
 - one archive upload is currently bounded to 32MB because the Vita HTTP API path sends one multipart request body per transfer
 
@@ -494,10 +496,11 @@ Synchronization behavior:
 
 - if no remote archive save exists for the mapped `rom_id`, the local archive is uploaded
 - if a remote archive save exists and the local archive is newer, upload is selected by the normal conflict policy
+- remote Vita archive age is read from the source timestamp encoded in the archive filename (`<TITLE_ID>_<timestamp>.tar` or `<TITLE_ID>_raw-pfs-backup_<timestamp>.tar`) instead of RomM's server-side `updated_at`, because `updated_at` reflects upload time rather than savedata modification time
 - if the remote archive save is newer, download is skipped because restore is not safe yet for Vita native saves
 - if dry-run mode is enabled, the app prepares the archive and plans the transfer but does not upload it
 
-This means the server receives faithful backup archives only when the minimum signed-container metadata is present. The app does not yet import or restore Vita native saves from RomM, because copying a server-side archive back into `savedata` without a proven PFS/keystone-aware write path can leave the save unrecognized or corrupted.
+This means the server receives faithful backup archives only when the minimum signed-container metadata is present. The app does not yet import or restore Vita native saves from RomM, because copying a server-side archive back into `savedata` without a proven PFS/keystone-aware write path can leave the save unrecognized or corrupted. For Vita3K, the safe manual path is to export the same save from a real Vita using VitaShell `Open decrypted` or a save manager, then copy the decrypted payload into the save folder generated by Vita3K while keeping Vita3K's `SlotParam_*.bin`.
 
 ### UI Game Aggregation (`UiGameEntry`)
 
@@ -844,7 +847,7 @@ Conversion is now wired in the app sync flow:
 
 - upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback, then either creates a new remote save or overwrites the matched remote save
 - download path: remote `.SRM` is reconstructed to local `.VMP` and re-signed in-app
-- Vita native upload path: local savedata containers are exported to `.tar`, then uploaded through RomM save sync using the `vita3k` backend name and a `.tar` filename
+- Vita native upload path: local savedata containers are exported to raw PFS `.tar` backups with `00-README-romm-vita-sync.txt`, then uploaded through RomM save sync using the `vita3k` backend name and a `.tar` filename
 - Vita native download path: remote archive download is intentionally blocked until a PFS/keystone-safe restore path exists
 - when one game has both local PS1 cards, only the newest local card is mapped and synchronized; exact timestamp ties keep `SCEVMC0.VMP` and warn the user
 - if the server copy is newer and the remote save is a standard single-card SRM, the download target remains that selected local card
