@@ -10,6 +10,38 @@
 
 extern int g_common_dialog_active;
 
+/*
+ * Returns the authentication state shown in Settings summaries, preserving the
+ * product rule that API token auth is preferred over username/password.
+ */
+static const char *ui_auth_status_text(const UiAppState *state) {
+  if (state == NULL) {
+    return "Auth missing";
+  }
+
+  if (has_text(state->config.romm_api_token)) {
+    return "API token configured";
+  }
+  if (has_text(state->config.romm_username) && has_text(state->config.romm_password)) {
+    return "Username/password configured";
+  }
+  return "Auth missing";
+}
+
+/*
+ * Returns a non-color-only companion state for authentication badges; callers
+ * render the text from ui_auth_status_text alongside this color.
+ */
+static unsigned int ui_auth_status_color(const UiAppState *state) {
+  if ((state != NULL) && has_text(state->config.romm_api_token)) {
+    return UI_COLOR_SUCCESS;
+  }
+  if ((state != NULL) && has_text(state->config.romm_username) && has_text(state->config.romm_password)) {
+    return UI_COLOR_WARNING;
+  }
+  return UI_COLOR_DANGER;
+}
+
 void ui_render_header(const UiAppState *state) {
   const char *status_text = ui_sync_action_enabled(state) ? "Ready" : "Setup";
   unsigned int status_color = ui_sync_action_enabled(state) ? UI_COLOR_SUCCESS : UI_COLOR_WARNING;
@@ -26,19 +58,21 @@ void ui_render_header(const UiAppState *state) {
                                 ? "Edit connection and sync options."
                                 : "Search, select, sync.";
 
-  ui_draw_text(32.0f, 28.0f, UI_COLOR_ACCENT, 0.70f, "RomM Vita Sync");
-  ui_draw_text(32.0f, 55.0f, UI_COLOR_TEXT, 1.08f, "%s", screen_title);
+  ui_draw_brand_mark(30.0f, 16.0f, 46.0f);
+  ui_draw_text(88.0f, 31.0f, UI_COLOR_ACCENT, 0.78f, "RomM Vita Sync");
+  ui_draw_text(88.0f, 61.0f, UI_COLOR_TEXT, 1.04f, "%s", screen_title);
   ui_draw_truncated_text(
-      250.0f,
-      55.0f,
-      360.0f,
+      290.0f,
+      61.0f,
+      330.0f,
       UI_COLOR_TEXT_MUTED,
-      0.64f,
+      0.82f,
       screen_hint);
 
   ui_draw_panel(744.0f, 22.0f, 184.0f, 42.0f, UI_COLOR_FIELD, status_color);
-  ui_draw_text(758.0f, 40.0f, UI_COLOR_TEXT_DIM, 0.58f, "Status");
-  ui_draw_truncated_text_right(914.0f, 52.0f, 104.0f, status_color, 0.74f, status_text);
+  vita2d_draw_fill_circle(762.0f, 43.0f, 5.0f, status_color);
+  ui_draw_text(776.0f, 40.0f, UI_COLOR_TEXT_DIM, 0.78f, "Status");
+  ui_draw_truncated_text_right(914.0f, 53.0f, 104.0f, status_color, 0.86f, status_text);
 }
 
 void ui_render_connection_panel(const UiAppState *state) {
@@ -50,15 +84,21 @@ void ui_render_connection_panel(const UiAppState *state) {
   ui_build_main_layout(&layout);
 
   char url_display[APP_CONFIG_MAX_URL_LEN + 16];
+  char api_token_display[64];
   char username_display[APP_CONFIG_MAX_USERNAME_LEN + 16];
   char password_display[APP_CONFIG_MAX_PASSWORD_LEN + 16];
   ui_format_field_display(state->config.romm_url, 0, url_display, sizeof(url_display));
+  snprintf(
+      api_token_display,
+      sizeof(api_token_display),
+      "%s",
+      has_text(state->config.romm_api_token) ? "Configured (preferred)" : "Not configured");
   ui_format_field_display(state->config.romm_username, 0, username_display, sizeof(username_display));
   ui_format_field_display(state->config.romm_password, 1, password_display, sizeof(password_display));
 
   ui_draw_panel(layout.connection_x, layout.connection_y, layout.connection_w, layout.connection_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
   vita2d_draw_rectangle(layout.connection_x, layout.connection_y, layout.connection_w, 3.0f, UI_COLOR_ACCENT);
-  ui_draw_text(layout.connection_x + 16.0f, layout.connection_y + 30.0f, UI_COLOR_TEXT, 0.88f, "Connection");
+  ui_draw_text(layout.connection_x + 16.0f, layout.connection_y + 31.0f, UI_COLOR_TEXT, 0.92f, "Connection");
 
   ui_draw_field_row(
       layout.connection_row_x,
@@ -73,16 +113,24 @@ void ui_render_connection_panel(const UiAppState *state) {
       layout.connection_first_row_y + layout.connection_row_h + layout.connection_row_gap,
       layout.connection_row_w,
       layout.connection_row_h,
-      state->selected_index == UI_SELECT_USERNAME,
-      "RoMM username",
-      username_display);
+      state->selected_index == UI_SELECT_API_TOKEN,
+      "API token (preferred)",
+      api_token_display);
   ui_draw_field_row(
       layout.connection_row_x,
       layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 2.0f),
       layout.connection_row_w,
       layout.connection_row_h,
+      state->selected_index == UI_SELECT_USERNAME,
+      "Username fallback",
+      username_display);
+  ui_draw_field_row(
+      layout.connection_row_x,
+      layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 3.0f),
+      layout.connection_row_w,
+      layout.connection_row_h,
       state->selected_index == UI_SELECT_PASSWORD,
-      "RoMM password",
+      "Password fallback",
       password_display);
 }
 
@@ -97,7 +145,11 @@ static void ui_render_settings_options_panel(const UiAppState *state) {
   char platform_display[64];
   char dry_run_display[24];
   snprintf(platform_display, sizeof(platform_display), "%s", sync_save_platform_display_name(state->selected_save_platform));
-  snprintf(dry_run_display, sizeof(dry_run_display), "%s", state->config.sync_dry_run ? "Enabled" : "Disabled");
+  snprintf(
+      dry_run_display,
+      sizeof(dry_run_display),
+      "%s",
+      state->config.sync_dry_run ? "Preview only" : "Live transfers");
 
   ui_draw_panel(
       layout.settings_options_x,
@@ -111,7 +163,7 @@ static void ui_render_settings_options_panel(const UiAppState *state) {
       layout.settings_options_x + 16.0f,
       layout.settings_options_y + 30.0f,
       UI_COLOR_TEXT,
-      0.88f,
+      0.92f,
       "Sync Options");
 
   ui_draw_field_row(
@@ -154,6 +206,7 @@ void ui_render_sync_panel(const UiAppState *state) {
   char title_display[ROMM_GAME_TITLE_LEN + 16];
   char detail[128];
   char readiness[UI_STATUS_LINE_LEN];
+  const char *sync_mode = state->config.sync_dry_run ? "Dry-run preview" : "Live transfers";
   unsigned int readiness_color = UI_COLOR_SUCCESS;
   int sync_enabled = ui_sync_action_enabled(state);
   int sync_all_enabled = ui_sync_all_action_enabled(state);
@@ -174,21 +227,23 @@ void ui_render_sync_panel(const UiAppState *state) {
       snprintf(
           detail,
           sizeof(detail),
-          "1 game | %d target%s",
+          "1 game | %d target%s | %s",
           selected_targets,
-          (selected_targets == 1) ? "" : "s");
+          (selected_targets == 1) ? "" : "s",
+          sync_mode);
     } else {
       snprintf(title_display, sizeof(title_display), "%d games checked", selected_games);
       snprintf(
           detail,
           sizeof(detail),
-          "%d target%s selected",
+          "%d target%s selected | %s",
           selected_targets,
-          (selected_targets == 1) ? "" : "s");
+          (selected_targets == 1) ? "" : "s",
+          sync_mode);
     }
   } else {
     snprintf(title_display, sizeof(title_display), "No game checked");
-    snprintf(detail, sizeof(detail), "Search and check games below.");
+    snprintf(detail, sizeof(detail), "Mode: %s", sync_mode);
   }
 
   if (state->sync_feedback.running) {
@@ -207,35 +262,41 @@ void ui_render_sync_panel(const UiAppState *state) {
     snprintf(readiness, sizeof(readiness), "Enter the RoMM server address first.");
     readiness_color = UI_COLOR_WARNING;
   } else if (!app_config_has_auth(&state->config)) {
-    snprintf(readiness, sizeof(readiness), "Enter a RoMM API token or username/password.");
+    snprintf(readiness, sizeof(readiness), "Enter a RoMM API token. Username/password is fallback.");
     readiness_color = UI_COLOR_WARNING;
   } else {
-    snprintf(readiness, sizeof(readiness), "Ready. Connection details look complete.");
+    snprintf(
+        readiness,
+        sizeof(readiness),
+        "%s",
+        state->config.sync_dry_run
+            ? "Dry-run preview: no files will be written."
+            : "Live sync: review prompt before transfer.");
   }
 
   ui_draw_panel(layout.sync_x, layout.sync_y, layout.sync_w, layout.sync_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
   vita2d_draw_rectangle(layout.sync_x, layout.sync_y, layout.sync_w, 3.0f, UI_COLOR_ACCENT);
-  ui_draw_text(layout.sync_content_x, layout.sync_y + 30.0f, UI_COLOR_TEXT, 0.92f, "Synchronize");
+  ui_draw_text(layout.sync_content_x, layout.sync_y + 31.0f, UI_COLOR_TEXT, 0.92f, "Synchronize");
 
-  float cursor_y = layout.sync_y + 58.0f;
+  float cursor_y = layout.sync_y + 61.0f;
   cursor_y = ui_draw_wrapped_text_block(
       layout.sync_content_x,
       cursor_y,
       layout.sync_content_w,
       selected_games > 0 ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED,
-      0.78f,
+      0.90f,
       2.0f,
       1,
       title_display);
   cursor_y += 6.0f;
-  ui_draw_truncated_text(layout.sync_content_x, cursor_y, layout.sync_content_w, UI_COLOR_TEXT_MUTED, 0.62f, detail);
-  cursor_y += ui_estimate_text_height(0.62f) + 8.0f;
+  ui_draw_truncated_text(layout.sync_content_x, cursor_y, layout.sync_content_w, UI_COLOR_TEXT_MUTED, 0.80f, detail);
+  cursor_y += ui_estimate_text_height(0.80f) + 7.0f;
   ui_draw_wrapped_text_block(
       layout.sync_content_x,
       cursor_y,
       layout.sync_content_w,
       readiness_color,
-      0.60f,
+      0.78f,
       1.0f,
       2,
       readiness);
@@ -278,22 +339,24 @@ static void ui_render_settings_shortcut_panel(const UiAppState *state) {
   ui_build_main_layout(&layout);
 
   const char *connection_status = app_config_has_server_url(&state->config) ? "Server set" : "Server missing";
-  const char *auth_status = app_config_has_auth(&state->config) ? "Auth set" : "Auth missing";
+  const char *auth_status = ui_auth_status_text(state);
+  const char *sync_mode_status = state->config.sync_dry_run ? "Dry-run preview" : "Live transfers";
   unsigned int connection_color = app_config_has_server_url(&state->config) ? UI_COLOR_SUCCESS : UI_COLOR_WARNING;
-  unsigned int auth_color = app_config_has_auth(&state->config) ? UI_COLOR_SUCCESS : UI_COLOR_WARNING;
+  unsigned int auth_color = ui_auth_status_color(state);
+  unsigned int sync_mode_color = state->config.sync_dry_run ? UI_COLOR_GOLD : UI_COLOR_WARNING;
 
   ui_draw_panel(layout.settings_x, layout.settings_y, layout.settings_w, layout.settings_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
   vita2d_draw_rectangle(layout.settings_x, layout.settings_y, layout.settings_w, 3.0f, UI_COLOR_GOLD);
-  ui_draw_text(layout.settings_x + 16.0f, layout.settings_y + 30.0f, UI_COLOR_TEXT, 0.88f, "Settings");
-  ui_draw_truncated_text(layout.settings_x + 16.0f, layout.settings_y + 58.0f, layout.settings_w - 32.0f, connection_color, 0.66f, connection_status);
-  ui_draw_truncated_text(layout.settings_x + 16.0f, layout.settings_y + 78.0f, layout.settings_w - 32.0f, auth_color, 0.66f, auth_status);
+  ui_draw_text(layout.settings_x + 16.0f, layout.settings_y + 31.0f, UI_COLOR_TEXT, 0.92f, "Settings");
+  ui_draw_truncated_text(layout.settings_x + 16.0f, layout.settings_y + 61.0f, layout.settings_w - 32.0f, connection_color, 0.82f, connection_status);
+  ui_draw_truncated_text(layout.settings_x + 16.0f, layout.settings_y + 85.0f, layout.settings_w - 32.0f, auth_color, 0.82f, auth_status);
   ui_draw_truncated_text(
       layout.settings_x + 16.0f,
-      layout.settings_y + 98.0f,
+      layout.settings_y + 109.0f,
       layout.settings_w - 32.0f,
-      UI_COLOR_TEXT_MUTED,
-      0.66f,
-      sync_save_platform_display_name(state->selected_save_platform));
+      sync_mode_color,
+      0.82f,
+      sync_mode_status);
   ui_draw_button(
       layout.settings_button_x,
       layout.settings_button_y,
@@ -317,7 +380,7 @@ void ui_render_game_panel(const UiAppState *state) {
   vita2d_draw_rectangle(layout.game_x, layout.game_y, layout.game_w, 3.0f, UI_COLOR_ACCENT);
   char panel_title[64];
   snprintf(panel_title, sizeof(panel_title), "Detected %s Games", sync_save_platform_short_label(state->selected_save_platform));
-  ui_draw_text(layout.game_x + 16.0f, layout.game_y + 24.0f, UI_COLOR_TEXT, 0.84f, panel_title);
+  ui_draw_text(layout.game_x + 16.0f, layout.game_y + 28.0f, UI_COLOR_TEXT, 0.92f, panel_title);
 
   char search_display[UI_GAME_SEARCH_QUERY_LEN + 16];
   snprintf(
@@ -337,10 +400,10 @@ void ui_render_game_panel(const UiAppState *state) {
   if (state->game_count <= 0) {
     ui_draw_truncated_text(
         layout.game_x + 16.0f,
-        layout.game_first_row_y + 18.0f,
+        layout.game_first_row_y + 23.0f,
         layout.game_w - 32.0f,
         UI_COLOR_TEXT_MUTED,
-        0.72f,
+        0.86f,
         "No save targets were detected for the selected platform.");
     return;
   }
@@ -349,10 +412,10 @@ void ui_render_game_panel(const UiAppState *state) {
   if (visible_count <= 0) {
     ui_draw_truncated_text(
         layout.game_x + 16.0f,
-        layout.game_first_row_y + 18.0f,
+        layout.game_first_row_y + 23.0f,
         layout.game_w - 32.0f,
         UI_COLOR_TEXT_MUTED,
-        0.72f,
+        0.86f,
         "No detected game matches the current search.");
     return;
   }
@@ -388,7 +451,7 @@ void ui_render_game_panel(const UiAppState *state) {
       layout.game_y + 24.0f,
       420.0f,
       UI_COLOR_TEXT_DIM,
-      0.64f,
+      0.82f,
       summary);
 
   float row_y = layout.game_first_row_y;
@@ -442,14 +505,14 @@ void ui_render_footer(const UiAppState *state) {
         ui_dialog_confirm_button_label());
   }
 
-  ui_draw_text(32.0f, 522.0f, UI_COLOR_TEXT_DIM, 0.68f, "Status");
-  ui_draw_truncated_text(layout.footer_status_x, 522.0f, layout.footer_status_w, UI_COLOR_STATUS, 0.62f, state->status_line);
+  ui_draw_text(32.0f, 522.0f, UI_COLOR_TEXT_DIM, 0.78f, "Status");
+  ui_draw_truncated_text(layout.footer_status_x, 522.0f, layout.footer_status_w, UI_COLOR_STATUS, 0.78f, state->status_line);
   ui_draw_truncated_text_right(
       layout.footer_hint_right_x,
       522.0f,
       layout.footer_hint_w,
       UI_COLOR_TEXT_MUTED,
-      0.58f,
+      0.78f,
       controls_hint);
 }
 

@@ -61,30 +61,30 @@ void ui_build_main_layout(UiMainLayout *layout) {
   layout->connection_h = 398.0f;
   layout->connection_row_x = layout->connection_x + 16.0f;
   layout->connection_row_w = layout->connection_w - 32.0f;
-  layout->connection_row_h = 48.0f;
-  layout->connection_row_gap = 8.0f;
-  layout->connection_first_row_y = layout->connection_y + 58.0f;
+  layout->connection_row_h = 50.0f;
+  layout->connection_row_gap = 7.0f;
+  layout->connection_first_row_y = layout->connection_y + 48.0f;
 
   layout->sync_x = 32.0f;
   layout->sync_y = 88.0f;
   layout->sync_w = 640.0f;
-  layout->sync_h = 156.0f;
+  layout->sync_h = 160.0f;
   layout->sync_content_x = layout->sync_x + 16.0f;
   layout->sync_content_w = layout->sync_w - 292.0f;
   layout->sync_button_x = layout->sync_x + layout->sync_w - 244.0f;
   layout->sync_button_w = 228.0f;
-  layout->sync_button_h = 30.0f;
+  layout->sync_button_h = 34.0f;
   layout->sync_button_gap = 8.0f;
-  layout->sync_first_button_y = layout->sync_y + 38.0f;
+  layout->sync_first_button_y = layout->sync_y + 40.0f;
 
   layout->settings_x = layout->sync_x + layout->sync_w + 20.0f;
   layout->settings_y = layout->sync_y;
   layout->settings_w = 256.0f;
   layout->settings_h = layout->sync_h;
   layout->settings_button_x = layout->settings_x + 16.0f;
-  layout->settings_button_y = layout->settings_y + layout->settings_h - 48.0f;
+  layout->settings_button_y = layout->settings_y + layout->settings_h - 50.0f;
   layout->settings_button_w = layout->settings_w - 32.0f;
-  layout->settings_button_h = 30.0f;
+  layout->settings_button_h = 34.0f;
 
   layout->settings_options_x = layout->connection_x + layout->connection_w + 20.0f;
   layout->settings_options_y = layout->connection_y;
@@ -101,15 +101,15 @@ void ui_build_main_layout(UiMainLayout *layout) {
   layout->settings_back_button_h = 34.0f;
 
   layout->game_x = 32.0f;
-  layout->game_y = layout->sync_y + layout->sync_h + 18.0f;
+  layout->game_y = layout->sync_y + layout->sync_h + 16.0f;
   layout->game_w = 896.0f;
-  layout->game_h = 224.0f;
+  layout->game_h = 222.0f;
   layout->game_row_x = layout->game_x + 16.0f;
   layout->game_row_w = layout->game_w - 32.0f;
   layout->search_row_x = layout->game_x + 16.0f;
-  layout->search_row_y = layout->game_y + 42.0f;
+  layout->search_row_y = layout->game_y + 44.0f;
   layout->search_row_w = layout->game_w - 32.0f;
-  layout->search_row_h = 34.0f;
+  layout->search_row_h = 40.0f;
   layout->game_first_row_y = layout->search_row_y + layout->search_row_h + 8.0f;
 
   layout->footer_status_x = 92.0f;

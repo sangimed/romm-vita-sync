@@ -302,15 +302,21 @@ int ui_get_selection_anchor(const UiAppState *state, int index, float *out_x, fl
       *out_y = layout.connection_first_row_y + (layout.connection_row_h * 0.5f);
       return 0;
     }
+    if (index == UI_SELECT_API_TOKEN) {
+      *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
+      *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 1.0f) +
+               (layout.connection_row_h * 0.5f);
+      return 0;
+    }
     if (index == UI_SELECT_USERNAME) {
       *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
-      *out_y = layout.connection_first_row_y + layout.connection_row_h +
-               layout.connection_row_gap + (layout.connection_row_h * 0.5f);
+      *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 2.0f) +
+               (layout.connection_row_h * 0.5f);
       return 0;
     }
     if (index == UI_SELECT_PASSWORD) {
       *out_x = layout.connection_row_x + (layout.connection_row_w * 0.5f);
-      *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 2.0f) +
+      *out_y = layout.connection_first_row_y + ((layout.connection_row_h + layout.connection_row_gap) * 3.0f) +
                (layout.connection_row_h * 0.5f);
       return 0;
     }

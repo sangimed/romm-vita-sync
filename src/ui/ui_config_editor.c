@@ -521,6 +521,12 @@ void ui_activate_selection(UiAppState *state) {
       return;
     }
 
+    if (state->selected_index == UI_SELECT_API_TOKEN) {
+      ui_edit_config_field(state, "API Token", state->config.romm_api_token,
+          sizeof(state->config.romm_api_token), SCE_IME_TYPE_BASIC_LATIN, 1, 1);
+      return;
+    }
+
     if (state->selected_index == UI_SELECT_USERNAME) {
       ui_edit_config_field(state, "Username", state->config.romm_username,
           sizeof(state->config.romm_username), SCE_IME_TYPE_BASIC_LATIN, 0, 1);

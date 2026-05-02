@@ -16,6 +16,7 @@ unsigned int ui_text_shadow_color(unsigned int text_color);
 
 void ui_begin_frame(void);
 void ui_end_frame(void);
+void ui_draw_brand_mark(float x, float y, float size);
 void ui_draw_text(float x, float y, unsigned int color, float scale, const char *format, ...);
 float ui_estimate_text_width(const char *text, float scale);
 float ui_estimate_text_height(float scale);

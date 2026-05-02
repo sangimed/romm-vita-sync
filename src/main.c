@@ -31,7 +31,8 @@
  * Global state shared across UI modules via extern declarations.
  */
 UiAppState g_app_state;
-vita2d_pgf *g_ui_font = NULL;
+vita2d_pvf *g_ui_font = NULL;
+vita2d_texture *g_ui_logo = NULL;
 int g_common_dialog_active = 0;
 int g_dialog_runtime_initialized = 0;
 SceSystemParamEnterButtonAssign g_dialog_enter_button_assign = SCE_SYSTEM_PARAM_ENTER_BUTTON_CROSS;
