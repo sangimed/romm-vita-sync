@@ -42,6 +42,17 @@ static unsigned int ui_auth_status_color(const UiAppState *state) {
   return UI_COLOR_DANGER;
 }
 
+static void ui_draw_section_title(float x, float y, UiIcon icon, unsigned int icon_color, const char *title) {
+  (void)icon;
+  vita2d_draw_rectangle(x, y - 19.0f, 3.0f, 24.0f, icon_color);
+  ui_draw_text(x + 14.0f, y, UI_COLOR_TEXT, 0.96f, "%s", title);
+}
+
+static void ui_draw_status_line(float x, float y, UiIcon icon, unsigned int color, const char *text) {
+  ui_draw_icon(icon, x + 8.0f, y - 4.0f, 12.0f, color);
+  ui_draw_truncated_text(x + 24.0f, y, 212.0f, color, 0.80f, text);
+}
+
 void ui_render_header(const UiAppState *state) {
   const char *status_text = ui_sync_action_enabled(state) ? "Ready" : "Setup";
   unsigned int status_color = ui_sync_action_enabled(state) ? UI_COLOR_SUCCESS : UI_COLOR_WARNING;
@@ -58,24 +69,24 @@ void ui_render_header(const UiAppState *state) {
                                 ? "Edit connection and sync options."
                                 : "Search, select, sync.";
 
-  ui_draw_brand_mark(30.0f, 16.0f, 46.0f);
-  ui_draw_text(88.0f, 31.0f, UI_COLOR_ACCENT, 0.78f, "RomM Vita Sync");
-  ui_draw_text(88.0f, 61.0f, UI_COLOR_TEXT, 1.04f, "%s", screen_title);
+  ui_draw_brand_mark(28.0f, 14.0f, 50.0f);
+  ui_draw_text(92.0f, 30.0f, UI_COLOR_ACCENT, 0.82f, "RomM Vita Sync");
+  ui_draw_text(92.0f, 62.0f, UI_COLOR_TEXT, 1.06f, "%s", screen_title);
   ui_draw_truncated_text(
-      290.0f,
-      61.0f,
+      294.0f,
+      62.0f,
       330.0f,
       UI_COLOR_TEXT_MUTED,
       0.82f,
       screen_hint);
 
-  ui_draw_panel(744.0f, 22.0f, 184.0f, 42.0f, UI_COLOR_FIELD, status_color);
-  vita2d_draw_fill_circle(762.0f, 43.0f, 5.0f, status_color);
-  ui_draw_text(776.0f, 40.0f, UI_COLOR_TEXT_DIM, 0.78f, "Status");
-  ui_draw_truncated_text_right(914.0f, 53.0f, 104.0f, status_color, 0.86f, status_text);
+  ui_draw_panel(704.0f, 20.0f, 224.0f, 46.0f, UI_COLOR_FIELD, status_color);
+  ui_draw_icon(UI_ICON_STATUS, 726.0f, 43.0f, 14.0f, status_color);
+  ui_draw_text(748.0f, 42.0f, UI_COLOR_TEXT_DIM, 0.82f, "Status");
+  ui_draw_truncated_text_right(912.0f, 54.0f, 104.0f, status_color, 0.92f, status_text);
 }
 
-void ui_render_connection_panel(const UiAppState *state) {
+void ui_render_settings_panel(const UiAppState *state) {
   if (state == NULL) {
     return;
   }
@@ -96,9 +107,18 @@ void ui_render_connection_panel(const UiAppState *state) {
   ui_format_field_display(state->config.romm_username, 0, username_display, sizeof(username_display));
   ui_format_field_display(state->config.romm_password, 1, password_display, sizeof(password_display));
 
+  char platform_display[64];
+  char dry_run_display[24];
+  snprintf(platform_display, sizeof(platform_display), "%s", sync_save_platform_display_name(state->selected_save_platform));
+  snprintf(
+      dry_run_display,
+      sizeof(dry_run_display),
+      "%s",
+      state->config.sync_dry_run ? "Preview only" : "Live transfers");
+
   ui_draw_panel(layout.connection_x, layout.connection_y, layout.connection_w, layout.connection_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
   vita2d_draw_rectangle(layout.connection_x, layout.connection_y, layout.connection_w, 3.0f, UI_COLOR_ACCENT);
-  ui_draw_text(layout.connection_x + 16.0f, layout.connection_y + 31.0f, UI_COLOR_TEXT, 0.92f, "Connection");
+  ui_draw_section_title(layout.connection_x + 24.0f, layout.connection_y + 35.0f, UI_ICON_SETTINGS, UI_COLOR_GOLD, "Connection");
 
   ui_draw_field_row(
       layout.connection_row_x,
@@ -132,38 +152,12 @@ void ui_render_connection_panel(const UiAppState *state) {
       state->selected_index == UI_SELECT_PASSWORD,
       "Password fallback",
       password_display);
-}
 
-static void ui_render_settings_options_panel(const UiAppState *state) {
-  if (state == NULL) {
-    return;
-  }
-
-  UiMainLayout layout;
-  ui_build_main_layout(&layout);
-
-  char platform_display[64];
-  char dry_run_display[24];
-  snprintf(platform_display, sizeof(platform_display), "%s", sync_save_platform_display_name(state->selected_save_platform));
-  snprintf(
-      dry_run_display,
-      sizeof(dry_run_display),
-      "%s",
-      state->config.sync_dry_run ? "Preview only" : "Live transfers");
-
-  ui_draw_panel(
-      layout.settings_options_x,
-      layout.settings_options_y,
-      layout.settings_options_w,
-      layout.settings_options_h,
-      UI_COLOR_PANEL,
-      UI_COLOR_PANEL_BORDER);
-  vita2d_draw_rectangle(layout.settings_options_x, layout.settings_options_y, layout.settings_options_w, 3.0f, UI_COLOR_GOLD);
-  ui_draw_text(
-      layout.settings_options_x + 16.0f,
-      layout.settings_options_y + 30.0f,
-      UI_COLOR_TEXT,
-      0.92f,
+  ui_draw_section_title(
+      layout.settings_options_x + 24.0f,
+      layout.settings_options_first_row_y - 22.0f,
+      UI_ICON_SYNC,
+      UI_COLOR_ACCENT,
       "Sync Options");
 
   ui_draw_field_row(
@@ -276,9 +270,9 @@ void ui_render_sync_panel(const UiAppState *state) {
 
   ui_draw_panel(layout.sync_x, layout.sync_y, layout.sync_w, layout.sync_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
   vita2d_draw_rectangle(layout.sync_x, layout.sync_y, layout.sync_w, 3.0f, UI_COLOR_ACCENT);
-  ui_draw_text(layout.sync_content_x, layout.sync_y + 31.0f, UI_COLOR_TEXT, 0.92f, "Synchronize");
+  ui_draw_section_title(layout.sync_content_x, layout.sync_y + 36.0f, UI_ICON_NONE, UI_COLOR_ACCENT, "Synchronize");
 
-  float cursor_y = layout.sync_y + 61.0f;
+  float cursor_y = layout.sync_y + 74.0f;
   cursor_y = ui_draw_wrapped_text_block(
       layout.sync_content_x,
       cursor_y,
@@ -344,19 +338,15 @@ static void ui_render_settings_shortcut_panel(const UiAppState *state) {
   unsigned int connection_color = app_config_has_server_url(&state->config) ? UI_COLOR_SUCCESS : UI_COLOR_WARNING;
   unsigned int auth_color = ui_auth_status_color(state);
   unsigned int sync_mode_color = state->config.sync_dry_run ? UI_COLOR_GOLD : UI_COLOR_WARNING;
+  UiIcon connection_icon = app_config_has_server_url(&state->config) ? UI_ICON_CHECK : UI_ICON_STATUS;
+  UiIcon auth_icon = app_config_has_auth(&state->config) ? UI_ICON_CHECK : UI_ICON_STATUS;
 
   ui_draw_panel(layout.settings_x, layout.settings_y, layout.settings_w, layout.settings_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
   vita2d_draw_rectangle(layout.settings_x, layout.settings_y, layout.settings_w, 3.0f, UI_COLOR_GOLD);
-  ui_draw_text(layout.settings_x + 16.0f, layout.settings_y + 31.0f, UI_COLOR_TEXT, 0.92f, "Settings");
-  ui_draw_truncated_text(layout.settings_x + 16.0f, layout.settings_y + 61.0f, layout.settings_w - 32.0f, connection_color, 0.82f, connection_status);
-  ui_draw_truncated_text(layout.settings_x + 16.0f, layout.settings_y + 85.0f, layout.settings_w - 32.0f, auth_color, 0.82f, auth_status);
-  ui_draw_truncated_text(
-      layout.settings_x + 16.0f,
-      layout.settings_y + 109.0f,
-      layout.settings_w - 32.0f,
-      sync_mode_color,
-      0.82f,
-      sync_mode_status);
+  ui_draw_section_title(layout.settings_x + 16.0f, layout.settings_y + 36.0f, UI_ICON_NONE, UI_COLOR_GOLD, "Settings");
+  ui_draw_status_line(layout.settings_x + 18.0f, layout.settings_y + 68.0f, connection_icon, connection_color, connection_status);
+  ui_draw_status_line(layout.settings_x + 18.0f, layout.settings_y + 92.0f, auth_icon, auth_color, auth_status);
+  ui_draw_status_line(layout.settings_x + 18.0f, layout.settings_y + 116.0f, UI_ICON_STATUS, sync_mode_color, sync_mode_status);
   ui_draw_button(
       layout.settings_button_x,
       layout.settings_button_y,
@@ -380,7 +370,7 @@ void ui_render_game_panel(const UiAppState *state) {
   vita2d_draw_rectangle(layout.game_x, layout.game_y, layout.game_w, 3.0f, UI_COLOR_ACCENT);
   char panel_title[64];
   snprintf(panel_title, sizeof(panel_title), "Detected %s Games", sync_save_platform_short_label(state->selected_save_platform));
-  ui_draw_text(layout.game_x + 16.0f, layout.game_y + 28.0f, UI_COLOR_TEXT, 0.92f, panel_title);
+  ui_draw_section_title(layout.game_x + 24.0f, layout.game_y + 34.0f, UI_ICON_NONE, UI_COLOR_ACCENT, panel_title);
 
   char search_display[UI_GAME_SEARCH_QUERY_LEN + 16];
   snprintf(
@@ -448,7 +438,7 @@ void ui_render_game_panel(const UiAppState *state) {
   }
   ui_draw_truncated_text_right(
       layout.game_x + layout.game_w - 16.0f,
-      layout.game_y + 24.0f,
+      layout.game_y + 32.0f,
       420.0f,
       UI_COLOR_TEXT_DIM,
       0.82f,
@@ -505,7 +495,8 @@ void ui_render_footer(const UiAppState *state) {
         ui_dialog_confirm_button_label());
   }
 
-  ui_draw_text(32.0f, 522.0f, UI_COLOR_TEXT_DIM, 0.78f, "Status");
+  vita2d_draw_rectangle(34.0f, 510.0f, 3.0f, 18.0f, UI_COLOR_ACCENT);
+  ui_draw_text(48.0f, 522.0f, UI_COLOR_ACCENT, 0.78f, "Status");
   ui_draw_truncated_text(layout.footer_status_x, 522.0f, layout.footer_status_w, UI_COLOR_STATUS, 0.78f, state->status_line);
   ui_draw_truncated_text_right(
       layout.footer_hint_right_x,
@@ -541,8 +532,7 @@ void ui_render_settings_screen(UiAppState *state) {
 
   ui_begin_frame();
   ui_render_header(state);
-  ui_render_connection_panel(state);
-  ui_render_settings_options_panel(state);
+  ui_render_settings_panel(state);
   ui_render_footer(state);
   ui_end_frame();
 }
@@ -583,17 +573,19 @@ void ui_render_dialog_background_frame(void *user_data) {
 
 void ui_render_busy_screen(const char *title, const char *subtitle) {
   ui_begin_frame();
-  ui_draw_panel(168.0f, 194.0f, 624.0f, 146.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
-  ui_draw_text_center(UI_SCREEN_WIDTH * 0.5f, 244.0f, UI_COLOR_TEXT, 1.00f, has_text(title) ? title : "Please wait");
+  ui_draw_panel(170.0f, 186.0f, 620.0f, 168.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER_ACTIVE);
+  vita2d_draw_rectangle(250.0f, 214.0f, 460.0f, 3.0f, UI_COLOR_ACCENT);
+  ui_draw_text_center(UI_SCREEN_WIDTH * 0.5f, 270.0f, UI_COLOR_TEXT, 1.00f, has_text(title) ? title : "Please wait");
   if (has_text(subtitle)) {
-    ui_draw_text_center(UI_SCREEN_WIDTH * 0.5f, 272.0f, UI_COLOR_TEXT_MUTED, 0.82f, subtitle);
+    ui_draw_text_center(UI_SCREEN_WIDTH * 0.5f, 300.0f, UI_COLOR_TEXT_MUTED, 0.82f, subtitle);
   }
   ui_end_frame();
 }
 
 void ui_render_exit_screen(void) {
   ui_begin_frame();
-  ui_draw_panel(220.0f, 214.0f, 520.0f, 112.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
-  ui_draw_text_center(UI_SCREEN_WIDTH * 0.5f, 274.0f, UI_COLOR_TEXT, 0.95f, "Exiting RomM Vita Sync...");
+  ui_draw_panel(220.0f, 206.0f, 520.0f, 132.0f, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER);
+  ui_draw_brand_mark(450.0f, 226.0f, 60.0f);
+  ui_draw_text_center(UI_SCREEN_WIDTH * 0.5f, 306.0f, UI_COLOR_TEXT, 0.95f, "Exiting RomM Vita Sync...");
   ui_end_frame();
 }

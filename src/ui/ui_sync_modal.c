@@ -59,18 +59,18 @@ void ui_build_sync_modal_layout(const UiSyncFeedback *feedback, UiSyncModalLayou
   }
 
   memset(layout, 0, sizeof(*layout));
-  layout->panel_x = 40.0f;
-  layout->panel_y = 22.0f;
-  layout->panel_w = 880.0f;
-  layout->panel_h = 500.0f;
+  layout->panel_x = 48.0f;
+  layout->panel_y = 34.0f;
+  layout->panel_w = 864.0f;
+  layout->panel_h = 478.0f;
   layout->content_x = layout->panel_x + 28.0f;
   layout->content_w = layout->panel_w - 56.0f;
 
-  float cursor_y = layout->panel_y + 28.0f;
+  float cursor_y = layout->panel_y + 42.0f;
 
   int title_lines = ui_wrap_text_lines(
       has_text(feedback->title) ? feedback->title : "Synchronization",
-      0.94f,
+      0.98f,
       layout->content_w,
       NULL,
       2,
@@ -83,47 +83,47 @@ void ui_build_sync_modal_layout(const UiSyncFeedback *feedback, UiSyncModalLayou
   }
 
   layout->title_y = cursor_y;
-  cursor_y += (ui_estimate_text_height(0.94f) + 6.0f) * (float)title_lines;
+  cursor_y += (ui_estimate_text_height(0.98f) + 6.0f) * (float)title_lines;
 
   int context_lines = 0;
   if (has_text(feedback->context)) {
-    cursor_y += 2.0f;
+    cursor_y += 4.0f;
     layout->context_y = cursor_y;
-    context_lines = ui_wrap_text_lines(feedback->context, 0.72f, layout->content_w, NULL, 2, 1);
+    context_lines = ui_wrap_text_lines(feedback->context, 0.78f, layout->content_w, NULL, 2, 1);
     if (context_lines < 1) {
       context_lines = 1;
     }
     if (context_lines > 2) {
       context_lines = 2;
     }
-    cursor_y += (ui_estimate_text_height(0.72f) + 4.0f) * (float)context_lines;
+    cursor_y += (ui_estimate_text_height(0.78f) + 4.0f) * (float)context_lines;
   } else {
     layout->context_y = cursor_y;
   }
 
-  cursor_y += 14.0f;
-  layout->progress_y = cursor_y;
-  cursor_y += 30.0f;
-  layout->progress_text_y = cursor_y;
-  cursor_y += 22.0f;
-  layout->log_label_y = cursor_y;
+  cursor_y += 16.0f;
+  layout->message_y = cursor_y;
+  cursor_y += (ui_estimate_text_height(0.82f) + 4.0f) * 2.0f;
   cursor_y += 12.0f;
+  layout->progress_y = cursor_y;
+  cursor_y += 28.0f;
+  layout->progress_text_y = cursor_y;
+  cursor_y += 28.0f;
+  layout->log_label_y = cursor_y;
+  cursor_y += 16.0f;
 
   layout->log_x = layout->content_x;
   layout->log_y = cursor_y;
   layout->log_w = layout->content_w;
 
   float footer_height = ui_estimate_text_height(0.68f);
-  float message_height = (ui_estimate_text_height(0.76f) + 4.0f) * 2.0f;
   float scroll_hint_height = ui_estimate_text_height(0.62f);
-  layout->footer_y = layout->panel_y + layout->panel_h - 24.0f;
-  layout->message_y = layout->footer_y - footer_height - 12.0f - message_height;
-  layout->scroll_hint_y = layout->message_y - 10.0f - scroll_hint_height;
-  layout->log_h = layout->scroll_hint_y - 14.0f - layout->log_y;
+  layout->footer_y = layout->panel_y + layout->panel_h - 22.0f;
+  layout->scroll_hint_y = layout->footer_y - footer_height - 10.0f - scroll_hint_height;
+  layout->log_h = layout->scroll_hint_y - 12.0f - layout->log_y;
   if (layout->log_h < 110.0f) {
     layout->log_h = 110.0f;
     layout->scroll_hint_y = layout->log_y + layout->log_h + 14.0f;
-    layout->message_y = layout->scroll_hint_y + scroll_hint_height + 10.0f;
   }
 }
 
@@ -309,12 +309,13 @@ void ui_render_sync_modal(UiAppState *state) {
 
   ui_begin_frame();
   ui_draw_panel(layout.panel_x, layout.panel_y, layout.panel_w, layout.panel_h, UI_COLOR_PANEL, UI_COLOR_PANEL_BORDER_ACTIVE);
+  vita2d_draw_rectangle(layout.panel_x, layout.panel_y, layout.panel_w, 3.0f, UI_COLOR_ACCENT);
   ui_draw_wrapped_text_block(
       layout.content_x,
       layout.title_y,
       layout.content_w,
       UI_COLOR_TEXT,
-      0.94f,
+      0.98f,
       6.0f,
       2,
       has_text(feedback->title) ? feedback->title : "Synchronization");
@@ -324,24 +325,44 @@ void ui_render_sync_modal(UiAppState *state) {
         layout.context_y,
         layout.content_w,
         UI_COLOR_TEXT_MUTED,
-        0.72f,
+        0.78f,
         4.0f,
         2,
         feedback->context);
   }
+
+  unsigned int result_color = UI_COLOR_TEXT_MUTED;
+  if (feedback->running) {
+    result_color = UI_COLOR_ACCENT;
+  } else if (feedback->success) {
+    result_color = UI_COLOR_SUCCESS;
+  } else {
+    result_color = UI_COLOR_DANGER;
+  }
+
+  ui_draw_wrapped_text_block(
+      layout.content_x,
+      layout.message_y,
+      layout.content_w,
+      result_color,
+      0.82f,
+      4.0f,
+      2,
+      has_text(feedback->message) ? feedback->message : "");
 
   ui_draw_progress_bar(layout.content_x, layout.progress_y, layout.content_w, 18.0f, ratio);
   ui_draw_text(
       layout.content_x,
       layout.progress_text_y,
       UI_COLOR_TEXT_MUTED,
-      0.72f,
+      0.78f,
       "%d%% (%d/%d)",
       (int)(ratio * 100.0f),
       feedback->completed_units,
       feedback->total_units);
 
-  ui_draw_text(layout.content_x, layout.log_label_y, UI_COLOR_TEXT, 0.82f, "Live logs");
+  vita2d_draw_rectangle(layout.content_x, layout.log_label_y - 19.0f, 3.0f, 22.0f, UI_COLOR_TEXT_DIM);
+  ui_draw_text(layout.content_x + 14.0f, layout.log_label_y, UI_COLOR_TEXT, 0.82f, "Live logs");
   ui_draw_log_viewport(layout.log_x, layout.log_y, layout.log_w, layout.log_h, feedback->modal_log_scroll);
 
   if (max_scroll > 0) {
@@ -360,24 +381,6 @@ void ui_render_sync_modal(UiAppState *state) {
         total_visual_lines);
   }
 
-  unsigned int result_color = UI_COLOR_TEXT_MUTED;
-  if (feedback->running) {
-    result_color = UI_COLOR_ACCENT;
-  } else if (feedback->success) {
-    result_color = UI_COLOR_SUCCESS;
-  } else {
-    result_color = UI_COLOR_DANGER;
-  }
-
-  ui_draw_wrapped_text_block(
-      layout.content_x,
-      layout.message_y,
-      layout.content_w,
-      result_color,
-      0.76f,
-      4.0f,
-      2,
-      has_text(feedback->message) ? feedback->message : "");
   ui_draw_text(
       layout.content_x,
       layout.footer_y,

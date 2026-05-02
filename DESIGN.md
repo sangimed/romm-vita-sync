@@ -69,21 +69,24 @@ Confirmation popups must use concise copy, clear confirm/cancel labels, and pred
 
 The visual direction is a clean handheld-console UI.
 
-- Use compact but readable panels.
+- Use compact but readable panels with a calm dark Vita dashboard style.
 - Keep spacing consistent.
-- Use restrained colors.
+- Use restrained colors: dark navy surfaces, teal for primary focus/action, gold for Settings and cautionary secondary emphasis, and red/green/yellow for status.
 - Maintain high contrast between text and background.
 - Avoid unnecessary decoration.
 - Avoid clutter and dense desktop-style information layouts.
 - Use visual accents to guide focus, not to compete with content.
+- Use the native Vita Latin PVF renderer for app-owned UI text.
+- Prefer hierarchical text sizing over a blanket scale increase: screen titles, section headings, primary row labels, metadata, and logs should each have distinct sizes.
+- Icons may be drawn with `vita2d` primitives when they improve scanability, but text labels must remain present for meaning.
 
 ## Component guidelines
 
-Buttons must be large enough for clear focus and readable labels. Primary buttons should be visually stronger than secondary buttons.
+Buttons must be large enough for clear focus and readable labels. Primary buttons should be visually stronger than secondary buttons. Button focus should use a consistent teal border or side marker across screens.
 
 Toggles must show both current value and focus state. Binary settings should not depend on color alone.
 
-Lists must use readable row heights, clear selected state, and clear checked or active state. Long item labels must ellipsize or wrap inside the row without overlapping metadata.
+Lists must use readable row heights, clear selected state, and clear checked or active state. Long item labels must ellipsize or wrap inside the row without overlapping metadata. Checked rows must remain visibly checked even when focus moves elsewhere.
 
 Log panels must wrap long lines and support controller scrolling. Auto-scroll behavior must not prevent manual review.
 

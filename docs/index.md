@@ -232,21 +232,21 @@ Current in-app UI behavior:
 
 - The home screen focuses on searching detected games, checking games, and launching synchronization.
 - The `Settings` screen exposes dedicated fields for the RomM `url`, preferred API token, and username/password fallback.
-- The `Settings` screen includes a `Dry-run mode` toggle with immediate save and preview/live wording.
+- The `Settings` screen uses a single full-width grouped list for connection fields and sync options, including a `Dry-run mode` toggle with immediate save and preview/live wording.
 - Editing those fields opens the official PS Vita system keyboard (`SceImeDialog`).
 - Confirming keyboard input persists values immediately to `ux0:data/romm-vita-sync/settings.ini`.
-- The main screen keeps a visible primary `Sync Selected` action plus secondary `Sync All` and `Rescan Saves` actions, with dry-run/live mode shown before sync.
+- The main screen keeps a visible primary `Sync Selected` action plus secondary `Sync All` and `Rescan Saves` actions, with compact selected-game, target-count, readiness, and dry-run/live status shown before sync.
 - `Detected PS1 Games` includes a non-persistent `Search games` field that filters by title, game ID, or internal game key.
 - `Detected PS1 Games` supports multi-selection with larger three-row checkboxes; pressing the confirm button on a visible row toggles its checked state.
 - The detected list keeps a focused row for navigation while checked rows define the actual sync selection set.
-- The main screen uses focused panels for synchronization, Settings entry, and detected games; connection fields live on the separate `Settings` screen.
-- Connection values wrap inside their Settings rows, and long single-line labels such as game-list entries and footer status text ellipsize to stay inside their bounds.
-- Manual sync runs now open a blocking modal with a wider layout, wrapped text, a real progress bar, live scrolling logs, and concise result summaries for uploads, downloads, skipped actions, conflicts, and errors.
+- The main screen uses a dark Vita dashboard layout with focused panels for synchronization, Settings readiness, and detected games; connection fields live on the separate `Settings` screen.
+- Settings values fit inside full-width rows, and long single-line labels such as game-list entries and footer status text ellipsize to stay inside their bounds.
+- Manual sync runs now open a blocking modal with a wider layout, progress/result summary first, wrapped text, a real progress bar, live scrolling logs, and concise result summaries for uploads, downloads, skipped actions, conflicts, and errors.
 - While a manual sync is running, the modal cannot be closed; once complete, it shows success/failure and can be closed manually.
 - Manual sync logs support held `UP/DOWN` scrolling after the viewport leaves auto-follow mode, and they can also be dragged with the front touchscreen.
 - Recommended conflict actions execute automatically without exposing a dedicated conflict toggle in the home screen.
 - Automatic startup sync keeps using the same sync pipeline, but its live state is now reflected through the header status and `Synchronize` panel messaging on the home screen.
-- The current UI uses the native Vita Latin PVF font renderer with larger system-like text sizing, a branded header mark, layered panels, higher-contrast focus states, and clearer spacing for controller navigation.
+- The current UI uses the native Vita Latin PVF font renderer with hierarchical text sizing, a branded header mark, minimal code-drawn `vita2d` status indicators, layered panels, higher-contrast shared focus states, and clearer spacing for controller navigation.
 
 The sync engine now treats server `409 Conflict` responses as synchronization conflicts (remote newer) rather than generic transfer errors, aligned with `romm-retroarch-sync` behavior.
 
