@@ -22,9 +22,9 @@ static void test_vita_native_descriptor_policy(void) {
 
   assert(strcmp(sync_save_platform_id(item.platform), "psVita") == 0);
   assert(strcmp(sync_save_platform_display_name(item.platform), "PS Vita native saves") == 0);
-  assert(strcmp(sync_save_platform_badge(item.platform), "experimental - restore disabled") == 0);
-  assert(sync_save_platform_restore_supported(item.platform) == 0);
-  assert(sync_save_platform_is_experimental(item.platform) == 1);
+  assert(strcmp(sync_save_platform_badge(item.platform), "raw archive sync") == 0);
+  assert(sync_save_platform_restore_supported(item.platform) == 1);
+  assert(sync_save_platform_is_experimental(item.platform) == 0);
 }
 
 static void test_vita_native_saves_do_not_use_ps1_latest_slot_rule(void) {

@@ -70,8 +70,8 @@ int vita_native_save_title_id_is_official_game(const char *title_id) {
   return title_id[9] == '\0';
 }
 
-const char *vita_native_save_restore_unsupported_reason(void) {
-  return "restore not supported yet for Vita native saves: PFS/keystone signature metadata must be preserved or regenerated safely";
+const char *vita_native_save_restore_safety_notice(void) {
+  return "native Vita restore uses raw PFS archives only: validate TITLE_ID and keystone, back up the current container, then replace the savedata directory";
 }
 
 const char *vita_native_save_vita3k_import_notice(void) {

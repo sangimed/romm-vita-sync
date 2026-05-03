@@ -22,13 +22,13 @@ static void test_export_accepts_complete_signed_container_metadata(void) {
   assert(strstr(reason, "keystone") != NULL);
 }
 
-static void test_restore_policy_is_explicitly_unsupported_until_resigning_exists(void) {
-  const char *reason = vita_native_save_restore_unsupported_reason();
+static void test_restore_policy_describes_backup_first_raw_archive_restore(void) {
+  const char *reason = vita_native_save_restore_safety_notice();
 
   assert(reason != NULL);
-  assert(strstr(reason, "restore not supported") != NULL);
-  assert(strstr(reason, "PFS") != NULL);
+  assert(strstr(reason, "raw PFS archives") != NULL);
   assert(strstr(reason, "keystone") != NULL);
+  assert(strstr(reason, "back up") != NULL);
 }
 
 static void test_vita3k_import_notice_points_to_decrypted_export(void) {
@@ -75,7 +75,7 @@ static void test_official_vita_game_title_id_policy(void) {
 int main(void) {
   test_export_requires_keystone_signature_metadata();
   test_export_accepts_complete_signed_container_metadata();
-  test_restore_policy_is_explicitly_unsupported_until_resigning_exists();
+  test_restore_policy_describes_backup_first_raw_archive_restore();
   test_vita3k_import_notice_points_to_decrypted_export();
   test_vita_archive_filename_timestamp_parsing();
   test_official_vita_game_title_id_policy();

@@ -56,7 +56,7 @@ Current integration status:
 - upload/download conversion logic is integrated in `SyncEngine`
 - real HTTP save transfer callbacks are wired (`list/upload/download`)
 - local Vita saves are mapped to RomM `rom_id` by trying `/api/platforms` first, then querying `/api/roms` with bounded search variants (`GAME_ID`, title exact, title compact, title normalized, alias-stripped title, significant tokens) and local scoring (serial, title fuzzy, filename fallback)
-- PS Vita native save scanning is experimental and upload-only: eligible containers are exported as `.tar` raw PFS backup archives with an embedded import README, uploaded to RomM through the `vita3k` save backend, and compared against existing remote archive saves; these archives are not direct Vita3K imports, and restore/download remains disabled until PFS/keystone-safe writes are implemented
+- PS Vita native save sync uses raw PFS `.tar` archives: eligible containers are exported with an embedded import README, uploaded to RomM through the `vita3k` save backend, compared against existing remote archive saves, and restored back into `ux0:user/00/savedata` through a backup-first validated restore path; these archives are still not direct Vita3K imports
 
 
 ## Execution Model (Version 1)
@@ -151,7 +151,7 @@ Commands:
 ### First Sync
 
 1. Ensure Vita can reach the RomM URL
-2. In the game list, check one or more detected PS1 games
+2. In the game list, check one or more detected games for the selected save platform
 3. Return to `Sync Selected` and press the system confirm button (`X` or `O`)
 4. Follow progress in the sync modal for manual runs; automatic startup sync updates the header state and `Synchronize` panel status without opening a modal
 
@@ -236,8 +236,8 @@ Current in-app UI behavior:
 - Editing those fields opens the official PS Vita system keyboard (`SceImeDialog`).
 - Confirming keyboard input persists values immediately to `ux0:data/romm-vita-sync/settings.ini`.
 - The main screen keeps a visible primary `Sync Selected` action plus secondary `Sync All` and `Rescan Saves` actions, with compact selected-game, target-count, readiness, and dry-run/live status shown before sync.
-- `Detected PS1 Games` includes a non-persistent `Search games` field that filters by title, game ID, or internal game key.
-- `Detected PS1 Games` supports multi-selection with larger three-row checkboxes; pressing the confirm button on a visible row toggles its checked state.
+- `Detected <platform> Games` includes a non-persistent `Search games` field that filters by title, game ID, or internal game key.
+- `Detected <platform> Games` supports multi-selection with larger three-row checkboxes; pressing the confirm button on a visible row toggles its checked state.
 - The detected list keeps a focused row for navigation while checked rows define the actual sync selection set.
 - The main screen uses a dark Vita dashboard layout with focused panels for synchronization, Settings readiness, and detected games; connection fields live on the separate `Settings` screen.
 - Settings values fit inside full-width rows, and long single-line labels such as game-list entries and footer status text ellipsize to stay inside their bounds.
@@ -294,7 +294,7 @@ Host toolchain alternative:
 
 ### 4. Sync Validation
 
-1. Use `Search games` if needed, then move through the detected PS1 game list and check one or more games to include.
+1. Use `Search games` if needed, then move through the detected game list and check one or more games to include.
 2. Return to `Sync Selected` and press the system confirm button (`X` or `O`).
 3. Confirm manual sync shows a blocking progress modal with live logs and completion state.
 4. Confirm automatic startup sync (when enabled) updates the header state and `Synchronize` panel without opening a modal.
@@ -336,7 +336,7 @@ This project aims to provide:
 
 ## Scope (Version 1)
 
-Version 1 focuses exclusively on PS1 saves via Adrenaline.
+Version 1 started with PS1 saves via Adrenaline and now also includes PS Vita native raw archive sync.
 
 Features:
 
@@ -345,6 +345,8 @@ Features:
 - Detect `.VMP` memory card files
 - Convert `.VMP` → `.SRM`
 - Convert `.SRM` → `.VMP`
+- Detect PS Vita native savedata containers in `ux0:user/00/savedata/<TITLE_ID>`
+- Export and restore Vita native raw PFS `.tar` archives with keystone validation
 - Support manual upload/download workflow orchestration in `SyncEngine` with real RomM HTTP transport
 - Always create backups before overwrite
 
@@ -464,13 +466,13 @@ Notes:
 - remote saves fetched from RomM are also parsed into `SyncSaveDescriptor`
 - this shared descriptor is the canonical synchronization model currently used by `SyncEngine`
 - `slot` is inferred from `SCEVMC0.VMP` or `SCEVMC1.VMP`
-- `platform` identifies `psOne` or experimental `psVita` descriptors, so PS1 and Vita-native policy can share the sync pipeline without applying PS1-only rules to Vita containers
+- `platform` identifies `psOne` or `psVita` descriptors, so PS1 and Vita-native policy can share the sync pipeline without applying PS1-only rules to Vita containers
 - before RomM mapping and transfer decisions, local descriptors are grouped per `game_id` and only the newest local card remains eligible for sync
 - when two local cards from the same game share the exact same timestamp, `SCEVMC0.VMP` wins deterministically and the UI shows a warning
 
 ### PS Vita Native Save Policy
 
-PS Vita native save support is currently experimental and upload-only. It performs real RomM mapping, remote save listing, conflict decisions, and archive upload, but it intentionally does not restore downloaded archives into `ux0:user/00/savedata` yet.
+PS Vita native save support is bidirectional for romm-vita-sync raw PFS archives. It performs real RomM mapping, remote save listing, conflict decisions, archive upload, and backup-first archive restore into `ux0:user/00/savedata`.
 
 Scanner behavior:
 
@@ -481,7 +483,7 @@ Scanner behavior:
 5. Archive accepted containers as `.tar` files under `ux0:data/romm-vita-sync/cache/vita-native/` before upload.
 6. Add `00-README-romm-vita-sync.txt` to each archive so manual downloads explain that the tar is a raw Vita/PFS backup, not a decrypted Vita3K import.
 7. Upload archives through RomM saves using the `vita3k` backend name, independently from the PS1 `pcsx_rearmed` backend.
-8. Keep Vita native restore/download disabled with the reason `restore not supported yet for Vita native saves: PFS/keystone signature metadata must be preserved or regenerated safely`.
+8. Restore remote archives only after validating the expected `TITLE_ID`, `sce_sys`, `PARAM.SFO`, and `sce_sys/keystone`.
 
 Archive format:
 
@@ -497,10 +499,12 @@ Synchronization behavior:
 - if no remote archive save exists for the mapped `rom_id`, the local archive is uploaded
 - if a remote archive save exists and the local archive is newer, upload is selected by the normal conflict policy
 - remote Vita archive age is read from the source timestamp encoded in the archive filename (`<TITLE_ID>_<timestamp>.tar` or `<TITLE_ID>_raw-pfs-backup_<timestamp>.tar`) instead of RomM's server-side `updated_at`, because `updated_at` reflects upload time rather than savedata modification time
-- if the remote archive save is newer, download is skipped because restore is not safe yet for Vita native saves
-- if dry-run mode is enabled, the app prepares the archive and plans the transfer but does not upload it
+- if the remote archive save is newer, the archive is downloaded to the restore cache, extracted into staging, validated, and restored into `ux0:user/00/savedata/<TITLE_ID>/`
+- before replacing an existing local Vita container, the app writes a raw PFS backup tar named `<TITLE_ID>_raw-pfs-before-restore_<timestamp>.tar` under the configured backup directory
+- archive restore rejects absolute paths, parent-directory traversal, unsupported tar entries, wrong `TITLE_ID`, and containers missing `sce_sys`, `PARAM.SFO`, or `keystone`
+- if dry-run mode is enabled, the app prepares the archive and plans the transfer but does not upload, download, or restore it
 
-This means the server receives faithful backup archives only when the minimum signed-container metadata is present. The app does not yet import or restore Vita native saves from RomM, because copying a server-side archive back into `savedata` without a proven PFS/keystone-aware write path can leave the save unrecognized or corrupted. For Vita3K, the safe manual path is to export the same save from a real Vita using VitaShell `Open decrypted` or a save manager, then copy the decrypted payload into the save folder generated by Vita3K while keeping Vita3K's `SlotParam_*.bin`.
+This means the server receives faithful backup archives only when the minimum signed-container metadata is present, and local restore preserves that container shape instead of copying a partial payload. For Vita3K, the safe manual path is still to export the same save from a real Vita using VitaShell `Open decrypted` or a save manager, then copy the decrypted payload into the save folder generated by Vita3K while keeping Vita3K's `SlotParam_*.bin`.
 
 ### UI Game Aggregation (`UiGameEntry`)
 
@@ -516,8 +520,8 @@ UiGameEntry
 
 Notes:
 
-- the UI groups multiple `SyncSaveDescriptor` items by game to render the selectable PS1 game list
-- `save_count` is the number of detected memory-card files associated with that game
+- the UI groups multiple `SyncSaveDescriptor` items by game to render the selectable detected-game list
+- `save_count` is the number of detected local save targets associated with that game
 
 ### Design Notes (Not Implemented Yet)
 
@@ -745,9 +749,9 @@ Current implementation modules:
 
 Implementation notes:
 
-- PS1 support is the only implemented save adapter today
-- VMP and SRM conversion is implemented through `src/vmp_srm_converter.c` and used by the sync flow
-- multi-platform adapters remain roadmap items and are not part of the current codebase yet
+- PS1 VMP/SRM sync and PS Vita native raw archive sync are implemented today
+- VMP and SRM conversion is implemented through `src/vmp_srm_converter.c` and used by the PS1 sync flow
+- Vita native sync uses `src/sync/vita_native_save_scanner.c` for scan, export, validated restore, and backup-first replacement
 
 ## Roadmap
 
@@ -772,10 +776,10 @@ Implementation notes:
 
 ### v3 — PS Vita Native Saves
 
-- current experimental support scans native savedata containers and uploads `.tar` archive backups when `sce_sys`, `PARAM.SFO`, and `keystone` are present
-- implement a proven restore path that preserves or regenerates PFS/keystone signature metadata before enabling imports from RomM
-- investigate extraction and decrypted-write workflows
-- integrate bidirectional native save support only after restore safety is validated
+- current support scans native savedata containers and uploads `.tar` archive backups when `sce_sys`, `PARAM.SFO`, and `keystone` are present
+- remote newer archives restore through a staging directory after `TITLE_ID` and metadata validation
+- existing local Vita containers are backed up as raw PFS tar archives before replacement
+- Vita3K import remains a separate decrypted-export workflow; raw PFS archives are not direct Vita3K imports
 
 ### v4 — Emulator Environments
 
@@ -848,7 +852,7 @@ Conversion is now wired in the app sync flow:
 - upload path: local `.VMP` is converted to temporary `.SRM` before transfer callback, then either creates a new remote save or overwrites the matched remote save
 - download path: remote `.SRM` is reconstructed to local `.VMP` and re-signed in-app
 - Vita native upload path: local savedata containers are exported to raw PFS `.tar` backups with `00-README-romm-vita-sync.txt`, then uploaded through RomM save sync using the `vita3k` backend name and a `.tar` filename
-- Vita native download path: remote archive download is intentionally blocked until a PFS/keystone-safe restore path exists
+- Vita native download path: remote `.tar` archives are downloaded to cache, extracted into staging, validated for the expected `TITLE_ID` plus `sce_sys/PARAM.SFO/keystone`, backed up, then restored into `ux0:user/00/savedata/<TITLE_ID>/`
 - when one game has both local PS1 cards, only the newest local card is mapped and synchronized; exact timestamp ties keep `SCEVMC0.VMP` and warn the user
 - if the server copy is newer and the remote save is a standard single-card SRM, the download target remains that selected local card
 - if the server copy is newer and the remote save is a dual-card SRM, the app restores both `SCEVMC0.VMP` and `SCEVMC1.VMP`

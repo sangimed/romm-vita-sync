@@ -13,7 +13,7 @@
 #include "conflict_resolver.h"
 #include "game_matcher.h"
 #include "sync_state_store.h"
-#include "vita_native_save_policy.h"
+#include "vita_native_save_scanner.h"
 #include "vmp_signer.h"
 #include "vmp_srm_converter.h"
 
@@ -200,7 +200,8 @@ static int build_download_state_entry_for_target(
   snprintf(entry->filename, sizeof(entry->filename), "%s", filename);
   entry->slot = local_target->slot;
   entry->size_bytes = local_target->size_bytes;
-  if (get_local_file_size_bytes(local_target->path, &entry->size_bytes) < 0) {
+  if ((local_target->platform != SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) &&
+      (get_local_file_size_bytes(local_target->path, &entry->size_bytes) < 0)) {
     entry->size_bytes = local_target->size_bytes;
   }
   entry->timestamp_unix = remote_item->timestamp_unix;
@@ -899,7 +900,8 @@ static int execute_download(
                                      : SYNC_DEFAULT_BACKUP_DIRECTORY;
   int64_t now = (config->now_callback != NULL) ? config->now_callback() : default_now_callback();
 
-  if (file_exists(local_item->path)) {
+  if ((local_item->platform != SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) &&
+      file_exists(local_item->path)) {
     app_log_write(APP_LOG_LEVEL_INFO, "sync", "creating backup before overwrite");
     int backup_status = backup_manager_backup_file(local_item->path, backup_directory, now, NULL, 0U);
     if (backup_status != BACKUP_MANAGER_OK) {
@@ -1136,6 +1138,80 @@ static int execute_download(
           conversion_temp_path,
           local_item->path);
     }
+  } else if (local_item->platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "sync",
+        "downloading Vita native raw archive before restore");
+    int ensure_status = backup_manager_ensure_directory(SYNC_DEFAULT_CONVERSION_DIRECTORY);
+    if (ensure_status != BACKUP_MANAGER_OK) {
+      action->status_code = ensure_status;
+      report->transfer_errors += 1;
+      set_reason(action, "cannot create restore cache directory (%s)", backup_manager_status_str(ensure_status));
+      return ensure_status;
+    }
+
+    if (build_conversion_temp_path(
+            local_item,
+            "vita-download",
+            ".tar",
+            now,
+            conversion_temp_path,
+            sizeof(conversion_temp_path)) < 0) {
+      action->status_code = SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+      report->transfer_errors += 1;
+      set_reason(action, "cannot build Vita restore archive path");
+      return SYNC_ENGINE_ERR_INVALID_ARGUMENT;
+    }
+
+    status = romm_client_download_save(romm_client, remote_item, conversion_temp_path);
+    action->status_code = status;
+    if (status < 0) {
+      action->executed = 0;
+      report->transfer_errors += 1;
+      set_reason(action, "download failed (%s)", romm_client_status_str(status));
+      remove(conversion_temp_path);
+      return status;
+    }
+
+    has_conversion_temp = 1;
+    char restored_path[ROMM_MAX_PATH_LEN];
+    int restore_status = vita_native_restore_archive(
+        conversion_temp_path,
+        local_item->game_id,
+        VITA_NATIVE_SAVEDATA_ROOT,
+        backup_directory,
+        now,
+        remote_item->timestamp_unix,
+        1,
+        restored_path,
+        sizeof(restored_path));
+    if (restore_status != VITA_NATIVE_RESTORE_OK) {
+      action->executed = 0;
+      action->status_code = restore_status;
+      report->transfer_errors += 1;
+      set_reason(action, "Vita restore failed (%s)", vita_native_restore_status_str(restore_status));
+      remove(conversion_temp_path);
+      return restore_status;
+    }
+
+    restored_targets[0] = *local_item;
+    snprintf(restored_targets[0].path, sizeof(restored_targets[0].path), "%s", restored_path);
+    if (has_text(remote_item->filename)) {
+      snprintf(restored_targets[0].filename, sizeof(restored_targets[0].filename), "%s", remote_item->filename);
+    }
+    restored_targets[0].size_bytes = remote_item->size_bytes;
+    restored_targets[0].timestamp_unix = remote_item->timestamp_unix;
+    restored_targets[0].platform = SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL;
+    restored_target_count = 1;
+
+    app_log_write(
+        APP_LOG_LEVEL_INFO,
+        "sync",
+        "Vita native restore success game=%s archive=%s destination=%s",
+        local_item->game_id,
+        has_text(remote_item->filename) ? remote_item->filename : "(unknown)",
+        restored_path);
   } else {
     status = romm_client_download_save(romm_client, remote_item, local_item->path);
     action->status_code = status;
@@ -1190,11 +1266,19 @@ static int execute_download(
   if (action->conflict != SYNC_CONFLICT_NONE) {
     if (restored_target_count == 2) {
       set_reason(action, "downloaded dual-card restore after conflict review (%s)", sync_conflict_type_str(action->conflict));
+    } else if (local_item->platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+      set_reason(action, "downloaded Vita native restore after conflict review (%s)", sync_conflict_type_str(action->conflict));
     } else {
       set_reason(action, "downloaded after conflict review (%s)", sync_conflict_type_str(action->conflict));
     }
   } else {
-    set_reason(action, (restored_target_count == 2) ? "downloaded dual-card restore" : "downloaded");
+    if (restored_target_count == 2) {
+      set_reason(action, "downloaded dual-card restore");
+    } else if (local_item->platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+      set_reason(action, "downloaded Vita native restore");
+    } else {
+      set_reason(action, "downloaded");
+    }
   }
   if (restored_target_count == 2) {
     app_log_write(
@@ -1834,12 +1918,13 @@ int sync_engine_run(
     if ((decision == SYNC_ACTION_DOWNLOAD) &&
         !sync_save_platform_restore_supported(local_item->platform)) {
       decision = SYNC_ACTION_SKIP;
+      const char *restore_reason = "restore not supported for this save platform";
       app_log_write(
           APP_LOG_LEVEL_WARN,
           "sync",
           "%s",
-          vita_native_save_restore_unsupported_reason());
-      set_reason(action, "%s", vita_native_save_restore_unsupported_reason());
+          restore_reason);
+      set_reason(action, "%s", restore_reason);
     }
 
     action->action = decision;

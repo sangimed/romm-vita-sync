@@ -279,12 +279,11 @@ static int ui_sync_report_has_restore_blocked_skip(const SyncRunReport *report) 
     return 0;
   }
 
-  const char *restore_reason = vita_native_save_restore_unsupported_reason();
   for (int i = 0; i < report->action_count; ++i) {
     const SyncActionRecord *action = &report->actions[i];
     if ((action->action == SYNC_ACTION_SKIP) &&
         has_text(action->reason) &&
-        (strstr(action->reason, restore_reason) != NULL)) {
+        (strstr(action->reason, "restore not supported") != NULL)) {
       return 1;
     }
   }
@@ -942,7 +941,7 @@ int ui_run_sync_pipeline(
 
   if (state->selected_save_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
     ui_sync_feedback_set_message(&state->sync_feedback, "Preparing Vita archive export...");
-    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Vita native restore/download is disabled; upload archive sync is enabled");
+    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Vita native archive sync enabled: upload and restore use raw PFS tar backups");
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "%s", vita_native_save_vita3k_import_notice());
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "Preparing archive-only export for %d Vita native save container(s)", work_item_count);
     int archive_status = vita_native_prepare_export_archives(
@@ -1031,18 +1030,21 @@ int ui_run_sync_pipeline(
       &config, work_items, work_item_count, active_client, &state->sync_report);
 
   int restore_blocked_skip = ui_sync_report_has_restore_blocked_skip(&state->sync_report);
+  int has_transfer_errors = state->sync_report.transfer_errors > 0;
   state->sync_feedback.running = 0;
   state->sync_feedback.completed = 1;
   state->sync_feedback.sync_status = sync_status;
-  state->sync_feedback.warning = restore_blocked_skip;
-  state->sync_feedback.success = (sync_status == SYNC_ENGINE_OK) && !restore_blocked_skip;
+  state->sync_feedback.warning = restore_blocked_skip || has_transfer_errors;
+  state->sync_feedback.success = (sync_status == SYNC_ENGINE_OK) && !restore_blocked_skip && !has_transfer_errors;
   ui_sync_feedback_set_progress(&state->sync_feedback, total_units, total_units);
 
   if (sync_status == SYNC_ENGINE_OK) {
     ui_sync_log_write(APP_LOG_LEVEL_INFO, "Sync completed");
     ui_sync_append_report_logs(&state->sync_report);
-    if (restore_blocked_skip) {
-      ui_sync_feedback_set_message(&state->sync_feedback, "Vita restore skipped; use Open decrypted import.");
+    if (has_transfer_errors) {
+      ui_sync_feedback_set_message(&state->sync_feedback, "Sync completed with errors.");
+    } else if (restore_blocked_skip) {
+      ui_sync_feedback_set_message(&state->sync_feedback, "Restore skipped for unsupported platform.");
     } else if ((selection_warning_count > 0) ||
                (state->sync_report.skipped > 0) ||
                (state->sync_report.conflicts_detected > 0)) {
@@ -1091,7 +1093,7 @@ static void ui_set_sync_result_status(UiAppState *state, const char *scope, int 
   }
 
   if (ui_sync_report_has_restore_blocked_skip(&state->sync_report)) {
-    ui_set_status(state, "%s skipped: Vita native restore unsupported", scope_label);
+    ui_set_status(state, "%s skipped: restore unsupported", scope_label);
     return;
   }
 
@@ -1154,7 +1156,7 @@ void ui_run_sync_all_saves(UiAppState *state) {
   }
 
   if (state->local_count <= 0) {
-    ui_set_status(state, "No local PS1 saves were detected");
+    ui_set_status(state, "No local %s saves were detected", sync_save_platform_short_label(state->selected_save_platform));
     return;
   }
 
@@ -1170,8 +1172,12 @@ void ui_run_sync_all_saves(UiAppState *state) {
                               : "Live sync may upload/download saves. Backups and conflict rules apply.";
   char confirm_msg[320];
   snprintf(confirm_msg, sizeof(confirm_msg),
-      "%s\n\nSynchronize all detected PS1 saves?\n%d sync candidate(s) selected from %d local target(s) across %d game(s).",
-      mode_line, sync_candidate_count, work_item_count, state->game_count);
+      "%s\n\nSynchronize all detected %s saves?\n%d sync candidate(s) selected from %d local target(s) across %d game(s).",
+      mode_line,
+      sync_save_platform_short_label(state->selected_save_platform),
+      sync_candidate_count,
+      work_item_count,
+      state->game_count);
   if (ui_dialog_confirm(confirm_msg) != 1) {
     ui_set_status(state, "Sync canceled for all games");
     return;
@@ -1197,7 +1203,7 @@ void ui_run_pending_auto_sync(UiAppState *state) {
   state->pending_auto_sync = 0;
 
   if (state->local_count <= 0) {
-    ui_set_status(state, "Auto sync skipped: no local PS1 saves detected");
+    ui_set_status(state, "Auto sync skipped: no local %s saves detected", sync_save_platform_short_label(state->selected_save_platform));
     return;
   }
 
