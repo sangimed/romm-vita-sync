@@ -17,6 +17,7 @@
 
 #define VITA_NATIVE_MAX_DEPTH 8
 #define VITA_TAR_BLOCK_SIZE 512
+#define VITA_TAR_NAME_FIELD_SIZE 100
 #define VITA_NATIVE_ARCHIVE_README_NAME "00-README-romm-vita-sync.txt"
 #define VITA_NATIVE_ARCHIVE_README_MAX 1536
 #define VITA_NATIVE_FILE_MODE (SCE_S_IRUSR | SCE_S_IWUSR | SCE_S_IRSYS | SCE_S_IWSYS)
@@ -866,9 +867,13 @@ static int tar_write_zero_block(SceUID fd) {
 }
 
 static int tar_write_header(SceUID fd, const char *name, uint64_t size, int is_dir) {
+  if (!has_text_local(name) || (strlen(name) >= VITA_TAR_NAME_FIELD_SIZE)) {
+    return -1;
+  }
+
   char header[VITA_TAR_BLOCK_SIZE];
   memset(header, 0, sizeof(header));
-  snprintf(header, 100, "%s", name);
+  snprintf(header, VITA_TAR_NAME_FIELD_SIZE, "%s", name);
   tar_write_octal(header + 100, 8, is_dir ? 0755ULL : 0644ULL);
   tar_write_octal(header + 108, 8, 0ULL);
   tar_write_octal(header + 116, 8, 0ULL);
@@ -1262,51 +1267,6 @@ static int archive_name_is_readme(const char *name) {
   return has_text_local(name) && (strcmp(name, VITA_NATIVE_ARCHIVE_README_NAME) == 0);
 }
 
-static int archive_name_is_safe(const char *name) {
-  if (!has_text_local(name) || (name[0] == '/') || (name[0] == '\\') ||
-      (strchr(name, '\\') != NULL) || (strchr(name, ':') != NULL)) {
-    return 0;
-  }
-
-  const char *cursor = name;
-  while (*cursor != '\0') {
-    const char *slash = strchr(cursor, '/');
-    size_t len = (slash != NULL) ? (size_t)(slash - cursor) : strlen(cursor);
-    if (len == 0U) {
-      return (slash != NULL) && (slash[1] == '\0');
-    }
-    if ((len == 1U && cursor[0] == '.') ||
-        (len == 2U && cursor[0] == '.' && cursor[1] == '.')) {
-      return 0;
-    }
-    if (slash == NULL) {
-      break;
-    }
-    cursor = slash + 1;
-  }
-
-  return 1;
-}
-
-static int archive_name_root_title_id(
-    const char *name,
-    char *out_title_id,
-    size_t out_title_id_size) {
-  if (!archive_name_is_safe(name) || (out_title_id == NULL) || (out_title_id_size == 0U)) {
-    return -1;
-  }
-
-  const char *slash = strchr(name, '/');
-  size_t root_len = (slash != NULL) ? (size_t)(slash - name) : strlen(name);
-  if ((root_len == 0U) || (root_len >= out_title_id_size)) {
-    return -1;
-  }
-
-  memcpy(out_title_id, name, root_len);
-  out_title_id[root_len] = '\0';
-  return vita_native_save_title_id_is_official_game(out_title_id) ? 0 : -1;
-}
-
 static int archive_write_file_from_tar(SceUID tar_fd, const char *target_path, uint64_t size) {
   if (!has_text_local(target_path)) {
     return -1;
@@ -1379,10 +1339,10 @@ static int extract_restore_archive_to_staging(
       break;
     }
 
-    char name[101];
-    memcpy(name, header, 100U);
-    name[100] = '\0';
-    if (!has_text_local(name)) {
+    char name[VITA_TAR_NAME_FIELD_SIZE + 1];
+    memcpy(name, header, VITA_TAR_NAME_FIELD_SIZE);
+    name[VITA_TAR_NAME_FIELD_SIZE] = '\0';
+    if (!has_text_local(name) || (header[VITA_TAR_NAME_FIELD_SIZE - 1] != '\0')) {
       status = VITA_NATIVE_RESTORE_ERR_UNSUPPORTED_ARCHIVE;
       break;
     }
@@ -1403,7 +1363,7 @@ static int extract_restore_archive_to_staging(
     }
 
     char root_title_id[ROMM_GAME_ID_LEN];
-    if ((archive_name_root_title_id(name, root_title_id, sizeof(root_title_id)) < 0) ||
+    if ((vita_native_save_archive_member_title_id(name, root_title_id, sizeof(root_title_id)) < 0) ||
         !is_same_text_case_insensitive(root_title_id, expected_title_id)) {
       status = VITA_NATIVE_RESTORE_ERR_UNSUPPORTED_ARCHIVE;
       break;
@@ -1524,11 +1484,12 @@ int vita_native_restore_archive(
     char *out_restored_path,
     size_t out_restored_path_size) {
   if (!has_text_local(archive_path) || !has_text_local(expected_title_id) ||
-      (out_restored_path == NULL) || (out_restored_path_size == 0U) ||
       !vita_native_save_title_id_is_official_game(expected_title_id)) {
     return VITA_NATIVE_RESTORE_ERR_INVALID_ARGUMENT;
   }
-  out_restored_path[0] = '\0';
+  if ((out_restored_path != NULL) && (out_restored_path_size > 0U)) {
+    out_restored_path[0] = '\0';
+  }
 
   const char *root = has_text_local(savedata_root) ? savedata_root : VITA_NATIVE_SAVEDATA_ROOT;
   char staging_directory[ROMM_MAX_PATH_LEN];
@@ -1650,7 +1611,9 @@ int vita_native_restore_archive(
   }
 
   recursive_remove_path(staging_directory, 0);
-  snprintf(out_restored_path, out_restored_path_size, "%s", destination_container);
+  if ((out_restored_path != NULL) && (out_restored_path_size > 0U)) {
+    snprintf(out_restored_path, out_restored_path_size, "%s", destination_container);
+  }
   vita_scan_log(verbose, APP_LOG_LEVEL_INFO, "Vita native archive restored title_id=%s destination=%s", archive_title_id, destination_container);
   return VITA_NATIVE_RESTORE_OK;
 }

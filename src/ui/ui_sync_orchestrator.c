@@ -26,6 +26,17 @@
 #include "ui_screens.h"
 #include "ui_sync_modal.h"
 
+static const char *ui_sync_confirmation_mode_line(const UiAppState *state) {
+  if ((state != NULL) && state->config.sync_dry_run) {
+    if (state->selected_save_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+      return "Dry-run preview: no uploads, downloads, or restores; Vita archive cache may be prepared.";
+    }
+    return "Dry-run preview: no files will be written.";
+  }
+
+  return "Live sync may upload/download saves. Backups and conflict rules apply.";
+}
+
 static int ui_item_matches_game_key(const SyncSaveDescriptor *item, const char *key) {
   if ((item == NULL) || !has_text(key)) {
     return 0;
@@ -981,7 +992,11 @@ int ui_run_sync_pipeline(
       (trigger == UI_SYNC_TRIGGER_AUTOMATIC) ? "automatic" : "manual");
 
   if (state->config.sync_dry_run) {
-    ui_sync_log_write(APP_LOG_LEVEL_INFO, "Dry-run enabled: transfers will not execute");
+    if (state->selected_save_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
+      ui_sync_log_write(APP_LOG_LEVEL_INFO, "Dry-run enabled: no uploads, downloads, or restores; Vita archive cache may be prepared");
+    } else {
+      ui_sync_log_write(APP_LOG_LEVEL_INFO, "Dry-run enabled: transfers will not execute");
+    }
   }
   ui_sync_log_write(APP_LOG_LEVEL_INFO, "Auto-apply conflicts enabled: recommended actions will execute without confirmation");
 
@@ -1121,9 +1136,7 @@ void ui_run_sync_for_selected_games(UiAppState *state) {
       &selected_game_count, &selected_target_count);
   int sync_candidate_count = ui_estimate_ps1_sync_candidate_count(state->sync_work_items, work_item_count);
 
-  const char *mode_line = state->config.sync_dry_run
-                              ? "Dry-run preview: no files will be written."
-                              : "Live sync may upload/download saves. Backups and conflict rules apply.";
+  const char *mode_line = ui_sync_confirmation_mode_line(state);
   char confirm_msg[320];
   snprintf(confirm_msg, sizeof(confirm_msg),
       "%s\n\nSynchronize %d selected game(s)?\n%d sync candidate(s) selected from %d local target(s).",
@@ -1167,9 +1180,7 @@ void ui_run_sync_all_saves(UiAppState *state) {
   memcpy(state->sync_work_items, state->local_items, sizeof(state->sync_work_items[0]) * (size_t)work_item_count);
   int sync_candidate_count = ui_estimate_ps1_sync_candidate_count(state->sync_work_items, work_item_count);
 
-  const char *mode_line = state->config.sync_dry_run
-                              ? "Dry-run preview: no files will be written."
-                              : "Live sync may upload/download saves. Backups and conflict rules apply.";
+  const char *mode_line = ui_sync_confirmation_mode_line(state);
   char confirm_msg[320];
   snprintf(confirm_msg, sizeof(confirm_msg),
       "%s\n\nSynchronize all detected %s saves?\n%d sync candidate(s) selected from %d local target(s) across %d game(s).",

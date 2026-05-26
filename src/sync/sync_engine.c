@@ -13,6 +13,7 @@
 #include "conflict_resolver.h"
 #include "game_matcher.h"
 #include "sync_state_store.h"
+#include "vita_native_save_policy.h"
 #include "vita_native_save_scanner.h"
 #include "vmp_signer.h"
 #include "vmp_srm_converter.h"
@@ -1925,6 +1926,27 @@ int sync_engine_run(
           "%s",
           restore_reason);
       set_reason(action, "%s", restore_reason);
+    }
+
+    if ((decision == SYNC_ACTION_DOWNLOAD) &&
+        (local_item->platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL)) {
+      char restore_reason[ROMM_SYNC_MAX_REASON_LEN];
+      restore_reason[0] = '\0';
+      if (!vita_native_save_archive_is_restore_candidate(
+              remote_item->filename,
+              local_item->game_id,
+              restore_reason,
+              sizeof(restore_reason))) {
+        decision = SYNC_ACTION_SKIP;
+        app_log_write(
+            APP_LOG_LEVEL_WARN,
+            "sync",
+            "Vita native restore preflight skipped game=%s remote_file=%s reason=%s",
+            local_item->game_id,
+            has_text(remote_item->filename) ? remote_item->filename : "(unknown)",
+            has_text(restore_reason) ? restore_reason : "remote archive rejected");
+        set_reason(action, "%s", has_text(restore_reason) ? restore_reason : "remote archive rejected");
+      }
     }
 
     action->action = decision;

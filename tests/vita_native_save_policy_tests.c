@@ -56,6 +56,62 @@ static void test_vita_archive_filename_timestamp_parsing(void) {
   assert(vita_native_save_archive_timestamp_from_filename("SCEVMC0_1777751486.srm", &timestamp) < 0);
 }
 
+static void test_vita_restore_candidate_preflight_accepts_matching_archives(void) {
+  char reason[128];
+  int ok = vita_native_save_archive_is_restore_candidate(
+      "PCSF00438_raw-pfs-backup_1777751486.tar",
+      "PCSF00438",
+      reason,
+      sizeof(reason));
+
+  assert(ok == 1);
+  assert(strstr(reason, "candidate") != NULL);
+
+  ok = vita_native_save_archive_is_restore_candidate(
+      "ux0:data/romm-vita-sync/cache/vita-native/pcsf00438_1777751486.TAR",
+      "PCSF00438",
+      reason,
+      sizeof(reason));
+
+  assert(ok == 1);
+}
+
+static void test_vita_restore_candidate_preflight_rejects_mismatches(void) {
+  char reason[128];
+
+  assert(vita_native_save_archive_is_restore_candidate(NULL, "PCSF00438", reason, sizeof(reason)) == 0);
+  assert(strstr(reason, "missing") != NULL);
+
+  assert(vita_native_save_archive_is_restore_candidate("PCSF00438_1777751486.srm", "PCSF00438", reason, sizeof(reason)) == 0);
+  assert(strstr(reason, ".tar") != NULL);
+
+  assert(vita_native_save_archive_is_restore_candidate("PCSF00438_raw-pfs-backup_abc.tar", "PCSF00438", reason, sizeof(reason)) == 0);
+  assert(strstr(reason, "valid source timestamp") != NULL);
+
+  assert(vita_native_save_archive_is_restore_candidate("PCSF00438_raw-pfs-backup_1777751486.tar", "PCSA00011", reason, sizeof(reason)) == 0);
+  assert(strstr(reason, "does not match") != NULL);
+
+  assert(vita_native_save_archive_is_restore_candidate("NPXS10000_1777751486.tar", "PCSF00438", reason, sizeof(reason)) == 0);
+  assert(strstr(reason, "official Vita") != NULL);
+}
+
+static void test_vita_archive_member_title_id_rejects_unsafe_paths(void) {
+  char title_id[16];
+
+  assert(vita_native_save_archive_member_title_id("PCSF00438/", title_id, sizeof(title_id)) == 0);
+  assert(strcmp(title_id, "PCSF00438") == 0);
+
+  assert(vita_native_save_archive_member_title_id("PCSF00438/sce_sys/keystone", title_id, sizeof(title_id)) == 0);
+  assert(strcmp(title_id, "PCSF00438") == 0);
+
+  assert(vita_native_save_archive_member_title_id("/PCSF00438/sce_sys/keystone", title_id, sizeof(title_id)) < 0);
+  assert(vita_native_save_archive_member_title_id("PCSF00438/../keystone", title_id, sizeof(title_id)) < 0);
+  assert(vita_native_save_archive_member_title_id("PCSF00438//keystone", title_id, sizeof(title_id)) < 0);
+  assert(vita_native_save_archive_member_title_id("PCSF00438\\sce_sys\\keystone", title_id, sizeof(title_id)) < 0);
+  assert(vita_native_save_archive_member_title_id("PCSF00438:sce_sys/keystone", title_id, sizeof(title_id)) < 0);
+  assert(vita_native_save_archive_member_title_id("NPXS10000/sce_sys/keystone", title_id, sizeof(title_id)) < 0);
+}
+
 static void test_official_vita_game_title_id_policy(void) {
   assert(vita_native_save_title_id_is_official_game("PCSA00011") == 1);
   assert(vita_native_save_title_id_is_official_game("PCSE01234") == 1);
@@ -78,6 +134,9 @@ int main(void) {
   test_restore_policy_describes_backup_first_raw_archive_restore();
   test_vita3k_import_notice_points_to_decrypted_export();
   test_vita_archive_filename_timestamp_parsing();
+  test_vita_restore_candidate_preflight_accepts_matching_archives();
+  test_vita_restore_candidate_preflight_rejects_mismatches();
+  test_vita_archive_member_title_id_rejects_unsafe_paths();
   test_official_vita_game_title_id_policy();
 
   printf("All vita_native_save_policy tests passed.\n");

@@ -264,7 +264,9 @@ void ui_render_sync_panel(const UiAppState *state) {
         sizeof(readiness),
         "%s",
         state->config.sync_dry_run
-            ? "Dry-run preview: no files will be written."
+            ? ((state->selected_save_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL)
+                   ? "Dry-run: no transfers/restores; cache may be prepared."
+                   : "Dry-run preview: no files will be written.")
             : "Live sync: review prompt before transfer.");
   }
 
