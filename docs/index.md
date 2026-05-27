@@ -41,6 +41,7 @@ Published documentation is versioned with `mike`:
 - `nightly` is built from `develop` and may describe unreleased changes
 
 The GitHub Pages source is expected to be the `gh-pages` branch root.
+If `nightly` is deployed before `stable`, it temporarily becomes the default channel until `master` publishes `stable`.
 
 Initial milestone includes:
 

@@ -31,12 +31,10 @@ jobs:
             master)
               echo "version=stable" >> "$GITHUB_OUTPUT"
               echo "title=Stable" >> "$GITHUB_OUTPUT"
-              echo "set_default=true" >> "$GITHUB_OUTPUT"
               ;;
             develop)
               echo "version=nightly" >> "$GITHUB_OUTPUT"
               echo "title=Nightly" >> "$GITHUB_OUTPUT"
-              echo "set_default=false" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "::error::Unsupported documentation branch: ${GITHUB_REF_NAME}"
@@ -85,6 +83,13 @@ jobs:
       - name: Deploy versioned docs
         run: mike deploy --push --update-aliases --title "${{ steps.docs.outputs.title }}" "${{ steps.docs.outputs.version }}"
 
-      - name: Set stable as default docs
-        if: steps.docs.outputs.set_default == 'true'
-        run: mike set-default --push stable
+      - name: Select default docs channel
+        shell: bash
+        run: |
+          if [ "${{ steps.docs.outputs.version }}" = "stable" ]; then
+            mike set-default --push stable
+          elif git show origin/gh-pages:versions.json 2>/dev/null | grep -q '"version": "stable"'; then
+            mike set-default --push stable
+          else
+            mike set-default --push nightly
+          fi
