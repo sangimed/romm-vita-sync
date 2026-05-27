@@ -978,7 +978,8 @@ Automatic trigger integration from system plugin events remains planned for a la
 <li><code>stable</code> is built from <code>master</code> and is the default documentation channel</li>
 <li><code>nightly</code> is built from <code>develop</code> and may describe unreleased changes</li>
 </ul>
-<p>The GitHub Pages source is expected to be the <code>gh-pages</code> branch root.</p>
+<p>The GitHub Pages source is expected to be the <code>gh-pages</code> branch root.
+If <code>nightly</code> is deployed before <code>stable</code>, it temporarily becomes the default channel until <code>master</code> publishes <code>stable</code>.</p>
 <p>Initial milestone includes:</p>
 <ul>
 <li>Detect PS1 save folders under <code>ux0:/pspemu/PSP/SAVEDATA</code></li>
