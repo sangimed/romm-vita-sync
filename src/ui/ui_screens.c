@@ -264,7 +264,9 @@ void ui_render_sync_panel(const UiAppState *state) {
         sizeof(readiness),
         "%s",
         state->config.sync_dry_run
-            ? "Dry-run preview: no files will be written."
+            ? ((state->selected_save_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL)
+                   ? "Dry-run: no transfers/restores; cache may be prepared."
+                   : "Dry-run preview: no files will be written.")
             : "Live sync: review prompt before transfer.");
   }
 
@@ -454,7 +456,7 @@ void ui_render_game_panel(const UiAppState *state) {
     char full_title[ROMM_GAME_TITLE_LEN + ROMM_GAME_ID_LEN + 64];
     const char *resolved_title = has_text(game->title) ? game->title : game->game_id;
     if (state->selected_save_platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL) {
-      snprintf(full_title, sizeof(full_title), "[VITA] %s [%s] (experimental) - restore disabled", resolved_title, game->game_id);
+      snprintf(full_title, sizeof(full_title), "[VITA] %s [%s]", resolved_title, game->game_id);
     } else {
       snprintf(full_title, sizeof(full_title), "%s [%s]", resolved_title, game->game_id);
     }

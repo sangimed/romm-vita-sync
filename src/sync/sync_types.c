@@ -536,7 +536,7 @@ const char *sync_save_platform_short_label(SyncSavePlatform platform) {
 const char *sync_save_platform_badge(SyncSavePlatform platform) {
   switch (platform) {
     case SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL:
-      return "experimental - restore disabled";
+      return "raw archive sync";
     case SYNC_SAVE_PLATFORM_PSONE:
     case SYNC_SAVE_PLATFORM_UNKNOWN:
     default:
@@ -545,11 +545,13 @@ const char *sync_save_platform_badge(SyncSavePlatform platform) {
 }
 
 int sync_save_platform_restore_supported(SyncSavePlatform platform) {
-  return platform == SYNC_SAVE_PLATFORM_PSONE;
+  return (platform == SYNC_SAVE_PLATFORM_PSONE) ||
+         (platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL);
 }
 
 int sync_save_platform_is_experimental(SyncSavePlatform platform) {
-  return platform == SYNC_SAVE_PLATFORM_VITA_NATIVE_EXPERIMENTAL;
+  (void)platform;
+  return 0;
 }
 
 SyncSavePlatform sync_save_platform_from_id(const char *id) {

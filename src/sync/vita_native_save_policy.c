@@ -70,8 +70,8 @@ int vita_native_save_title_id_is_official_game(const char *title_id) {
   return title_id[9] == '\0';
 }
 
-const char *vita_native_save_restore_unsupported_reason(void) {
-  return "restore not supported yet for Vita native saves: PFS/keystone signature metadata must be preserved or regenerated safely";
+const char *vita_native_save_restore_safety_notice(void) {
+  return "native Vita restore uses raw PFS archives only: validate TITLE_ID and keystone, back up the current container, then replace the savedata directory";
 }
 
 const char *vita_native_save_vita3k_import_notice(void) {
@@ -92,6 +92,80 @@ static int has_tar_extension(const char *name, size_t length) {
          ascii_char_ieq(name[length - 1U], 'r');
 }
 
+static const char *filename_basename(const char *filename) {
+  const char *base = filename;
+  if (filename == NULL) {
+    return NULL;
+  }
+
+  for (const char *cursor = filename; *cursor != '\0'; ++cursor) {
+    if ((*cursor == '/') || (*cursor == '\\')) {
+      base = cursor + 1;
+    }
+  }
+  return base;
+}
+
+static int ascii_string_ieq(const char *lhs, const char *rhs) {
+  if ((lhs == NULL) || (rhs == NULL)) {
+    return 0;
+  }
+
+  while ((*lhs != '\0') && (*rhs != '\0')) {
+    if (ascii_upper(*lhs) != ascii_upper(*rhs)) {
+      return 0;
+    }
+    ++lhs;
+    ++rhs;
+  }
+  return (*lhs == '\0') && (*rhs == '\0');
+}
+
+static int archive_member_name_is_safe(const char *name) {
+  if ((name == NULL) || (name[0] == '\0') || (name[0] == '/') || (name[0] == '\\') ||
+      (strchr(name, '\\') != NULL) || (strchr(name, ':') != NULL)) {
+    return 0;
+  }
+
+  const char *cursor = name;
+  while (*cursor != '\0') {
+    const char *slash = strchr(cursor, '/');
+    size_t len = (slash != NULL) ? (size_t)(slash - cursor) : strlen(cursor);
+    if (len == 0U) {
+      return (slash != NULL) && (slash[1] == '\0');
+    }
+    if ((len == 1U && cursor[0] == '.') ||
+        (len == 2U && cursor[0] == '.' && cursor[1] == '.')) {
+      return 0;
+    }
+    if (slash == NULL) {
+      break;
+    }
+    cursor = slash + 1;
+  }
+
+  return 1;
+}
+
+int vita_native_save_archive_member_title_id(
+    const char *member_name,
+    char *out_title_id,
+    size_t out_title_id_size) {
+  if (!archive_member_name_is_safe(member_name) || (out_title_id == NULL) || (out_title_id_size == 0U)) {
+    return -1;
+  }
+
+  const char *slash = strchr(member_name, '/');
+  size_t root_len = (slash != NULL) ? (size_t)(slash - member_name) : strlen(member_name);
+  if ((root_len == 0U) || (root_len >= out_title_id_size)) {
+    return -1;
+  }
+
+  memcpy(out_title_id, member_name, root_len);
+  out_title_id[root_len] = '\0';
+  return vita_native_save_title_id_is_official_game(out_title_id) ? 0 : -1;
+}
+
 int vita_native_save_archive_timestamp_from_filename(
     const char *filename,
     int64_t *out_timestamp_unix) {
@@ -99,12 +173,7 @@ int vita_native_save_archive_timestamp_from_filename(
     return -1;
   }
 
-  const char *base = filename;
-  for (const char *cursor = filename; *cursor != '\0'; ++cursor) {
-    if ((*cursor == '/') || (*cursor == '\\')) {
-      base = cursor + 1;
-    }
-  }
+  const char *base = filename_basename(filename);
 
   size_t length = strlen(base);
   if (!has_tar_extension(base, length) || (length <= 14U) || (base[9] != '_')) {
@@ -147,4 +216,51 @@ int vita_native_save_archive_timestamp_from_filename(
 
   *out_timestamp_unix = value;
   return 0;
+}
+
+int vita_native_save_archive_is_restore_candidate(
+    const char *filename,
+    const char *expected_title_id,
+    char *out_reason,
+    size_t out_reason_size) {
+  if (filename == NULL || filename[0] == '\0') {
+    set_reason(out_reason, out_reason_size, "remote Vita archive filename missing");
+    return 0;
+  }
+  if (!vita_native_save_title_id_is_official_game(expected_title_id)) {
+    set_reason(out_reason, out_reason_size, "expected Vita TITLE_ID is invalid");
+    return 0;
+  }
+
+  const char *base = filename_basename(filename);
+  size_t length = strlen(base);
+  if (!has_tar_extension(base, length)) {
+    set_reason(out_reason, out_reason_size, "remote save is not a Vita raw .tar archive");
+    return 0;
+  }
+  if ((length <= 14U) || (base[9] != '_')) {
+    set_reason(out_reason, out_reason_size, "remote archive filename does not include a Vita source timestamp");
+    return 0;
+  }
+
+  char title_id[10];
+  memcpy(title_id, base, 9U);
+  title_id[9] = '\0';
+  if (!vita_native_save_title_id_is_official_game(title_id)) {
+    set_reason(out_reason, out_reason_size, "remote archive TITLE_ID is not an official Vita game id");
+    return 0;
+  }
+  if (!ascii_string_ieq(title_id, expected_title_id)) {
+    set_reason(out_reason, out_reason_size, "remote archive TITLE_ID does not match selected game");
+    return 0;
+  }
+
+  int64_t timestamp = 0;
+  if (vita_native_save_archive_timestamp_from_filename(base, &timestamp) < 0) {
+    set_reason(out_reason, out_reason_size, "remote archive filename does not include a valid source timestamp");
+    return 0;
+  }
+
+  set_reason(out_reason, out_reason_size, "remote Vita archive restore candidate");
+  return 1;
 }

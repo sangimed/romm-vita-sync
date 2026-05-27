@@ -28,12 +28,12 @@ int vita_native_save_container_is_exportable(
 int vita_native_save_title_id_is_official_game(const char *title_id);
 
 /*
- * Returns the fixed restore-block reason for Vita native saves. Native Vita
- * restore remains disabled until the project has a proven PFS/keystone-aware
- * write path that can preserve or regenerate the console-recognized signature
- * metadata instead of naively copying encrypted files back into savedata.
+ * Returns the restore safety notice shown in logs and archive manifests.
+ * Native Vita restore is supported only for raw romm-vita-sync archives that
+ * validate the expected TITLE_ID, preserve sce_sys/keystone metadata, and are
+ * restored through the backup-first archive restore path.
  */
-const char *vita_native_save_restore_unsupported_reason(void);
+const char *vita_native_save_restore_safety_notice(void);
 
 /*
  * Returns the fixed Vita3K import notice for native Vita archive exports.
@@ -53,5 +53,29 @@ const char *vita_native_save_vita3k_import_notice(void);
 int vita_native_save_archive_timestamp_from_filename(
     const char *filename,
     int64_t *out_timestamp_unix);
+
+/*
+ * Returns non-zero when a remote save filename is a Vita native raw archive
+ * candidate for the expected TITLE_ID. This is a lightweight preflight guard:
+ * full restore still validates tar entries, metadata, and keystone contents
+ * after download. out_reason receives a short English explanation when
+ * provided.
+ */
+int vita_native_save_archive_is_restore_candidate(
+    const char *filename,
+    const char *expected_title_id,
+    char *out_reason,
+    size_t out_reason_size);
+
+/*
+ * Validates one tar member name before restore extraction and copies the root
+ * TITLE_ID into out_title_id. Rejects absolute paths, parent traversal,
+ * backslashes, drive-like names, empty path segments, and non-official Vita
+ * root IDs. Returns 0 on success or -1 on rejection.
+ */
+int vita_native_save_archive_member_title_id(
+    const char *member_name,
+    char *out_title_id,
+    size_t out_title_id_size);
 
 #endif
