@@ -26,7 +26,7 @@ All detailed information is available in the project documentation:
 - [Nightly Documentation](https://sangimed.github.io/romm-vita-sync/nightly/) from `develop`
 - [Docs Source](docs/index.md)
 
-The documentation workflow publishes versioned MkDocs output to the `gh-pages` branch with `mike`, then configures GitHub Pages to serve the `gh-pages` branch root. If `nightly` is deployed before `stable`, it temporarily becomes the default channel.
+The documentation workflow publishes versioned MkDocs output to the `gh-pages` branch with `mike`; GitHub Pages must be configured to serve the `gh-pages` branch root. If `nightly` is deployed before `stable`, it temporarily becomes the default channel.
 
 ## Contributing
 
