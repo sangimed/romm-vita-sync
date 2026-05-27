@@ -1,0 +1,138 @@
+@startuml
+title RomM Vita Sync - End-to-End Sync Flow (Current)
+
+actor User
+participant "UI (main.c)" as UI
+participant "RommClient\n(fn pointers)" as RC
+participant "RommHttpClient\n(HTTP callbacks)" as HTTP
+participant "SyncEngine" as SE
+participant "GameMatcher" as GM
+database "RomM API" as API
+collections "Vita FS\n(VMP/SRM/settings/state)" as FS
+
+== Startup wiring ==
+UI -> RC: list/upload/download/register = HTTP callbacks
+
+== Sync trigger ==
+User -> UI: Press Sync (single/all)
+UI -> UI: Validate URL + auth
+
+group Device registration
+  alt device_id missing
+    UI -> RC: romm_client_register_device(...)
+    RC -> HTTP: romm_http_register_device_callback(...)
+    HTTP -> API: POST /api/devices
+    API --> HTTP: 200/201 + {device_id|id}
+    HTTP --> RC: ROMM_CLIENT_OK + device_id
+    RC --> UI: device_id
+    UI -> FS: persist settings.ini
+  else device_id present
+    UI -> UI: continue
+  end
+end
+
+group Rom ID mapping
+  UI -> HTTP: romm_http_resolve_rom_ids(config, items)
+
+  HTTP -> API: GET /api/platforms
+  alt /api/platforms available
+    API --> HTTP: platform[]
+    HTTP -> HTTP: resolve configured platform_id
+  else /api/platforms unavailable or unsupported
+    API --> HTTP: non-200 or unsupported body
+    HTTP -> HTTP: keep platform_id=0 and use legacy platform filter
+  end
+
+  loop each local item without rom_id
+    HTTP -> HTTP: build bounded search variants\nGAME_ID/title(raw)/title(norm)/alias-stripped/tokens
+    loop each search variant
+      HTTP -> API: GET /api/roms?...&(platform_ids or platform)=...&search_term=variant
+      API --> HTTP: targeted items[] + total
+      HTTP -> HTTP: parse targeted candidates (+ alternative_names)
+      alt any targeted candidates found
+        HTTP -> GM: game_matcher_resolve_rom_id(...)
+        GM -> GM: Stage 1 serial/game_id metadata
+        alt no unique serial match
+          GM -> GM: Stage 2 title scoring\nexact+fuzzy(token set/sort, levenshtein)\n+ serial bonus - sequel mismatch penalty\nacross fs_name_no_tags/name/fs_name_no_ext/alternative_names
+        end
+        alt title score unresolved or ambiguous
+          GM -> GM: Stage 3 filename patterns
+        end
+        GM --> HTTP: rom_id, ambiguous, or no-match
+      else no targeted candidates
+        HTTP -> HTTP: continue next variant
+      end
+      alt unique rom_id found
+        break
+      end
+    end
+    alt no variant yields unique rom_id
+      HTTP --> UI: unresolved mapping reason
+    end
+  end
+
+  alt mapping error
+    HTTP --> UI: negative error
+    UI -> UI: cancel + report
+  else mapping ok
+    HTTP --> UI: resolved_count
+  end
+end
+
+group Sync engine run
+  UI -> UI: select latest local PS1 card per game
+  alt local M0 and M1 timestamps are equal
+    UI -> User: warn and keep M0 only
+  end
+  UI -> SE: sync_engine_run(selected_items)
+  SE -> FS: load sync state
+  SE -> RC: romm_client_list_remote_saves(mapped rom_ids)
+  RC -> HTTP: list_remote_saves_callback()
+  loop per mapped rom_id
+    HTTP -> API: GET /api/saves?limit&offset&emulator=...&rom_id=...
+    API --> HTTP: current-user saves for that rom
+  end
+  HTTP --> SE: parsed + deduped list
+
+  loop per local save
+    SE -> SE: decide upload/download/skip
+
+    alt upload
+      alt local file is .vmp
+        SE -> FS: vmp_to_srm_file() -> temp .srm
+      end
+      SE -> RC: romm_client_upload_save(...)
+      RC -> HTTP: upload_save_callback()
+      HTTP -> API: POST /api/saves?rom_id=...&emulator=...(&device_id/&slot)
+      API --> HTTP: 200/201/204 or 409
+      SE -> FS: remove temp .srm (if any)
+      SE -> FS: update sync state entry
+    else download
+      SE -> FS: backup local file
+      alt target file is .vmp
+        SE -> RC: romm_client_download_save(..., temp .srm)
+        RC -> HTTP: download_save_callback()
+        HTTP -> API: GET /api/saves/{id}/content?device_id=...&optimistic=true
+        API --> HTTP: file or 404
+        alt 404 with device_id
+          HTTP -> API: retry GET /api/saves/{id}/content
+          API --> HTTP: file
+        end
+        SE -> FS: srm_to_vmp_file(temp, template, target.vmp)
+        SE -> FS: vmp_sign_file_in_place(target.vmp)
+        SE -> FS: remove temp .srm
+      else direct download
+        SE -> RC: romm_client_download_save(..., target path)
+      end
+      SE -> FS: update sync state entry
+    else skip
+      SE -> SE: no transfer
+    end
+  end
+
+  SE -> FS: persist sync state
+  SE --> UI: SyncRunReport
+end
+
+UI -> User: Show final report/status
+@enduml

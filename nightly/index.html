@@ -1,0 +1,1844 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://sangimed.github.io/romm-vita-sync/nightly/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>RoMM Vita Sync</title>
+      
+    
+    
+      <link rel="stylesheet" href="assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#romm-vita-sync" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="." title="RoMM Vita Sync" class="md-header__button md-logo" aria-label="RoMM Vita Sync" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            RoMM Vita Sync
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Home
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="." title="RoMM Vita Sync" class="md-nav__button md-logo" aria-label="RoMM Vita Sync" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    RoMM Vita Sync
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="." class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project Status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execution-model-version-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution Model (Version 1)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#installation-quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installation &amp; Quick Start
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Installation &amp; Quick Start">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#end-user-prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        End User Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#developer-build-prerequisites-recommended-docker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Developer Build Prerequisites (Recommended: Docker)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#host-toolchain-prerequisites-alternative" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host Toolchain Prerequisites (Alternative)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#upload-target-configuration-vita-ftp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upload Target Configuration (Vita FTP)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommended-build-upload-docker-one-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommended Build + Upload (Docker One-Command)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#host-toolchain-alternative" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host Toolchain Alternative
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#first-launch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        First Launch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#first-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        First Sync
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-settingsini" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration (settings.ini)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration (settings.ini)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sync-state-store-sync_statetsv" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sync State Store (sync_state.tsv)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#test-end-to-end-current-milestone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test End-to-End (Current Milestone)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Test End-to-End (Current Milestone)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-build-and-upload-vpk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Build And Upload VPK
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-first-launch-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. First Launch Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-network-and-auth-preconditions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Network And Auth Preconditions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-sync-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Sync Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-persistence-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Persistence Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-negative-path-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Negative Path Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-dry_run-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. dry_run Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#8-conflict-auto-apply-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Conflict Auto-Apply Behavior
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-project-exists" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why This Project Exists
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scope-version-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope (Version 1)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ps1-save-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PS1 Save Architecture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="PS1 Save Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#local-ps-vita-adrenaline-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Local PS Vita / Adrenaline Layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#romm-emulator-side-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RomM / Emulator-Side Layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vmp-vs-srm-relationship" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VMP vs SRM Relationship
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#save-models-current-implementation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Save Models (Current Implementation)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Save Models (Current Implementation)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#scanner-inventory-saveitem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scanner Inventory (SaveItem)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-inventory-syncsavedescriptor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sync Inventory (SyncSaveDescriptor)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ps-vita-native-save-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PS Vita Native Save Policy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ui-game-aggregation-uigameentry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UI Game Aggregation (UiGameEntry)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#design-notes-not-implemented-yet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design Notes (Not Implemented Yet)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conversion-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conversion Strategy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Conversion Strategy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#vmp-srm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VMP → SRM
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#srm-vmp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SRM → VMP
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ps1-sync-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PS1 Sync Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#safety-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Safety Model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture-current-codebase" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture (Current Codebase)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#roadmap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Roadmap
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Roadmap">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#v1-ps1-adrenaline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v1 — PS1 (Adrenaline)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v2-psp-saves" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2 — PSP Saves
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v3-ps-vita-native-saves" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v3 — PS Vita Native Saves
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v4-emulator-environments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v4 — Emulator Environments
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v5-advanced-ps1-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v5 — Advanced PS1 Support
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#future-plugin-based-automation-planned" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Future Plugin-Based Automation (Planned)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Requirements
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#development-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Development Status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#end-to-end-sync-sequence-diagram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        End-to-End Sync Sequence Diagram
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contributing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Contributing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#disclaimer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disclaimer
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="romm-vita-sync">romm-vita-sync</h1>
+<p align="center">
+    <img src="assets/logo.png" alt="RoMM Vita Sync logo" width="420">
+</p>
+
+<p>Save synchronization client for RomM on PlayStation Vita, supporting native and emulated platforms.</p>
+<h2 id="overview">Overview</h2>
+<p><strong>romm-vita-sync</strong> is a PlayStation Vita homebrew application designed to synchronize game save data with a RomM server.</p>
+<p>The long-term objective is cross-platform save synchronization across:</p>
+<ul>
+<li>PS Vita native games</li>
+<li>PSP (Adrenaline)</li>
+<li>PS1 (POPS via Adrenaline)</li>
+<li>RetroArch and other emulator environments</li>
+</ul>
+<p>The first milestone targets PS1 save synchronization using Adrenaline virtual memory cards.</p>
+<p>The first implementation targets a manual synchronization workflow executed from a dedicated homebrew application.
+An optional startup auto-sync path is also available in-app (<code>[Sync].auto_sync_on_startup = true</code>) and uses persistent on-screen progress feedback.
+Automatic trigger integration from system plugin events remains planned for a later stage.</p>
+<h2 id="project-status">Project Status</h2>
+<p><strong>Stage:</strong> early development</p>
+<p>This project is in early development. Back up your save data before installation or any manipulation.</p>
+<p>Documentation scope:</p>
+<ul>
+<li>unless a section is explicitly labeled <code>Planned</code>, <code>Roadmap</code>, <code>Future Work</code>, or <code>Design Notes</code>, it describes the current codebase</li>
+<li>ideas and possible future refactors are kept separate from implemented behavior on purpose</li>
+<li>when documentation and code disagree, the code is the reference for current behavior until both are brought back in sync</li>
+</ul>
+<p>Published documentation is versioned with <code>mike</code>:</p>
+<ul>
+<li><code>stable</code> is built from <code>master</code> and is the default documentation channel</li>
+<li><code>nightly</code> is built from <code>develop</code> and may describe unreleased changes</li>
+</ul>
+<p>The GitHub Pages source is expected to be the <code>gh-pages</code> branch root.</p>
+<p>Initial milestone includes:</p>
+<ul>
+<li>Detect PS1 save folders under <code>ux0:/pspemu/PSP/SAVEDATA</code></li>
+<li>Parse <code>PARAM.SFO</code></li>
+<li>Detect <code>SCEVMC0.VMP</code> and <code>SCEVMC1.VMP</code></li>
+<li>Display metadata (path, size, timestamp)</li>
+<li>Convert <code>.VMP</code> → <code>.SRM</code></li>
+<li>Convert <code>.SRM</code> → <code>.VMP</code></li>
+<li>Compare local vs remote saves</li>
+<li>Select only the newest local PS1 card per game before sync; exact timestamp ties default to <code>SCEVMC0.VMP</code> with a warning</li>
+<li>Manual synchronization workflow</li>
+<li>Synchronization is triggered manually from the application UI in this phase, with optional startup auto-sync (<code>auto_sync_on_startup</code>)</li>
+<li>Automatic backup before overwrite</li>
+<li>Zero destructive operations without confirmation</li>
+</ul>
+<p>Current integration status:</p>
+<ul>
+<li>real HTTP device registration is implemented (<code>POST /api/devices</code>)</li>
+<li>upload/download conversion logic is integrated in <code>SyncEngine</code></li>
+<li>real HTTP save transfer callbacks are wired (<code>list/upload/download</code>)</li>
+<li>local Vita saves are mapped to RomM <code>rom_id</code> by trying <code>/api/platforms</code> first, then querying <code>/api/roms</code> with bounded search variants (<code>GAME_ID</code>, title exact, title compact, title normalized, alias-stripped title, significant tokens) and local scoring (serial, title fuzzy, filename fallback)</li>
+<li>PS Vita native save sync uses raw PFS <code>.tar</code> archives: eligible containers are exported with an embedded import README, uploaded to RomM through the <code>vita3k</code> save backend, compared against existing remote archive saves, and restored back into <code>ux0:user/00/savedata</code> through a backup-first validated restore path; these archives are still not direct Vita3K imports</li>
+</ul>
+<h2 id="execution-model-version-1">Execution Model (Version 1)</h2>
+<p>romm-vita-sync is implemented first as a standalone PS Vita homebrew application.</p>
+<p>Synchronization is explicitly triggered by the user from within the application UI.</p>
+<p>This approach ensures:</p>
+<ul>
+<li>safe validation of save conversion logic</li>
+<li>deterministic synchronization behavior</li>
+<li>easier debugging during early development</li>
+<li>reduced risk of unintended save overwrites</li>
+</ul>
+<p>Automatic synchronization based on system events (for example after exiting a game) will be introduced later through a taiHEN plugin once the synchronization engine is fully validated.</p>
+<h2 id="installation-quick-start">Installation &amp; Quick Start</h2>
+<p>This section summarizes the practical setup for both end users and developers.</p>
+<h3 id="end-user-prerequisites">End User Prerequisites</h3>
+<ul>
+<li>PlayStation Vita with homebrew support</li>
+<li>VitaShell (or equivalent method to install VPK files)</li>
+<li>Adrenaline installed (for PS1 save support)</li>
+<li>Network access from Vita to your RomM server</li>
+<li>Valid RomM auth (<code>romm_api_token</code> preferred, or username/password)</li>
+</ul>
+<h3 id="developer-build-prerequisites-recommended-docker">Developer Build Prerequisites (Recommended: Docker)</h3>
+<ul>
+<li>Docker Engine / Docker Desktop installed</li>
+<li>Docker daemon running</li>
+<li>Git with submodules support</li>
+</ul>
+<h3 id="host-toolchain-prerequisites-alternative">Host Toolchain Prerequisites (Alternative)</h3>
+<ul>
+<li>VitaSDK toolchain</li>
+<li>CMake</li>
+<li>Git with submodules support</li>
+<li><code>curl</code> (or <code>curl.exe</code> on Windows)</li>
+</ul>
+<h3 id="upload-target-configuration-vita-ftp">Upload Target Configuration (Vita FTP)</h3>
+<p>The build/upload helpers read optional FTP settings from:</p>
+<p><code>tools/build-and-upload-vpk.local.env</code></p>
+<p>Create it from the sample template:</p>
+<ul>
+<li>Linux/macOS: <code>cp tools/build-and-upload-vpk.config.sample.env tools/build-and-upload-vpk.local.env</code></li>
+<li>Windows PowerShell: <code>Copy-Item tools/build-and-upload-vpk.config.sample.env tools/build-and-upload-vpk.local.env</code></li>
+</ul>
+<p>Supported keys:</p>
+<ul>
+<li><code>FTP_HOST</code>: Vita IP address (for example <code>192.168.1.20</code>)</li>
+<li><code>FTP_PORT</code>: VitaShell FTP port (default <code>1337</code>)</li>
+<li><code>FTP_REMOTE_DIR</code>: remote destination directory (default <code>ux0:/homebrews</code>)</li>
+</ul>
+<p>CLI arguments still override values from the local env file.</p>
+<h3 id="recommended-build-upload-docker-one-command">Recommended Build + Upload (Docker One-Command)</h3>
+<ol>
+<li><code>git submodule update --init --recursive</code></li>
+<li>Linux/macOS: <code>./tools/docker-build-and-upload-vpk.sh</code></li>
+<li>Windows PowerShell: <code>./tools/docker-build-and-upload-vpk.ps1</code></li>
+</ol>
+<p>The FTP upload step uses an explicit timeout policy:</p>
+<ul>
+<li>connection timeout: <code>10s</code></li>
+<li>upload stall timeout: <code>10s</code> (if speed drops below <code>1 B/s</code>)</li>
+<li>container lifecycle: <code>--rm</code> (container auto-stopped and removed when script exits)</li>
+</ul>
+<h3 id="host-toolchain-alternative">Host Toolchain Alternative</h3>
+<p>Use this method if you prefer a native VitaSDK setup on the host machine.</p>
+<p>Commands:</p>
+<ol>
+<li><code>git submodule update --init --recursive</code></li>
+<li>Linux/macOS: <code>./tools/build-and-upload-vpk.sh</code></li>
+<li>Windows PowerShell: <code>./tools/build-and-upload-vpk.ps1</code></li>
+</ol>
+<h3 id="first-launch">First Launch</h3>
+<ol>
+<li>Launch the app on Vita</li>
+<li>The app automatically creates <code>ux0:data/romm-vita-sync/</code></li>
+<li>Open <code>Settings</code>, then enter the RomM <code>url</code> and preferred <code>API token</code> (or use username/password fallback)</li>
+<li>Optionally toggle <code>Dry-run mode</code> in <code>Settings</code> before the first sync</li>
+<li>Confirm each field saves immediately after closing the system keyboard</li>
+</ol>
+<h3 id="first-sync">First Sync</h3>
+<ol>
+<li>Ensure Vita can reach the RomM URL</li>
+<li>In the game list, check one or more detected games for the selected save platform</li>
+<li>Return to <code>Sync Selected</code> and press the system confirm button (<code>X</code> or <code>O</code>)</li>
+<li>Follow progress in the sync modal for manual runs; automatic startup sync updates the header state and <code>Synchronize</code> panel status without opening a modal</li>
+</ol>
+<p>Notes:</p>
+<ul>
+<li>The RomM URL, API token, username, and password are currently stored in plain text (no encryption) in <code>settings.ini</code>.</li>
+<li>Default <code>dry_run = true</code>; you can disable it from <code>Settings</code> or set <code>[Sync].dry_run = false</code> in <code>settings.ini</code> to execute real transfers.</li>
+<li>Conflict auto-apply is always enabled internally so recommended conflict actions run automatically.</li>
+</ul>
+<h2 id="configuration-settingsini">Configuration (<code>settings.ini</code>)</h2>
+<p>Connection and sync runtime options are read from:</p>
+<p><code>ux0:data/romm-vita-sync/settings.ini</code></p>
+<p>Format is INI-style (conventional in C/C++ desktop and embedded projects).</p>
+<p>The app now creates <code>ux0:data/romm-vita-sync/</code> automatically on startup.
+You can configure the URL, preferred API token, username/password fallback, and dry-run mode directly in the in-app UI; manual file creation is not required.</p>
+<p>Reference template (optional, for manual editing/debug):</p>
+<p><code>samples/settings.ini.example</code></p>
+<p>Supported sections:</p>
+<ul>
+<li><code>[RomM]</code>: <code>url</code>, <code>romm_api_token</code>, <code>username</code>, <code>password</code>, <code>platform</code>, <code>emulator</code>, <code>verify_tls</code>, <code>timeout_seconds</code></li>
+<li><code>[Device]</code>: <code>device_id</code>, <code>device_name</code>, <code>device_platform</code>, <code>client</code>, <code>client_version</code></li>
+<li><code>[Sync]</code>: <code>state_store_path</code>, <code>backup_directory</code>, <code>dry_run</code>, <code>auto_sync_on_startup</code></li>
+<li><code>[Log]</code>: <code>level</code> (<code>error|warn|info|debug</code>), <code>file_enabled</code> (<code>true|false</code>), <code>scan_verbose</code> (<code>true|false</code>)</li>
+</ul>
+<h3 id="sync-state-store-sync_statetsv">Sync State Store (<code>sync_state.tsv</code>)</h3>
+<p>Default path:</p>
+<p><code>ux0:data/romm-vita-sync/sync_state.tsv</code></p>
+<p>Purpose:</p>
+<ul>
+<li>persist local synchronization metadata between runs</li>
+<li>remember the last known state for one save key (<code>game_id</code> + <code>filename</code> + <code>slot</code>)</li>
+<li>help the sync engine skip redundant uploads when local size and timestamp are unchanged and no remote match is found</li>
+<li>track the recorded origin device and the last upload timestamp associated with that save entry</li>
+</ul>
+<p>What it stores:</p>
+<ul>
+<li>one format/version header</li>
+<li>the current <code>device_id</code> when available</li>
+<li>one tab-separated entry per tracked save with <code>game_id</code>, <code>filename</code>, <code>slot</code>, <code>size_bytes</code>, <code>timestamp_unix</code>, <code>origin_device</code>, and <code>last_upload_unix</code></li>
+</ul>
+<p>Operational notes:</p>
+<ul>
+<li>if the file is missing, the app treats it as an empty sync state rather than an error</li>
+<li>deleting <code>sync_state.tsv</code> does not delete any save data; it only resets the local sync history</li>
+<li>after deletion, the next synchronization behaves like a first pass and may re-evaluate or repeat transfers that would otherwise have been skipped</li>
+<li>this file is metadata only; it is not a backup and it does not contain the actual save payload</li>
+</ul>
+<p>Security notice:</p>
+<ul>
+<li>The RomM URL, API token, username, and password are currently stored locally in <code>settings.ini</code> <strong>without encryption</strong> (plain text).</li>
+<li>This is intentional for the current milestone and will be hardened in a later iteration.</li>
+</ul>
+<p>Authentication rule:</p>
+<ul>
+<li><code>romm_api_token</code> is used first when present and non-empty (<code>Authorization: Bearer &lt;token&gt;</code>)</li>
+<li>when <code>romm_api_token</code> is empty, username/password are used as HTTP Basic auth</li>
+<li>if neither method is configured, authenticated RomM operations fail with auth/config errors</li>
+<li>if <code>[Device].device_id</code> is empty, startup calls the <code>RommClient</code> registration flow and persists the returned <code>device_id</code> into <code>settings.ini</code></li>
+<li>recommended logging for troubleshooting: <code>level=debug</code> and keep <code>scan_verbose=false</code> first; enable <code>scan_verbose=true</code> only when debugging scanner issues</li>
+<li>at <code>level=info</code>, RomM HTTP logs summarize request/response flow for <code>/api/platforms</code>, <code>/api/roms</code>, <code>/api/saves</code>, and <code>/api/devices</code></li>
+<li>at <code>level=debug</code>, Rom ID mapping logs include generated search variants, per-candidate title scores (exact/fuzzy/token/sequel penalty components), and explicit winner/ambiguous/reject reasons</li>
+<li>HTTP error responses now log richer diagnostics automatically: effective URL/scheme, selected response headers (<code>Content-Type</code>, <code>Server</code>, <code>Via</code>, <code>Location</code>, <code>CF-Ray</code> when present), and a longer body preview</li>
+<li>at <code>level=debug</code>, additional raw response-body details remain available for troubleshooting unsupported API payloads</li>
+<li>file logging remains available only through <code>settings.ini</code>; the home screen no longer exposes a dedicated file logging row</li>
+<li>when enabled manually, file logging path is fixed to <code>ux0:data/romm-vita-sync/romm-vita-sync.log</code> with 3 rotated files max (<code>.log</code>, <code>.log.1</code>, <code>.log.2</code>), 10MB each</li>
+</ul>
+<p>Current in-app UI behavior:</p>
+<ul>
+<li>The home screen focuses on searching detected games, checking games, and launching synchronization.</li>
+<li>The <code>Settings</code> screen exposes dedicated fields for the RomM <code>url</code>, preferred API token, and username/password fallback.</li>
+<li>The <code>Settings</code> screen uses a single full-width grouped list for connection fields and sync options, including a <code>Dry-run mode</code> toggle with immediate save and preview/live wording.</li>
+<li>Vita native dry-run confirmations explicitly state that uploads, downloads, and restores are disabled while archive cache preparation may still occur for planning.</li>
+<li>Editing those fields opens the official PS Vita system keyboard (<code>SceImeDialog</code>).</li>
+<li>Confirming keyboard input persists values immediately to <code>ux0:data/romm-vita-sync/settings.ini</code>.</li>
+<li>The main screen keeps a visible primary <code>Sync Selected</code> action plus secondary <code>Sync All</code> and <code>Rescan Saves</code> actions, with compact selected-game, target-count, readiness, and dry-run/live status shown before sync.</li>
+<li><code>Detected &lt;platform&gt; Games</code> includes a non-persistent <code>Search games</code> field that filters by title, game ID, or internal game key.</li>
+<li><code>Detected &lt;platform&gt; Games</code> supports multi-selection with larger three-row checkboxes; pressing the confirm button on a visible row toggles its checked state.</li>
+<li>The detected list keeps a focused row for navigation while checked rows define the actual sync selection set.</li>
+<li>The main screen uses a dark Vita dashboard layout with focused panels for synchronization, Settings readiness, and detected games; connection fields live on the separate <code>Settings</code> screen.</li>
+<li>Settings values fit inside full-width rows, and long single-line labels such as game-list entries and footer status text ellipsize to stay inside their bounds.</li>
+<li>Manual sync runs now open a blocking modal with a wider layout, progress/result summary first, wrapped text, a real progress bar, live scrolling logs, and concise result summaries for uploads, downloads, skipped actions, conflicts, and errors.</li>
+<li>While a manual sync is running, the modal cannot be closed; once complete, it shows success/failure and can be closed manually.</li>
+<li>Manual sync logs support held <code>UP/DOWN</code> scrolling after the viewport leaves auto-follow mode, and they can also be dragged with the front touchscreen.</li>
+<li>Recommended conflict actions execute automatically without exposing a dedicated conflict toggle in the home screen.</li>
+<li>Automatic startup sync keeps using the same sync pipeline, but its live state is now reflected through the header status and <code>Synchronize</code> panel messaging on the home screen.</li>
+<li>The current UI uses the native Vita Latin PVF font renderer with hierarchical text sizing, a branded header mark, minimal code-drawn <code>vita2d</code> status indicators, layered panels, higher-contrast shared focus states, and clearer spacing for controller navigation.</li>
+</ul>
+<p>The sync engine now treats server <code>409 Conflict</code> responses as synchronization conflicts (remote newer) rather than generic transfer errors, aligned with <code>romm-retroarch-sync</code> behavior.</p>
+<h2 id="test-end-to-end-current-milestone">Test End-to-End (Current Milestone)</h2>
+<p>Coverage:</p>
+<ul>
+<li>local PS1 save scan</li>
+<li>config loading/persistence</li>
+<li>real device registration via <code>POST /api/devices</code></li>
+<li>per-game sync triggering from the Vita UI</li>
+<li>visible sync/log output on-device</li>
+<li>in-app conversion path wiring (<code>VMP-&gt;SRM</code> for upload, <code>SRM-&gt;VMP</code> + signing for download)</li>
+<li>real save transfer integration (<code>GET /api/saves</code>, <code>POST /api/saves</code>, <code>PUT /api/saves/{id}</code>, <code>GET /api/saves/{id}/content</code>)</li>
+</ul>
+<h3 id="1-build-and-upload-vpk">1. Build And Upload VPK</h3>
+<p>Docker one-command method (recommended):</p>
+<ol>
+<li><code>git submodule update --init --recursive</code></li>
+<li>Create <code>tools/build-and-upload-vpk.local.env</code> from <code>tools/build-and-upload-vpk.config.sample.env</code> and set <code>FTP_HOST</code> (Vita IP), optional <code>FTP_PORT</code>, and optional <code>FTP_REMOTE_DIR</code></li>
+<li>Linux/macOS: <code>./tools/docker-build-and-upload-vpk.sh</code></li>
+<li>Windows PowerShell: <code>./tools/docker-build-and-upload-vpk.ps1</code></li>
+</ol>
+<p>Host toolchain alternative:</p>
+<ol>
+<li>Ensure VitaSDK/CMake/curl are installed on the host</li>
+<li><code>git submodule update --init --recursive</code></li>
+<li>Linux/macOS: <code>./tools/build-and-upload-vpk.sh</code></li>
+<li>Windows PowerShell: <code>./tools/build-and-upload-vpk.ps1</code></li>
+</ol>
+<h3 id="2-first-launch-setup">2. First Launch Setup</h3>
+<ol>
+<li>Launch the app on Vita.</li>
+<li>Confirm the app creates <code>ux0:data/romm-vita-sync/</code>.</li>
+<li>Open <code>Settings</code>, then select each connection field and enter the RomM <code>url</code> plus the preferred API token, or use username/password fallback.</li>
+<li>Confirm that each field saves immediately after closing the system keyboard.</li>
+<li>Toggle <code>Dry-run mode</code> from <code>Settings</code> if you want to execute real transfers immediately.</li>
+</ol>
+<h3 id="3-network-and-auth-preconditions">3. Network And Auth Preconditions</h3>
+<ol>
+<li>Ensure Vita can reach the RomM URL on the same network.</li>
+<li>Use valid RomM authentication (<code>romm_api_token</code> preferred, or username/password).</li>
+<li>For self-signed HTTPS certificates, use <code>verify_tls = false</code> only for local testing.</li>
+</ol>
+<h3 id="4-sync-validation">4. Sync Validation</h3>
+<ol>
+<li>Use <code>Search games</code> if needed, then move through the detected game list and check one or more games to include.</li>
+<li>Return to <code>Sync Selected</code> and press the system confirm button (<code>X</code> or <code>O</code>).</li>
+<li>Confirm manual sync shows a blocking progress modal with live logs and completion state.</li>
+<li>Confirm automatic startup sync (when enabled) updates the header state and <code>Synchronize</code> panel without opening a modal.</li>
+<li>On first successful authenticated sync, confirm <code>device_id</code> is persisted in <code>settings.ini</code>.</li>
+</ol>
+<h3 id="5-persistence-validation">5. Persistence Validation</h3>
+<ol>
+<li>Restart the app.</li>
+<li>Confirm URL/auth settings (<code>romm_api_token</code> or username/password) are still present and <code>Dry-run mode</code> keeps its saved value.</li>
+<li>Confirm <code>device_id</code> remains stable across launches.</li>
+</ol>
+<h3 id="6-negative-path-validation">6. Negative Path Validation</h3>
+<ol>
+<li>Invalid credentials (<code>romm_api_token</code> or username/password): expect <code>authentication failed</code>.</li>
+<li>Unreachable URL/network issue: expect <code>network error</code>.</li>
+<li>HTTPS with invalid cert and <code>verify_tls = true</code>: expect request failure.</li>
+</ol>
+<h3 id="7-dry_run-validation">7. <code>dry_run</code> Validation</h3>
+<ol>
+<li>Default is <code>dry_run = true</code> for safety-first runs.</li>
+<li>Toggle <code>Dry-run mode</code> from <code>Settings</code> or set <code>[Sync].dry_run = false</code> in <code>settings.ini</code> to execute real transfers.</li>
+<li>Upload flow sends <code>.SRM</code> through <code>POST /api/saves</code> for new remote saves and <code>PUT /api/saves/{id}</code> when a matching remote save already exists; download flow pulls <code>GET /api/saves/{id}/content</code> then rebuilds/signs <code>.VMP</code>.</li>
+</ol>
+<h3 id="8-conflict-auto-apply-behavior">8. Conflict Auto-Apply Behavior</h3>
+<ol>
+<li>Conflict auto-apply is enabled by default and not exposed as a home-screen toggle.</li>
+<li>Recommended conflict actions run automatically during both manual sync and startup auto-sync.</li>
+</ol>
+<h2 id="why-this-project-exists">Why This Project Exists</h2>
+<p>RomM already supports save synchronization for several platforms and clients (for example Android launchers). However, there is currently no native PS Vita sync client.</p>
+<p>This project aims to provide:</p>
+<ul>
+<li>reliable save backup</li>
+<li>bidirectional synchronization with RomM</li>
+<li>conflict-safe restore workflows</li>
+<li>compatibility with Adrenaline-based PS1 saves</li>
+</ul>
+<h2 id="scope-version-1">Scope (Version 1)</h2>
+<p>Version 1 started with PS1 saves via Adrenaline and now also includes PS Vita native raw archive sync.</p>
+<p>Features:</p>
+<ul>
+<li>Detect save folders in <code>ux0:/pspemu/PSP/SAVEDATA/&lt;GAME_ID&gt;</code></li>
+<li>Parse <code>PARAM.SFO</code></li>
+<li>Detect <code>.VMP</code> memory card files</li>
+<li>Convert <code>.VMP</code> → <code>.SRM</code></li>
+<li>Convert <code>.SRM</code> → <code>.VMP</code></li>
+<li>Detect PS Vita native savedata containers in <code>ux0:user/00/savedata/&lt;TITLE_ID&gt;</code></li>
+<li>Export and restore Vita native raw PFS <code>.tar</code> archives with keystone validation</li>
+<li>Support manual upload/download workflow orchestration in <code>SyncEngine</code> with real RomM HTTP transport</li>
+<li>Always create backups before overwrite</li>
+</ul>
+<h2 id="ps1-save-architecture">PS1 Save Architecture</h2>
+<h3 id="local-ps-vita-adrenaline-layout">Local PS Vita / Adrenaline Layout</h3>
+<p>PS1 saves are stored inside:</p>
+<p><code>ux0:/pspemu/PSP/SAVEDATA/&lt;GAME_ID&gt;/</code></p>
+<p>Typical contents:</p>
+<ul>
+<li><code>PARAM.SFO</code></li>
+<li><code>ICON0.PNG</code></li>
+<li><code>CONFIG.BIN</code></li>
+<li><code>SCEVMC0.VMP</code></li>
+<li><code>SCEVMC1.VMP</code></li>
+</ul>
+<p>File roles:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PARAM.SFO</td>
+<td>Sony metadata</td>
+</tr>
+<tr>
+<td>ICON0.PNG</td>
+<td>Save icon</td>
+</tr>
+<tr>
+<td>CONFIG.BIN</td>
+<td>POPS configuration</td>
+</tr>
+<tr>
+<td>SCEVMC0.VMP</td>
+<td>Memory card slot 1</td>
+</tr>
+<tr>
+<td>SCEVMC1.VMP</td>
+<td>Memory card slot 2</td>
+</tr>
+</tbody>
+</table>
+<p>Adrenaline / POPS stores PS1 saves as virtual memory card containers.</p>
+<h3 id="romm-emulator-side-layout">RomM / Emulator-Side Layout</h3>
+<p>RomM stores PS1 saves as <code>.SRM</code> files:</p>
+<p><code>.../saves/psx/&lt;rom_id&gt;/pcsx_rearmed/&lt;game&gt;.srm</code></p>
+<p>RomM does not store <code>.VMP</code> containers directly. Instead, it uses emulator-facing raw save formats.</p>
+<h3 id="vmp-vs-srm-relationship">VMP vs SRM Relationship</h3>
+<p>Observed sizes:</p>
+<ul>
+<li><code>SCEVMC0.VMP = 131200 bytes</code></li>
+<li>Standard <code>SAVE.SRM = 131072 bytes</code> (pcsx_rearmed, DuckStation, and most PS1 emulators)</li>
+<li>Dual-card <code>SAVE.SRM = 262144 bytes</code> (mednafen_psx_hw / beetle_psx only)</li>
+</ul>
+<p>Working model:</p>
+<ul>
+<li>VMP = 128-byte header + raw memory card data (one card, 131072 bytes)</li>
+<li>SRM = raw memory card data; standard format is 131072 bytes (single card)</li>
+</ul>
+<p>Conversion strategy:</p>
+<table>
+<thead>
+<tr>
+<th>Direction</th>
+<th>Operation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Vita → RomM</td>
+<td>Remove 128-byte VMP header, producing a standard 131072-byte SRM</td>
+</tr>
+<tr>
+<td>RomM → Vita</td>
+<td>Single-card SRM: rebuild one VMP. Dual-card SRM: split into card 1 + card 2 and rebuild both <code>SCEVMC0.VMP</code> and <code>SCEVMC1.VMP</code></td>
+</tr>
+</tbody>
+</table>
+<p>The upload produces the standard 131072-byte single-card SRM format, which is compatible
+with pcsx_rearmed (EmulatorJS default), DuckStation, and other PS1 emulators.
+The download path accepts both 131072-byte and 262144-byte SRM files for compatibility
+with saves created by mednafen_psx_hw users. When a dual-card SRM is downloaded,
+the app restores both PS1 memory cards on Vita instead of dropping card 2.</p>
+<h2 id="save-models-current-implementation">Save Models (Current Implementation)</h2>
+<p>The current PS1 implementation does not use a single <code>LocalPs1Save</code> struct. The codebase uses three concrete representations instead, depending on the stage of the pipeline.</p>
+<h3 id="scanner-inventory-saveitem">Scanner Inventory (<code>SaveItem</code>)</h3>
+<p>Defined in <code>src/save_item.h</code>.</p>
+<pre><code>SaveItem
+├─ game_id
+├─ game_title
+├─ path
+├─ size_bytes
+└─ timestamp
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li>one <code>SaveItem</code> represents one detected <code>.VMP</code> file, not one aggregated save directory</li>
+<li><code>game_id</code> is extracted from the parent directory name</li>
+<li><code>game_title</code> is read from <code>PARAM.SFO</code> when available</li>
+<li><code>path</code> points directly to the detected <code>.VMP</code> file</li>
+<li><code>timestamp</code> is stored as a formatted sync timestamp string (<code>YYYY-MM-DD HH:MM:SS</code>)</li>
+</ul>
+<h3 id="sync-inventory-syncsavedescriptor">Sync Inventory (<code>SyncSaveDescriptor</code>)</h3>
+<p>Defined in <code>src/sync_types.h</code>.</p>
+<pre><code>SyncSaveDescriptor
+├─ rom_id
+├─ remote_id
+├─ game_id
+├─ title
+├─ filename
+├─ path
+├─ remote_path
+├─ size_bytes
+├─ timestamp_unix
+├─ hash
+├─ origin_device
+├─ device_is_current
+├─ device_is_untracked
+├─ slot
+└─ platform
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li>local scan results are converted from <code>SaveItem</code> into <code>SyncSaveDescriptor</code> by <code>src/scan_to_sync_adapter.c</code></li>
+<li>remote saves fetched from RomM are also parsed into <code>SyncSaveDescriptor</code></li>
+<li>this shared descriptor is the canonical synchronization model currently used by <code>SyncEngine</code></li>
+<li><code>slot</code> is inferred from <code>SCEVMC0.VMP</code> or <code>SCEVMC1.VMP</code></li>
+<li><code>platform</code> identifies <code>psOne</code> or <code>psVita</code> descriptors, so PS1 and Vita-native policy can share the sync pipeline without applying PS1-only rules to Vita containers</li>
+<li>before RomM mapping and transfer decisions, local descriptors are grouped per <code>game_id</code> and only the newest local card remains eligible for sync</li>
+<li>when two local cards from the same game share the exact same timestamp, <code>SCEVMC0.VMP</code> wins deterministically and the UI shows a warning</li>
+</ul>
+<h3 id="ps-vita-native-save-policy">PS Vita Native Save Policy</h3>
+<p>PS Vita native save support is bidirectional for romm-vita-sync raw PFS archives. It performs real RomM mapping, remote save listing, conflict decisions, archive upload, and backup-first archive restore into <code>ux0:user/00/savedata</code>.</p>
+<p>Scanner behavior:</p>
+<ol>
+<li>Probe <code>ux0:user/00/savedata/&lt;TITLE_ID&gt;/</code> containers.</li>
+<li>Filter out non-official games. Only retail and digital games matching the official Title ID format (<code>PCS[A-H]</code> followed by five digits) are eligible for synchronization. Homebrew applications are explicitly excluded.</li>
+<li>Require <code>sce_sys</code>, <code>sce_sys/keystone</code>, and <code>sce_sys/param.sfo</code> or <code>sce_sys/PARAM.SFO</code>.</li>
+<li>Skip any candidate missing <code>keystone</code>, because the keystone is part of Vita PFS/signature validation and an upload without it would create a server backup that cannot be restored as a recognized Vita save.</li>
+<li>Archive accepted containers as <code>.tar</code> files under <code>ux0:data/romm-vita-sync/cache/vita-native/</code> before upload.</li>
+<li>Add <code>00-README-romm-vita-sync.txt</code> to each archive so manual downloads explain that the tar is a raw Vita/PFS backup, not a decrypted Vita3K import.</li>
+<li>Upload archives through RomM saves using the <code>vita3k</code> backend name, independently from the PS1 <code>pcsx_rearmed</code> backend.</li>
+<li>Restore remote archives only after validating the expected <code>TITLE_ID</code>, <code>sce_sys</code>, <code>PARAM.SFO</code>, and <code>sce_sys/keystone</code>.</li>
+</ol>
+<p>Archive format:</p>
+<ul>
+<li>each archive is a POSIX-style tar file named <code>&lt;TITLE_ID&gt;_raw-pfs-backup_&lt;timestamp&gt;.tar</code></li>
+<li>the archive root is the save container title id, for example <code>PCSF00012/</code></li>
+<li>all files inside the container are copied byte-for-byte, including <code>sce_sys/</code>, <code>sce_sys/param.sfo</code> or <code>sce_sys/PARAM.SFO</code>, and <code>sce_sys/keystone</code></li>
+<li><code>00-README-romm-vita-sync.txt</code> is added at the archive root; it warns that extracted raw/PFS contents should not be copied directly into Vita3K, and points users to VitaShell <code>Open decrypted</code> or an equivalent save manager export</li>
+<li>archive staging uses Vita filesystem calls (<code>sceIoMkdir</code>, <code>sceIoOpen</code>, <code>sceIoDopen</code>, <code>sceIoRead</code>, <code>sceIoWrite</code>) so <code>ux0:</code> paths are handled by the Vita I/O layer</li>
+<li>archive export rejects container paths that cannot fit in the current tar name field instead of silently truncating them</li>
+<li>one archive upload is currently bounded to 32MB because the Vita HTTP API path sends one multipart request body per transfer</li>
+</ul>
+<p>Synchronization behavior:</p>
+<ul>
+<li>if no remote archive save exists for the mapped <code>rom_id</code>, the local archive is uploaded</li>
+<li>if a remote archive save exists and the local archive is newer, upload is selected by the normal conflict policy</li>
+<li>remote Vita archive age is read from the source timestamp encoded in the archive filename (<code>&lt;TITLE_ID&gt;_&lt;timestamp&gt;.tar</code> or <code>&lt;TITLE_ID&gt;_raw-pfs-backup_&lt;timestamp&gt;.tar</code>) instead of RomM's server-side <code>updated_at</code>, because <code>updated_at</code> reflects upload time rather than savedata modification time</li>
+<li>before downloading a Vita restore, the remote save filename must be a <code>.tar</code> archive whose <code>TITLE_ID</code> and source timestamp match the selected Vita game</li>
+<li>if the remote archive save is newer, the archive is downloaded to the restore cache, extracted into staging, validated, and restored into <code>ux0:user/00/savedata/&lt;TITLE_ID&gt;/</code></li>
+<li>before replacing an existing local Vita container, the app writes a raw PFS backup tar named <code>&lt;TITLE_ID&gt;_raw-pfs-before-restore_&lt;timestamp&gt;.tar</code> under the configured backup directory</li>
+<li>archive restore rejects absolute paths, parent-directory traversal, empty path segments, drive-like names, unsupported tar entries, wrong <code>TITLE_ID</code>, and containers missing <code>sce_sys</code>, <code>PARAM.SFO</code>, or <code>keystone</code></li>
+<li>if dry-run mode is enabled, the app prepares the archive and plans the transfer but does not upload, download, or restore it</li>
+</ul>
+<p>This means the server receives faithful backup archives only when the minimum signed-container metadata is present, and local restore preserves that container shape instead of copying a partial payload. For Vita3K, the safe manual path is still to export the same save from a real Vita using VitaShell <code>Open decrypted</code> or a save manager, then copy the decrypted payload into the save folder generated by Vita3K while keeping Vita3K's <code>SlotParam_*.bin</code>.</p>
+<h3 id="ui-game-aggregation-uigameentry">UI Game Aggregation (<code>UiGameEntry</code>)</h3>
+<p>Defined in <code>src/main.c</code>.</p>
+<pre><code>UiGameEntry
+├─ key
+├─ game_id
+├─ title
+└─ save_count
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li>the UI groups multiple <code>SyncSaveDescriptor</code> items by game to render the selectable detected-game list</li>
+<li><code>save_count</code> is the number of detected local save targets associated with that game</li>
+</ul>
+<h3 id="design-notes-not-implemented-yet">Design Notes (Not Implemented Yet)</h3>
+<p>The current codebase does not yet expose:</p>
+<ul>
+<li>a dedicated directory-level <code>LocalPs1Save</code> model with <code>save_dir</code>, <code>icon_path</code>, <code>config_path</code>, <code>vmc0_path</code>, and <code>vmc1_path</code></li>
+<li>a dedicated <code>RemotePs1Save</code> struct separate from <code>SyncSaveDescriptor</code></li>
+<li>a dedicated <code>CanonicalPs1MemoryCard</code> struct holding parsed raw card data plus metadata</li>
+</ul>
+<p>Those ideas may still be useful later if the project evolves toward a richer per-directory or per-card abstraction, but they are not part of the current implementation.</p>
+<h2 id="conversion-strategy">Conversion Strategy</h2>
+<h3 id="vmp-srm">VMP → SRM</h3>
+<p>Process:</p>
+<ol>
+<li>Read <code>SCEVMC0.VMP</code></li>
+<li>Remove first 128 bytes</li>
+<li>Write <code>.SRM</code> payload</li>
+</ol>
+<p>CLI helper:</p>
+<ul>
+<li>reusable C module: <code>src/vmp_srm_converter.c</code></li>
+<li>standalone wrapper: <code>tools/convert-vmp-to-srm.ps1</code></li>
+<li>shell wrapper: <code>tools/convert-vmp-to-srm.sh</code></li>
+<li>example (Windows): <code>.\tools\convert-vmp-to-srm.ps1 .\SCEVMC0.VMP</code></li>
+<li>example (Linux/macOS): <code>./tools/convert-vmp-to-srm.sh ./SCEVMC0.VMP</code></li>
+</ul>
+<p>The PowerShell script uses the standalone <code>vmp2srm</code> tool and can build it automatically into <code>build-tools/</code> if needed.</p>
+<h3 id="srm-vmp">SRM → VMP</h3>
+<p>Process:</p>
+<ol>
+<li>Read <code>.SRM</code></li>
+<li>Prepend 128-byte VMP header</li>
+<li>Write <code>SCEVMC0.VMP</code></li>
+</ol>
+<p>CLI helper:</p>
+<ul>
+<li>reusable C module: <code>src/vmp_srm_converter.c</code></li>
+<li>standalone wrapper: <code>tools/convert-srm-to-vmp.ps1</code></li>
+<li>shell wrapper: <code>tools/convert-srm-to-vmp.sh</code></li>
+<li>example (Windows): <code>.\tools\convert-srm-to-vmp.ps1 .\SAVE.SRM .\SAVE.VMP .\SCEVMC0.VMP</code></li>
+<li>example (Linux/macOS): <code>./tools/convert-srm-to-vmp.sh ./SAVE.SRM ./SAVE.VMP ./SCEVMC0.VMP</code></li>
+<li>signing: the wrappers always re-sign using <code>vita-mcr2vmp</code> (submodule <code>tools/vita-mcr2vmp</code>) to avoid checksum error (<code>80010005</code>).</li>
+<li>the app now uses the same signing logic directly in <code>SyncEngine</code> after <code>SRM -&gt; VMP</code> reconstruction.</li>
+</ul>
+<p>Required setup:</p>
+<ul>
+<li><code>git submodule update --init tools/vita-mcr2vmp</code></li>
+</ul>
+<p>Build behavior:</p>
+<ul>
+<li>the wrappers look for <code>srm2vmp</code> and <code>vita-mcr2vmp</code> in <code>build-tools/</code></li>
+<li>if either tool is missing (or <code>--rebuild</code> is passed), the wrappers run <code>cmake -S tools -B build-tools</code> then <code>cmake --build build-tools --config Release</code></li>
+<li>configuration fails fast when <code>tools/vita-mcr2vmp</code> is missing</li>
+</ul>
+<p>Usage:</p>
+<ul>
+<li>Linux/macOS: <code>./tools/convert-srm-to-vmp.sh &lt;INPUT.SRM&gt; [OUTPUT.VMP] &lt;TEMPLATE.VMP&gt;</code></li>
+<li>Windows: <code>.\tools\convert-srm-to-vmp.ps1 &lt;INPUT.SRM&gt; [OUTPUT.VMP] &lt;TEMPLATE.VMP&gt;</code></li>
+<li>Slot selection: defaults to slot 0; override with <code>--slot 0</code> or <code>--slot 1</code> (<code>-Slot 0|1</code> on PowerShell). If no output name is provided, the script writes <code>SCEVMC&lt;slot&gt;.VMP</code> beside the input.</li>
+<li>The wrappers perform a VMP→MCR→VMP round-trip to recompute the signature with <code>vita-mcr2vmp</code> and then replace the unsigned output with the signed VMP.</li>
+</ul>
+<p>Rules:</p>
+<ul>
+<li>reuse known-good VMP headers</li>
+<li>never overwrite automatically</li>
+<li>always create backups first</li>
+</ul>
+<p>The <code>SRM -&gt; VMP</code> wrappers require a known-good <code>.VMP</code> template header. Pass an existing Vita/Adrenaline <code>SCEVMC0.VMP</code> or <code>SCEVMC1.VMP</code>, or set <code>ROMM_VMP_TEMPLATE_PATH</code>. Templates are provided in <code>samples/vmp-templates/</code>.</p>
+<h2 id="ps1-sync-pipeline">PS1 Sync Pipeline</h2>
+<p>Candidate selection rule:</p>
+<ul>
+<li>when both <code>SCEVMC0.VMP</code> and <code>SCEVMC1.VMP</code> exist for the same game, only the local card with the newest modification timestamp is eligible for sync</li>
+<li>when both local timestamps are exactly equal, the app keeps <code>SCEVMC0.VMP</code>, skips <code>SCEVMC1.VMP</code>, and surfaces a warning to the user before continuing</li>
+<li>remote save listing keeps the single newest RomM save per <code>rom_id</code> using <code>updated_at</code>, regardless of remote slot metadata</li>
+<li>if the remote/server save is newer and a download is selected, the app overwrites that already-selected local card; it does not switch to the other local slot during the restore path</li>
+<li>backup behavior is unchanged: backups are still mandatory before any local overwrite during download/restore</li>
+<li>sync logs now include the compared timestamps for each detected local save, each selected PS1 candidate, the matched remote candidate, and the remote save chosen for download so <code>remote_newer</code> / <code>local_newer</code> decisions can be inspected directly</li>
+</ul>
+<p>Current sync pseudo-code:</p>
+<pre><code class="language-text">manual_or_auto_sync():
+  local_items = scan_local_vmp_files()
+  log_detected_local_items(local_items)
+
+  selected_items = select_latest_local_card_per_game(local_items)
+  if selected_items is empty:
+    fail(&quot;no PS1 sync candidate selected&quot;)
+
+  ensure_romm_url_and_auth_are_present()
+  ensure_device_registration()
+
+  for each item in selected_items:
+    item.rom_id = resolve_rom_id_from_romm(item.serial, item.title, item.filename_patterns)
+    if item.rom_id is missing:
+      fail(&quot;unresolved rom_id&quot;)
+
+  sync_engine_run(selected_items)
+
+sync_engine_run(local_items):
+  selected_mask = select_latest_local_card_per_game(local_items)
+  selected_rom_ids = unique_rom_ids_from_selected_items(local_items, selected_mask)
+
+  state_store = load_sync_state_tsv()
+  active_device_id = config.device_id or state_store.device_id
+  remote_items = list_remote_saves_filtered_by_rom_id_keep_latest_updated_at_per_rom(selected_rom_ids)
+
+  for each local_item in local_items:
+    if local_item is not selected by selected_mask:
+      record_skip(&quot;skipped by PS1 latest-card rule&quot;)
+      continue
+
+    state_entry = find_state_entry(local_item.game_id, local_item.filename, local_item.slot)
+    remote_item = find_best_matching_remote(local_item, remote_items)
+    # exact rom+slot+filename first, then compatible slot, then rom_id only
+
+    if remote_item does not exist:
+      if local_item.size and local_item.timestamp match state_entry:
+        record_skip(&quot;unchanged upload candidate&quot;)
+      else:
+        upload_local_save(local_item)
+      continue
+
+    if remote_item says this device is already current:
+      record_skip(&quot;remote already current for this device&quot;)
+      continue
+
+    conflict = compare_local_and_remote(local_item, remote_item, active_device_id)
+
+    if conflict == none:
+      record_skip(&quot;already synchronized&quot;)
+      continue
+
+    if conflict == same_origin_device:
+      record_skip(&quot;same-origin remote save&quot;)
+      continue
+
+    decision = default_decision_for(conflict)
+    if conflict requires confirmation:
+      decision = ui_or_auto_apply_conflict_resolution(conflict, default=decision)
+
+    if decision == upload:
+      upload_local_save(local_item)
+    else if decision == download:
+      download_remote_save(remote_item, local_item)
+    else:
+      record_skip(&quot;conflict skipped&quot;)
+
+  if not dry_run:
+    save_sync_state_tsv(state_store)
+
+upload_local_save(local_item):
+  if local_item is .VMP:
+    convert local VMP -&gt; temporary SRM
+  POST /api/saves
+  update sync_state.tsv with local metadata and active device_id
+
+download_remote_save(remote_item, local_item):
+  create backup of local destination before overwrite
+  GET /api/saves/{id}/content
+  if destination is .VMP:
+    convert downloaded SRM -&gt; VMP
+    re-sign VMP
+    restore remote timestamp on the local file
+  update sync_state.tsv with remote metadata and origin device
+</code></pre>
+<p>Upload flow:</p>
+<pre><code>PS Vita save folder
+→ select latest local PS1 card for this game
+→ PARAM.SFO parser
+→ VMP reader
+→ VMP → SRM conversion (in-app, temp file)
+→ RomM upload / compare
+</code></pre>
+<p>Restore flow:</p>
+<pre><code>RomM SRM file
+→ download to temp SRM
+→ SRM → VMP conversion
+→ VMP re-sign (in-app)
+→ backup existing VMP
+→ restore VMP
+</code></pre>
+<h2 id="safety-model">Safety Model</h2>
+<p>Synchronization is non-destructive by default.</p>
+<p>Rules:</p>
+<ul>
+<li>never overwrite local saves automatically</li>
+<li>always create backups before restore</li>
+<li>compare timestamps and hashes when possible</li>
+<li>warn the user when equal local timestamps force the deterministic <code>SCEVMC0.VMP</code> fallback</li>
+<li>require explicit confirmation before sync operations</li>
+<li>preserve original <code>.VMP</code> files before rebuilding</li>
+</ul>
+<h2 id="architecture-current-codebase">Architecture (Current Codebase)</h2>
+<p>Current implementation modules:</p>
+<ul>
+<li><code>src/save_scanner.c</code>: recursively scans candidate roots, detects <code>.VMP</code> files, and reads <code>PARAM.SFO</code> metadata</li>
+<li><code>src/save_item.h</code>: defines the scanner inventory item returned by the local scan</li>
+<li><code>src/scan_to_sync_adapter.c</code>: converts scanner output into synchronization descriptors</li>
+<li><code>src/sync_types.h</code> and <code>src/sync_types.c</code>: define shared sync data structures and helpers such as slot and timestamp parsing</li>
+<li><code>src/game_matcher.c</code>: resolves local saves to RomM <code>rom_id</code> candidates using serials, titles, and filename patterns</li>
+<li><code>src/romm_http_client.c</code>: handles device registration, platform lookup, RomM ROM lookup, remote save listing (newest <code>updated_at</code> per <code>rom_id</code>), uploads, and downloads</li>
+<li><code>src/conflict_resolver.c</code>: compares local and remote saves and classifies conflicts</li>
+<li><code>src/backup_manager.c</code>: creates local backups before overwrite operations</li>
+<li><code>src/sync_state_store.c</code>: persists sync state used to track prior uploads and origins</li>
+<li><code>src/sync_engine.c</code>: plans and executes upload/download actions</li>
+<li><code>src/main.c</code>: owns UI state, scan orchestration, sync triggering, and on-screen feedback</li>
+</ul>
+<p>Implementation notes:</p>
+<ul>
+<li>PS1 VMP/SRM sync and PS Vita native raw archive sync are implemented today</li>
+<li>VMP and SRM conversion is implemented through <code>src/vmp_srm_converter.c</code> and used by the PS1 sync flow</li>
+<li>Vita native sync uses <code>src/sync/vita_native_save_scanner.c</code> for scan, export, validated restore, and backup-first replacement</li>
+</ul>
+<h2 id="roadmap">Roadmap</h2>
+<h3 id="v1-ps1-adrenaline">v1 — PS1 (Adrenaline)</h3>
+<ul>
+<li>scan SAVEDATA folders</li>
+<li>detect PS1 save directories</li>
+<li>parse PARAM.SFO</li>
+<li>detect VMP files</li>
+<li>convert VMP ↔ SRM</li>
+<li>compare remote saves</li>
+<li>manual sync workflow</li>
+<li>automatic backup system</li>
+<li>manual sync button inside homebrew UI</li>
+</ul>
+<h3 id="v2-psp-saves">v2 — PSP Saves</h3>
+<ul>
+<li>scan SAVEDATA folders</li>
+<li>map saves by TitleID</li>
+<li>bidirectional sync</li>
+<li>improved conflict detection</li>
+</ul>
+<h3 id="v3-ps-vita-native-saves">v3 — PS Vita Native Saves</h3>
+<ul>
+<li>current support scans native savedata containers and uploads <code>.tar</code> archive backups when <code>sce_sys</code>, <code>PARAM.SFO</code>, and <code>keystone</code> are present</li>
+<li>remote newer archives restore through a staging directory after <code>TITLE_ID</code> and metadata validation</li>
+<li>existing local Vita containers are backed up as raw PFS tar archives before replacement</li>
+<li>Vita3K import remains a separate decrypted-export workflow; raw PFS archives are not direct Vita3K imports</li>
+</ul>
+<h3 id="v4-emulator-environments">v4 — Emulator Environments</h3>
+<ul>
+<li>RetroArch save support</li>
+<li>additional emulator integrations</li>
+<li>per-core save mapping</li>
+</ul>
+<h3 id="v5-advanced-ps1-support">v5 — Advanced PS1 Support</h3>
+<ul>
+<li>improve memory card tooling</li>
+<li>extend diagnostics and validation</li>
+<li>refine synchronization workflows</li>
+</ul>
+<h2 id="future-plugin-based-automation-planned">Future Plugin-Based Automation (Planned)</h2>
+<p>After the synchronization engine is validated in the standalone homebrew version, a taiHEN plugin will be introduced to support automatic synchronization triggers.</p>
+<p>Planned triggers include:</p>
+<ul>
+<li>after exiting a game</li>
+<li>when returning to LiveArea</li>
+<li>during safe idle system states</li>
+</ul>
+<p>The plugin will act as a lightweight event listener and delegate synchronization work to the existing SyncEngine.</p>
+<h2 id="requirements">Requirements</h2>
+<p>Runtime:</p>
+<ul>
+<li>PlayStation Vita with homebrew support</li>
+<li>Adrenaline installed (for PS1 support)</li>
+<li>RomM server instance with save sync enabled</li>
+</ul>
+<p>Build:</p>
+<ul>
+<li>VitaSDK toolchain</li>
+<li>CMake</li>
+<li>submodules initialized (<code>git submodule update --init --recursive</code>)</li>
+</ul>
+<h2 id="development-status">Development Status</h2>
+<p>This project is currently in its bootstrap phase.</p>
+<p>Initial goals:</p>
+<ul>
+<li>setup VitaSDK project structure</li>
+<li>implement filesystem scanning</li>
+<li>detect PS1 save folders</li>
+<li>parse PARAM.SFO</li>
+<li>detect <code>.VMP</code> files</li>
+<li>implement <code>.VMP ↔ .SRM</code> conversion helpers</li>
+<li>display save inventory UI</li>
+</ul>
+<p>RomM device registration is now wired to the real HTTP endpoint (<code>POST /api/devices</code>).
+Save listing/upload/download are now wired to real HTTP callbacks in <code>main.c</code> (<code>/api/saves</code> endpoints, with upload replacement via <code>PUT /api/saves/{id}</code> when a remote save is already matched).
+Local Vita items are resolved to server <code>rom_id</code> before sync decisions by:</p>
+<ul>
+<li>resolving the configured platform through <code>/api/platforms</code> when available, otherwise falling back to the legacy RomM <code>platform=</code> query</li>
+<li>trying a targeted RomM lookup first through <code>/api/roms</code> with <code>search_term</code>, using <code>platform_ids=...</code>, then <code>platform_id=...</code>, then <code>platform=...</code>, then an unfiltered search when earlier forms return no entries</li>
+<li>generating bounded, deduplicated search-term variants per local save (<code>GAME_ID</code>, title exact, title compact, title normalized, alias-stripped title, significant-title tokens)</li>
+<li>normalizing titles with unicode-aware cleanup (lowercase, diacritics folding, symbol/punctuation cleanup, whitespace collapse, roman/arabic number compatibility)</li>
+<li>matching candidates by serial metadata first, then title scoring across <code>fs_name_no_tags</code>, <code>name</code>, <code>fs_name_no_ext</code>, and <code>alternative_names</code></li>
+<li>using composite title scoring (exact match, token-set/token-sort similarity, Levenshtein, serial bonus, sequel mismatch penalty) with confidence threshold and ambiguity margin</li>
+<li>falling back to filename-pattern scoring only when serial/title stages do not produce a safe deterministic match</li>
+<li>surfacing unresolved mappings to the UI when no targeted candidate set yields a unique <code>rom_id</code></li>
+<li>
+<p>listing remote saves only for the mapped <code>rom_id</code> set required by the current sync batch, scoped to the authenticated RomM user rather than the full save inventory
+Conversion is now wired in the app sync flow:</p>
+</li>
+<li>
+<p>upload path: local <code>.VMP</code> is converted to temporary <code>.SRM</code> before transfer callback, then either creates a new remote save or overwrites the matched remote save</p>
+</li>
+<li>download path: remote <code>.SRM</code> is reconstructed to local <code>.VMP</code> and re-signed in-app</li>
+<li>Vita native upload path: local savedata containers are exported to raw PFS <code>.tar</code> backups with <code>00-README-romm-vita-sync.txt</code>, then uploaded through RomM save sync using the <code>vita3k</code> backend name and a <code>.tar</code> filename</li>
+<li>Vita native download path: remote <code>.tar</code> archive filenames are preflighted for matching <code>TITLE_ID</code> and source timestamp, then downloaded to cache, extracted into staging, validated for the expected <code>TITLE_ID</code> plus <code>sce_sys/PARAM.SFO/keystone</code>, backed up, then restored into <code>ux0:user/00/savedata/&lt;TITLE_ID&gt;/</code></li>
+<li>when one game has both local PS1 cards, only the newest local card is mapped and synchronized; exact timestamp ties keep <code>SCEVMC0.VMP</code> and warn the user</li>
+<li>if the server copy is newer and the remote save is a standard single-card SRM, the download target remains that selected local card</li>
+<li>if the server copy is newer and the remote save is a dual-card SRM, the app restores both <code>SCEVMC0.VMP</code> and <code>SCEVMC1.VMP</code></li>
+</ul>
+<h2 id="end-to-end-sync-sequence-diagram">End-to-End Sync Sequence Diagram</h2>
+<p><img alt="RomM Vita Sync end-to-end sequence" src="assets/diagrams/romm-vita-sync-end-to-end-sync-flow.png" /></p>
+<p>Current Rom ID mapping flow:</p>
+<ol>
+<li>The app tries to resolve the configured RomM platform through <code>/api/platforms</code>.</li>
+<li>If <code>/api/platforms</code> is unavailable or returns an unsupported response, Rom ID lookup falls back to the legacy <code>/api/roms?...&amp;platform=...</code> query path.</li>
+<li>For each local save without <code>rom_id</code>, the app builds a bounded list of search-term variants:</li>
+<li>local <code>GAME_ID</code> (when available)</li>
+<li>title exact, preserving punctuation from <code>PARAM.SFO</code></li>
+<li>title compact, with punctuation collapsed to spaces</li>
+<li>title normalized (unicode-aware lowercase/diacritics cleanup)</li>
+<li>title without short alias prefix (example: <code>R4 RIDGE RACER TYPE 4</code> -&gt; <code>RIDGE RACER TYPE 4</code>)</li>
+<li>significant title tokens (noise words removed)</li>
+<li>The app queries <code>/api/roms?...&amp;search_term=...</code> for each variant (deduplicated, capped), trying <code>platform_ids=...</code>, <code>platform_id=...</code>, <code>platform=...</code>, then an unfiltered search if RomM returns no entries.</li>
+<li>For each candidate set returned by RomM, stage 1 tries exact serial metadata matches (<code>serial</code>, <code>serials</code>, related aliases).</li>
+<li>If serial stage is not deterministically unique, stage 2 computes title scores against <code>fs_name_no_tags</code>, <code>name</code>, <code>fs_name_no_ext</code>, and <code>alternative_names</code>.</li>
+<li>Title scoring combines exact/containment checks, token-based fuzzy similarity (set/sort), Levenshtein similarity, serial coherence bonus, and strong sequel-number mismatch penalty (<code>3</code> vs <code>4</code>, including roman/arabic variants).</li>
+<li>A candidate is accepted only if title confidence passes threshold and ambiguity margin checks; otherwise stage 3 fallback evaluates filename-pattern similarity.</li>
+<li>If no variant yields a unique safe result, the mapping is reported as unresolved and sync stops before transfer decisions.</li>
+</ol>
+<h2 id="contributing">Contributing</h2>
+<p>Contributions, ideas, and feedback are welcome.</p>
+<p>Suggested areas:</p>
+<ul>
+<li>UI improvements</li>
+<li>emulator adapter support</li>
+</ul>
+<h2 id="disclaimer">Disclaimer</h2>
+<p>This project does not provide or distribute game content.</p>
+<p>It only synchronizes user-owned save data between a PS Vita device and a RomM server.</p>
+<p>Users are responsible for complying with applicable laws and platform policies.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["toc.integrate"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "stable", "provider": "mike"}}</script>
+    
+    
+      <script src="assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
