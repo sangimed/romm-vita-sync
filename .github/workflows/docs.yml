@@ -4,23 +4,50 @@ on:
   push:
     branches:
       - master
+      - develop
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select docs channel
+        id: docs
+        shell: bash
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            master)
+              echo "version=stable" >> "$GITHUB_OUTPUT"
+              echo "title=Stable" >> "$GITHUB_OUTPUT"
+              echo "set_default=true" >> "$GITHUB_OUTPUT"
+              ;;
+            develop)
+              echo "version=nightly" >> "$GITHUB_OUTPUT"
+              echo "title=Nightly" >> "$GITHUB_OUTPUT"
+              echo "set_default=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Unsupported documentation branch: ${GITHUB_REF_NAME}"
+              exit 1
+              ;;
+          esac
 
       - name: Install PlantUML
         run: |
@@ -44,23 +71,40 @@ jobs:
           python-version: "3.x"
 
       - name: Install dependencies
-        run: pip install mkdocs-material
+        run: pip install -r requirements-docs.txt
 
-      - name: Build docs
-        run: mkdocs build --strict
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Validate docs
+        run: mkdocs build --strict --site-dir /tmp/romm-vita-sync-docs-strict
+
+      - name: Fetch docs deployment branch
+        run: |
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git fetch origin gh-pages --depth=1
+          fi
+
+      - name: Deploy versioned docs
+        run: mike deploy --push --update-aliases --title "${{ steps.docs.outputs.title }}" "${{ steps.docs.outputs.version }}"
+
+      - name: Set stable as default docs
+        if: steps.docs.outputs.set_default == 'true'
+        run: mike set-default --push stable
+
+      - name: Prepare Pages artifact
+        run: |
+          git fetch origin gh-pages --depth=1
+          rm -rf site
+          git worktree add --detach site origin/gh-pages
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

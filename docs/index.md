@@ -35,6 +35,11 @@ Documentation scope:
 - ideas and possible future refactors are kept separate from implemented behavior on purpose
 - when documentation and code disagree, the code is the reference for current behavior until both are brought back in sync
 
+Published documentation is versioned with `mike`:
+
+- `stable` is built from `master` and is the default documentation channel
+- `nightly` is built from `develop` and may describe unreleased changes
+
 Initial milestone includes:
 
 - Detect PS1 save folders under `ux0:/pspemu/PSP/SAVEDATA`

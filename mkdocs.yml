@@ -1,4 +1,5 @@
 site_name: RoMM Vita Sync
+site_url: https://sangimed.github.io/romm-vita-sync/
 docs_dir: docs
 theme:
   name: material
@@ -19,5 +20,13 @@ theme:
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
+plugins:
+  - search
+  - mike:
+      alias_type: redirect
+extra:
+  version:
+    provider: mike
+    default: stable
 nav:
   - Home: index.md

@@ -22,7 +22,8 @@ The goal is to provide a simple and safe save sync experience on Vita.
 
 All detailed information is available in the project documentation:
 
-- [Documentation Website](https://sangimed.github.io/romm-vita-sync/)
+- [Stable Documentation](https://sangimed.github.io/romm-vita-sync/stable/) from `master`
+- [Nightly Documentation](https://sangimed.github.io/romm-vita-sync/nightly/) from `develop`
 - [Docs Source](docs/index.md)
 
 ## Contributing
