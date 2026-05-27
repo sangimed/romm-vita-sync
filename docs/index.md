@@ -40,6 +40,8 @@ Published documentation is versioned with `mike`:
 - `stable` is built from `master` and is the default documentation channel
 - `nightly` is built from `develop` and may describe unreleased changes
 
+The GitHub Pages source is expected to be the `gh-pages` branch root.
+
 Initial milestone includes:
 
 - Detect PS1 save folders under `ux0:/pspemu/PSP/SAVEDATA`

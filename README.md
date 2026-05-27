@@ -26,6 +26,8 @@ All detailed information is available in the project documentation:
 - [Nightly Documentation](https://sangimed.github.io/romm-vita-sync/nightly/) from `develop`
 - [Docs Source](docs/index.md)
 
+The documentation workflow publishes versioned MkDocs output to the `gh-pages` branch with `mike`; GitHub Pages should be configured to serve the `gh-pages` branch root.
+
 ## Contributing
 
 Issues and pull requests are welcome.
